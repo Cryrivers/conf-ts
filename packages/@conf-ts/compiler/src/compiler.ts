@@ -6,6 +6,25 @@ import { MACRO_FUNCTIONS, MACRO_PACKAGE } from './constants';
 import { ConfTSError, SourceLocation } from './error';
 import { evaluate } from './eval';
 
+interface CompileOptions {
+  preserveKeyOrder?: boolean;
+  macro?: boolean;
+}
+
+function orderedClone(value: any): any {
+  if (Array.isArray(value)) {
+    return value.map(v => orderedClone(v));
+  }
+  if (value && typeof value === 'object') {
+    const out: any = {};
+    for (const k of Object.keys(value)) {
+      out[k] = orderedClone(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
 function validateMacroImports(
   sourceFile: ts.SourceFile,
   macro: boolean,
@@ -45,6 +64,7 @@ function validateMacroImports(
 function _compile(
   inputFile: string,
   macro: boolean,
+  options?: CompileOptions,
 ): { output: object; evaluatedFiles: Set<string> } {
   const tsConfigPath = ts.findConfigFile(inputFile, ts.sys.fileExists);
 
@@ -104,6 +124,8 @@ function _compile(
               macroImportsMap,
               macro,
               evaluatedFiles,
+              undefined,
+              options,
             );
             enumMap[sourceFile.fileName][fullEnumMemberName] = value;
             if (typeof value === 'number') {
@@ -132,6 +154,8 @@ function _compile(
           macroImportsMap,
           macro,
           evaluatedFiles,
+          undefined,
+          options,
         );
         foundDefaultExport = true;
       }
@@ -154,14 +178,35 @@ function _compile(
 export function compile(
   inputFile: string,
   format: 'json' | 'yaml',
-  macro: boolean,
+  options?: CompileOptions,
 ) {
-  const { output, evaluatedFiles } = _compile(inputFile, macro);
+  if (options && Object.prototype.hasOwnProperty.call(options, 'macro')) {
+    const v: any = options.macro;
+    if (v !== undefined && typeof v !== 'boolean') {
+      throw new ConfTSError('Invalid option: macro must be boolean', {
+        file: 'unknown',
+        line: 1,
+        character: 1,
+      });
+    }
+  }
+  const effectiveMacro = options?.macro ?? false;
+  const { output, evaluatedFiles } = _compile(
+    inputFile,
+    effectiveMacro,
+    options,
+  );
   const fileNames = Array.from(evaluatedFiles);
   if (format === 'json') {
-    return { output: JSON.stringify(output, null, 2), dependencies: fileNames };
+    const jsonSource = options?.preserveKeyOrder
+      ? JSON.stringify(orderedClone(output), null, 2)
+      : JSON.stringify(output, null, 2);
+    return { output: jsonSource, dependencies: fileNames };
   } else if (format === 'yaml') {
-    return { output: yamlStringify(output), dependencies: fileNames };
+    const yamlSource = options?.preserveKeyOrder
+      ? yamlStringify(orderedClone(output))
+      : yamlStringify(output);
+    return { output: yamlSource, dependencies: fileNames };
   } else {
     throw new ConfTSError(`Unsupported format: ${format}`, {
       file: 'unknown',

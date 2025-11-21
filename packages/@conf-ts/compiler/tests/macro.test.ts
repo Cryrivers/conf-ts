@@ -32,7 +32,7 @@ describe('Macro Test', () => {
 
   it('should throw error when type casting functions are not imported from @conf-ts/macro', () => {
     expect(() => {
-      compile('tests/macros/invalid-imports.conf.ts', 'json', true);
+      compile('tests/macros/invalid-imports.conf.ts', 'json', { macro: true });
     }).toThrow(
       "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
     );
@@ -40,7 +40,7 @@ describe('Macro Test', () => {
 
   it('should throw error when only some type casting functions are imported', () => {
     expect(() => {
-      compile('tests/macros/partial-imports.conf.ts', 'json', true);
+      compile('tests/macros/partial-imports.conf.ts', 'json', { macro: true });
     }).toThrow(
       "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",
     );
@@ -70,5 +70,8 @@ describe('Macro Test', () => {
 
   it('should support nested macro: parameter passing in callbacks', () => {
     assertMacroOutput('nested-param');
+  });
+  it('should accept macro option in options dictionary', () => {
+    assertMacroOutput('type-casting');
   });
 });

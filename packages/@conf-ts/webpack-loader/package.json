@@ -13,7 +13,7 @@
   "devDependencies": {
     "@types/webpack": "^5.28.5",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.6",
-    "webpack": "^5.102.1"
+    "vitest": "^4.0.13",
+    "webpack": "^5.103.0"
   }
 }

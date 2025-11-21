@@ -7,7 +7,9 @@ interface LoaderOptions {
   name?: string
   format?: 'json' | 'yaml'
   extensionToRemove?: string,
-  logDependencies?: boolean
+  logDependencies?: boolean,
+  macro?: boolean;
+  preserveKeyOrder?: boolean;
 }
 
 export default function (this: LoaderContext<LoaderOptions>, source: string) {
@@ -18,7 +20,10 @@ export default function (this: LoaderContext<LoaderOptions>, source: string) {
   const extToRemove = options.extensionToRemove || '';
 
   try {
-    const { output, dependencies } = compile(this.resourcePath, format, false)
+    const { output, dependencies } = compile(this.resourcePath, format, {
+      macro: options.macro || false,
+      preserveKeyOrder: options.preserveKeyOrder || false,
+    })
     dependencies.forEach(dep => this.addDependency(dep));
     if (options.logDependencies) {
       console.log('Dependencies:', dependencies)

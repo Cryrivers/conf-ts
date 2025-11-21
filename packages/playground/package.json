@@ -10,18 +10,22 @@
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
-    "monaco-editor": "^0.54.0",
-    "next": "^16.0.1",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.23.24",
+    "lucide-react": "^0.554.0",
+    "monaco-editor": "^0.55.1",
+    "next": "^16.0.3",
     "prismjs": "^1.30.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "tailwindcss": "^4.1.16"
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.17"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.16",
+    "@tailwindcss/postcss": "^4.1.17",
     "@types/prismjs": "^1.26.5",
-    "@types/react": "19.2.2",
-    "autoprefixer": "^10.4.21",
+    "@types/react": "19.2.7",
+    "autoprefixer": "^10.4.22",
     "typescript": "^5.9.3"
   },
   "tailwind": {

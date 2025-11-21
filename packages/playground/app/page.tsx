@@ -1,39 +1,26 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
-import Prism from 'prismjs';
-import 'prismjs/components/prism-json';
-import 'prismjs/components/prism-yaml';
-import 'prismjs/themes/prism.css';
-
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+import { Tutorial } from '../components/Tutorial';
+import { Editor } from '../components/Editor';
+import { Preview } from '../components/Preview';
+import { tutorialSteps } from '../lib/tutorial-steps';
+import { Play, RotateCcw, Settings2, Command } from 'lucide-react';
+import clsx from 'clsx';
 
 type CompileResult = { output: string; dependencies: string[] };
 
 export default function Page() {
-  const [input, setInput] = useState<string>(
-    `// Write a conf-ts file with a default export
-// Example:
-// import { env, arrayMap, String } from '@conf-ts/macro';
-// const nums = [1,2,3] as const;
-// export default {
-//   message: String('hello'),
-//   list: arrayMap(nums, (n) => n + 1),
-//   nodeEnv: env('NODE_ENV'),
-// } satisfies Record<string, unknown>;
-
-export default { greeting: 'hello world', nested: { a: 1, b: 2 } } as const;
-`
-  );
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [input, setInput] = useState(tutorialSteps[0].initialCode);
   const [format, setFormat] = useState<'json' | 'yaml'>('json');
-  const [macro, setMacro] = useState<boolean>(false);
+  const [macro, setMacro] = useState(true);
   const [result, setResult] = useState<CompileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [highlighted, setHighlighted] = useState<string>('');
-  const [copied, setCopied] = useState<boolean>(false);
+  const [isStepComplete, setIsStepComplete] = useState(false);
+  
   const debounceTimer = useRef<number | null>(null);
-  const editorRef = useRef<any>(null);
+  const currentStep = tutorialSteps[currentStepIndex];
 
   const files = useMemo(() => {
     return {
@@ -56,31 +43,49 @@ export default { greeting: 'hello world', nested: { a: 1, b: 2 } } as const;
     setError(null);
     try {
       const { compileInMemory } = await import('@conf-ts/compiler/browser');
+      // @ts-ignore
       const compiled = compileInMemory(files, '/index.conf.ts', format, macro);
+      
+      let parsedOutput = null;
+      try {
+        if (format === 'json') {
+          parsedOutput = JSON.parse(compiled.output);
+        } else {
+           if (currentStep.check.toString().includes('output')) {
+             const jsonCompiled = compileInMemory(files, '/index.conf.ts', 'json', macro);
+             parsedOutput = JSON.parse(jsonCompiled.output);
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
       setResult(compiled);
-      // Client-side highlight using Prism
-      const grammar = Prism.languages[format === 'json' ? 'json' : 'yaml'];
-      const html = Prism.highlight(compiled.output, grammar, format);
-      setHighlighted(html);
+      
+      if (currentStep.check(parsedOutput, input)) {
+        setIsStepComplete(true);
+      } else {
+        setIsStepComplete(false);
+      }
+
     } catch (e: any) {
       setResult(null);
       setError(e?.toString?.() ?? String(e));
-      setHighlighted('');
+      setIsStepComplete(false);
     }
-  }, [files, format, macro]);
+  }, [files, format, macro, currentStep, input]);
 
   useEffect(() => {
     void compile();
   }, []);
 
-  // Auto-compile on change with debounce
   useEffect(() => {
     if (debounceTimer.current) {
       window.clearTimeout(debounceTimer.current);
     }
     debounceTimer.current = window.setTimeout(() => {
       void compile();
-    }, 300);
+    }, 500);
     return () => {
       if (debounceTimer.current) {
         window.clearTimeout(debounceTimer.current);
@@ -88,121 +93,113 @@ export default { greeting: 'hello world', nested: { a: 1, b: 2 } } as const;
     };
   }, [input, format, macro, compile]);
 
-  const handleCopyOutput = useCallback(async () => {
-    if (!result?.output && !error) return;
-    try {
-      await navigator.clipboard.writeText(result?.output ?? error ?? '');
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // ignore
+  const handleNextStep = () => {
+    if (currentStepIndex < tutorialSteps.length - 1) {
+      const nextIndex = currentStepIndex + 1;
+      setCurrentStepIndex(nextIndex);
+      setInput(tutorialSteps[nextIndex].initialCode);
+      setIsStepComplete(false);
+    } else {
+      alert('Congratulations! You have completed the tour.');
     }
-  }, [result, error]);
+  };
+
+  const handleResetStep = () => {
+    setInput(currentStep.initialCode);
+    setIsStepComplete(false);
+  };
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-10 space-y-6">
-      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-3">
-          
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">playground.conf.ts</h1>
-            <p className="text-sm text-neutral-500">Compile .conf.ts to JSON/YAML in your browser</p>
-          </div>
-          <span className="ml-2 rounded-full bg-neutral-900/5 px-2.5 py-0.5 text-xs text-neutral-600 ring-1 ring-inset ring-neutral-900/10">beta</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-neutral-600">Format</span>
-            <div className="inline-flex h-9 rounded-lg border bg-white p-0.5 shadow-sm">
-              <button
-                type="button"
-                onClick={() => setFormat('json')}
-                aria-pressed={format === 'json'}
-                className={`h-full px-3 text-sm rounded-md transition-colors ${format === 'json' ? 'bg-neutral-900 text-white' : 'text-neutral-700 hover:bg-neutral-100'}`}
-              >
-                JSON
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormat('yaml')}
-                aria-pressed={format === 'yaml'}
-                className={`h-full px-3 text-sm rounded-md transition-colors ${format === 'yaml' ? 'bg-neutral-900 text-white' : 'text-neutral-700 hover:bg-neutral-100'}`}
-              >
-                YAML
-              </button>
+    <main className="flex h-screen w-full overflow-hidden bg-[#050505] text-neutral-200 font-sans selection:bg-white/10">
+      {/* Left Panel: Tutorial Guide */}
+      <div className="w-[400px] h-full border-r border-white/5 bg-[#050505] flex flex-col z-20">
+        <div className="h-14 flex items-center px-8 border-b border-white/5 shrink-0">
+          <div className="flex items-center gap-2 text-white font-medium tracking-tight">
+            <div className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center">
+              <div className="w-2 h-2 rounded-full bg-white" />
             </div>
+            conf-ts
           </div>
-          <button
-            type="button"
-            onClick={handleCopyOutput}
-            disabled={!result?.output && !error}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border bg-white px-3 text-sm text-neutral-800 shadow-sm transition-colors hover:bg-neutral-50 disabled:opacity-50"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-            {copied ? 'Copied' : 'Copy output'}
-          </button>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-neutral-600">Macro</span>
+        </div>
+        <Tutorial 
+          steps={tutorialSteps}
+          currentStepIndex={currentStepIndex}
+          onNext={handleNextStep}
+          isStepComplete={isStepComplete}
+        />
+      </div>
+
+      {/* Right Panel: Editor & Preview */}
+      <div className="flex-1 flex flex-col h-full min-w-0 bg-[#050505] relative">
+        {/* Toolbar */}
+        <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 shrink-0 z-20 bg-[#050505]/80 backdrop-blur-sm">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-1">
+              {['json', 'yaml'].map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFormat(f as 'json' | 'yaml')}
+                  className={clsx(
+                    "px-3 py-1.5 text-xs font-medium rounded transition-all duration-200",
+                    format === f 
+                      ? "text-white bg-white/10" 
+                      : "text-neutral-500 hover:text-neutral-300 hover:bg-white/5"
+                  )}
+                >
+                  {f.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            
+            <div className="h-4 w-px bg-white/5" />
+
             <button
-              type="button"
-              onClick={() => setMacro(v => !v)}
-              aria-pressed={macro}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${macro ? 'bg-neutral-900' : 'bg-neutral-300'}`}
+              onClick={() => setMacro(!macro)}
+              className={clsx(
+                "flex items-center gap-2 text-xs font-medium transition-colors duration-200",
+                macro ? "text-blue-400" : "text-neutral-500 hover:text-neutral-300"
+              )}
             >
-              <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${macro ? 'translate-x-5' : 'translate-x-1'}`} />
-              <span className="sr-only">Toggle macro mode</span>
+              <div className={clsx(
+                "w-2 h-2 rounded-full transition-colors duration-200",
+                macro ? "bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.5)]" : "bg-neutral-700"
+              )} />
+              Macros
             </button>
           </div>
-        </div>
-      </header>
 
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        <div className="relative grid h-[75vh] grid-rows-[auto_1fr]">
-          <div className="mb-2 flex items-center justify-between">
-            <label className="text-sm font-medium text-neutral-700">/index.conf.ts</label>
+          <div className="flex items-center gap-4">
+             <button
+              onClick={handleResetStep}
+              className="flex items-center gap-2 text-xs font-medium text-neutral-500 hover:text-white transition-colors"
+              title="Reset to initial code"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset
+            </button>
           </div>
-          <div className="row-start-2 min-h-0 overflow-hidden rounded-xl border bg-white shadow-sm ring-1 ring-black/5">
-            <MonacoEditor
-              height="100%"
-              defaultLanguage="typescript"
-              path="/index.conf.ts"
-              theme="vs-dark"
-              value={input}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 13,
-                fontLigatures: true,
-                scrollBeyondLastLine: false,
-                wordWrap: 'on',
-              }}
-              onChange={(value) => setInput(value ?? '')}
+        </header>
+
+        {/* Main Content Area */}
+        <div className="flex-1 flex min-h-0 relative">
+          {/* Editor */}
+          <div className="flex-1 relative border-r border-white/5">
+            <Editor 
+              value={input} 
+              onChange={(val) => setInput(val ?? '')} 
+            />
+          </div>
+
+          {/* Preview */}
+          <div className="flex-1 relative bg-[#050505]">
+            <Preview 
+              output={result?.output ?? null} 
+              error={error} 
+              format={format} 
             />
           </div>
         </div>
-        <div className="relative grid h-[75vh] grid-rows-[auto_1fr]">
-          <div className="mb-2 flex items-center justify-between">
-            <label className="text-sm font-medium text-neutral-700">Output</label>
-          </div>
-          {error ? (
-            <pre className="row-start-2 min-h-0 h-full whitespace-pre-wrap overflow-auto rounded-xl border bg-white p-3 text-sm text-red-600 shadow-sm ring-1 ring-black/5">
-              {error}
-            </pre>
-          ) : (
-            <pre className="row-start-2 min-h-0 h-full overflow-auto rounded-xl border bg-white p-3 text-sm shadow-sm ring-1 ring-black/5 language-json" tabIndex={0}>
-              {/* eslint-disable-next-line react/no-danger */}
-              <code
-                className={format === 'json' ? 'language-json' : 'language-yaml'}
-                dangerouslySetInnerHTML={{ __html: highlighted }}
-              />
-            </pre>
-          )}
-        </div>
-      </section>
+      </div>
     </main>
   );
 }
-
-

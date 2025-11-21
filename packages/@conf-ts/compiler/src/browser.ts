@@ -5,6 +5,25 @@ import { MACRO_PACKAGE } from './constants';
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
 
+interface CompileOptions {
+  preserveKeyOrder?: boolean;
+  macro?: boolean;
+}
+
+function orderedClone(value: any): any {
+  if (Array.isArray(value)) {
+    return value.map(v => orderedClone(v));
+  }
+  if (value && typeof value === 'object') {
+    const out: any = {};
+    for (const k of Object.keys(value)) {
+      out[k] = orderedClone(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
 function validateMacroImports(
   sourceFile: ts.SourceFile,
   macro: boolean,
@@ -70,6 +89,7 @@ function compileWithProgram(
   program: ts.Program,
   entryFile: string,
   macro: boolean,
+  options?: CompileOptions,
 ): { output: object; evaluatedFiles: Set<string> } {
   const typeChecker = program.getTypeChecker();
   const enumMap: { [filePath: string]: { [key: string]: any } } = {};
@@ -105,6 +125,8 @@ function compileWithProgram(
               macroImportsMap,
               macro,
               evaluatedFiles,
+              undefined,
+              options,
             );
             enumMap[sourceFile.fileName][fullEnumMemberName] = value;
             if (typeof value === 'number') {
@@ -132,6 +154,8 @@ function compileWithProgram(
           macroImportsMap,
           macro,
           evaluatedFiles,
+          undefined,
+          options,
         );
         foundDefaultExport = true;
       }
@@ -157,7 +181,18 @@ export function compileInMemory(
   format: 'json' | 'yaml',
   macro: boolean,
   tsconfig?: { compilerOptions?: ts.CompilerOptions },
+  options?: CompileOptions,
 ) {
+  if (options && Object.prototype.hasOwnProperty.call(options, 'macro')) {
+    const v: any = options.macro;
+    if (v !== undefined && typeof v !== 'boolean') {
+      throw new ConfTSError('Invalid option: macro must be boolean', {
+        file: 'unknown',
+        line: 1,
+        character: 1,
+      });
+    }
+  }
   const defaultOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
     module: ts.ModuleKind.ESNext,
@@ -172,31 +207,38 @@ export function compileInMemory(
     jsx: ts.JsxEmit.ReactJSX,
   };
 
-  const options: ts.CompilerOptions = {
+  const optionsTs: ts.CompilerOptions = {
     ...defaultOptions,
     ...(tsconfig?.compilerOptions || {}),
   };
 
-  const host = createInMemoryCompilerHost(files, options);
+  const host = createInMemoryCompilerHost(files, optionsTs);
 
   const isTsLike = (name: string) => /\.(tsx?|jsx?)$/i.test(name);
   const rootNames = Array.from(
     new Set<string>([...Object.keys(files).filter(isTsLike), entryFile]),
   );
 
-  const program = ts.createProgram(rootNames, options, host);
+  const program = ts.createProgram(rootNames, optionsTs, host);
 
   const { output, evaluatedFiles } = compileWithProgram(
     program,
     entryFile,
-    macro,
+    options?.macro ?? macro,
+    options,
   );
   const fileNames = Array.from(evaluatedFiles);
 
   if (format === 'json') {
-    return { output: JSON.stringify(output, null, 2), dependencies: fileNames };
+    const jsonSource = options?.preserveKeyOrder
+      ? JSON.stringify(orderedClone(output), null, 2)
+      : JSON.stringify(output, null, 2);
+    return { output: jsonSource, dependencies: fileNames };
   } else if (format === 'yaml') {
-    return { output: yamlStringify(output), dependencies: fileNames };
+    const yamlSource = options?.preserveKeyOrder
+      ? yamlStringify(orderedClone(output))
+      : yamlStringify(output);
+    return { output: yamlSource, dependencies: fileNames };
   } else {
     throw new ConfTSError(`Unsupported format: ${format}`, {
       file: 'unknown',

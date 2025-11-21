@@ -15,6 +15,7 @@ export function evaluate(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean },
 ): any {
   evaluatedFiles.add(sourceFile.fileName);
   if (macro) {
@@ -60,6 +61,7 @@ export function evaluate(
         macro,
         evaluatedFiles,
         context,
+        options,
       );
       result += span.literal.text;
     }
@@ -87,6 +89,7 @@ export function evaluate(
             macro,
             evaluatedFiles,
             context,
+            options,
           );
         } else if (ts.isIdentifier(prop.name)) {
           name = prop.name.text;
@@ -104,6 +107,7 @@ export function evaluate(
           macro,
           evaluatedFiles,
           context,
+          options,
         );
       } else if (ts.isShorthandPropertyAssignment(prop)) {
         const name = prop.name.getText(sourceFile);
@@ -151,6 +155,7 @@ export function evaluate(
                 macro,
                 evaluatedFiles,
                 context,
+                options,
               );
 
               if (binding.dotDotDotToken) {
@@ -245,8 +250,15 @@ export function evaluate(
           macro,
           evaluatedFiles,
           context,
+          options,
         );
-        Object.assign(obj, spreadObj);
+        if (options?.preserveKeyOrder) {
+          for (const k of Object.keys(spreadObj || {})) {
+            obj[k] = spreadObj[k];
+          }
+        } else {
+          Object.assign(obj, spreadObj);
+        }
       }
     });
     return obj;
@@ -263,6 +275,7 @@ export function evaluate(
           macro,
           evaluatedFiles,
           context,
+          options,
         );
         elements.push(...spreadElements);
       } else {
@@ -276,6 +289,7 @@ export function evaluate(
             macro,
             evaluatedFiles,
             context,
+            options,
           ),
         );
       }
@@ -322,6 +336,7 @@ export function evaluate(
               macro,
               evaluatedFiles,
               context,
+              options,
             );
           }
         } else if (ts.isBindingElement(resolvedSymbol.valueDeclaration)) {
@@ -342,6 +357,7 @@ export function evaluate(
               macro,
               evaluatedFiles,
               context,
+              options,
             );
 
             if (binding.dotDotDotToken) {
@@ -429,6 +445,7 @@ export function evaluate(
         macro,
         evaluatedFiles,
         context,
+        options,
       );
       const propertyName = expression.name.getText(sourceFile);
       if (obj && typeof obj === 'object' && propertyName in obj) {
@@ -462,6 +479,7 @@ export function evaluate(
               macro,
               evaluatedFiles,
               context,
+              options,
             );
           }
         }
@@ -484,6 +502,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
 
     switch (expression.operator) {
@@ -517,6 +536,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
     const right = evaluate(
       expression.right,
@@ -527,6 +547,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
 
     switch (expression.operatorToken.kind) {
@@ -602,6 +623,7 @@ export function evaluate(
         macroImportsMap,
         evaluatedFiles,
         context,
+        options,
       );
     }
     const callee = expression.expression.getText(sourceFile);
@@ -639,6 +661,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
   } else if (ts.isAsExpression(expression)) {
     // Ignore type assertions like `value as T` and `as const`, return the evaluated value
@@ -651,6 +674,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
   } else if (ts.isRegularExpressionLiteral(expression)) {
     throw new ConfTSError('Unsupported type: RegExp', {
@@ -667,6 +691,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
   } else if (ts.isConditionalExpression(expression)) {
     const condition = evaluate(
@@ -678,6 +703,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
     return condition
       ? evaluate(
@@ -689,6 +715,7 @@ export function evaluate(
           macro,
           evaluatedFiles,
           context,
+          options,
         )
       : evaluate(
           expression.whenFalse,
@@ -699,6 +726,7 @@ export function evaluate(
           macro,
           evaluatedFiles,
           context,
+          options,
         );
   } else if (ts.isNonNullExpression(expression)) {
     const value = evaluate(
@@ -710,6 +738,7 @@ export function evaluate(
       macro,
       evaluatedFiles,
       context,
+      options,
     );
     const type = typeChecker.getTypeAtLocation(expression.expression);
     let typeIsStrictNullish = false;

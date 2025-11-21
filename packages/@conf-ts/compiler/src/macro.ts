@@ -36,6 +36,7 @@ function evaluateEnv(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean },
 ) {
   const callee = expression.expression.getText(sourceFile);
   const macroFunction = ENV_MACRO_FUNCTIONS.find(
@@ -70,6 +71,7 @@ function evaluateEnv(
       true, // Allow nested macros inside env arguments
       evaluatedFiles,
       context,
+      options,
     );
     if (typeof argument !== 'string') {
       throw new ConfTSError('env macro argument must be a string', {
@@ -101,6 +103,7 @@ function evaluateTypeCasting(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean },
 ) {
   const callee = expression.expression.getText(sourceFile);
   const macroFunction = TYPE_CASTING_FUNCTIONS.find(
@@ -135,6 +138,7 @@ function evaluateTypeCasting(
       true, // Enable nested macros within type casting arguments
       evaluatedFiles,
       context,
+      options,
     );
     if (callee === 'String') {
       return String(argument);
@@ -162,6 +166,7 @@ function evaluateArrayMap(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean },
 ): any {
   const callee = expression.expression.getText(sourceFile);
   // Only process arrayMap here
@@ -189,6 +194,7 @@ function evaluateArrayMap(
     true, // Allow nested macros inside the array argument
     evaluatedFiles,
     context,
+    options,
   );
   // The callback function
   const callback = expression.arguments[1];
@@ -300,6 +306,7 @@ function evaluateArrayMap(
       true,
       evaluatedFiles,
       { [paramName]: item },
+      options,
     );
   });
 }
@@ -317,6 +324,7 @@ function evaluateArrayFilter(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean },
 ): any {
   const callee = expression.expression.getText(sourceFile);
   // Only process arrayFilter here
@@ -342,6 +350,7 @@ function evaluateArrayFilter(
     true, // Allow nested macros inside the array argument
     evaluatedFiles,
     context,
+    options,
   );
   const callback = expression.arguments[1];
   if (!ts.isArrowFunction(callback)) {
@@ -450,6 +459,7 @@ function evaluateArrayFilter(
       true,
       evaluatedFiles,
       { [paramName]: item },
+      options,
     );
     return Boolean(result);
   });
@@ -467,6 +477,7 @@ export function evaluateMacro(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean },
 ): any {
   let result = evaluateTypeCasting(
     expression,
@@ -476,6 +487,7 @@ export function evaluateMacro(
     macroImportsMap,
     evaluatedFiles,
     context,
+    options,
   );
   if (result !== undefined) {
     return result;
@@ -488,6 +500,7 @@ export function evaluateMacro(
     macroImportsMap,
     evaluatedFiles,
     context,
+    options,
   );
   if (result !== undefined) {
     return result;
@@ -500,6 +513,7 @@ export function evaluateMacro(
     macroImportsMap,
     evaluatedFiles,
     context,
+    options,
   );
   if (result !== undefined) {
     return result;
@@ -512,6 +526,7 @@ export function evaluateMacro(
     macroImportsMap,
     evaluatedFiles,
     context,
+    options,
   );
   if (result !== undefined) {
     return result;

@@ -98,4 +98,8 @@ describe('Spec Test', () => {
       "Failed to evaluate variable \"c\". Only 'const' declarations are supported, but it was declared with 'let'.",
     );
   });
+  it('should preserve insertion order of object keys', () => {
+    assertSpecOutput('key-order');
+    assertSpecOutput('key-order', { preserveKeyOrder: true });
+  });
 });

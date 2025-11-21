@@ -163,6 +163,36 @@ const files = {
 };
 
 const { output, dependencies } = compileInMemory(files, '/index.conf.ts', 'json', false);
+
+### Options
+
+`preserveKeyOrder` controls whether object keys are preserved in their original insertion order during object creation, JSON serialization/deserialization, and cloning/merging.
+
+`macro` enables macro mode programmatically using the same options dictionary. Must be a boolean.
+
+```ts
+import { compile, compileInMemory } from '@conf-ts/compiler';
+
+compile('path/to/index.conf.ts', 'json', false, { preserveKeyOrder: true });
+compile('path/to/index.conf.ts', 'json', false, { macro: true });
+
+compileInMemory(
+  { '/index.conf.ts': "export default { a: 1, b: 2, c: 3 }" },
+  '/index.conf.ts',
+  'json',
+  false,
+  undefined,
+  { preserveKeyOrder: true },
+);
+
+compileInMemory(
+  { '/index.conf.ts': "export default { a: 1 }" },
+  '/index.conf.ts',
+  'json',
+  false,
+  undefined,
+  { macro: true },
+);
 ```
 
 ## Webpack loader
@@ -224,4 +254,3 @@ pnpm format
 ## License
 
 MIT
-
