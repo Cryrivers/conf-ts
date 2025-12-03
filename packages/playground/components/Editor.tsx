@@ -1,15 +1,15 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { 
+const MonacoEditor = dynamic(() => import('@monaco-editor/react'), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full text-neutral-800">
       <Loader2 className="w-5 h-5 animate-spin" />
     </div>
-  )
+  ),
 });
 
 interface EditorProps {
@@ -22,8 +22,8 @@ export function Editor({ value, onChange, readOnly = false }: EditorProps) {
   return (
     <div className="h-full w-full relative group">
       {/* Subtle gradient overlay at the top */}
-      <div className="absolute top-0 left-0 right-0 h-12 bg-gradient-to-b from-[#050505] to-transparent z-10 pointer-events-none" />
-      
+      <div className="absolute top-0 left-0 right-0 h-12 bg-linear-to-b from-[#050505] to-transparent z-10 pointer-events-none" />
+
       <MonacoEditor
         height="100%"
         defaultLanguage="typescript"
@@ -65,9 +65,38 @@ export function Editor({ value, onChange, readOnly = false }: EditorProps) {
               'editor.lineHighlightBackground': '#ffffff05',
               'editorLineNumber.foreground': '#333333',
               'editorLineNumber.activeForeground': '#666666',
-            }
+            },
           });
           monaco.editor.setTheme('vs-dark');
+
+          // Configure compiler options
+          monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+            target: monaco.languages.typescript.ScriptTarget.ESNext,
+            allowNonTsExtensions: true,
+            moduleResolution:
+              monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+            module: monaco.languages.typescript.ModuleKind.CommonJS,
+            noEmit: true,
+            esModuleInterop: true,
+          });
+
+          // Add @conf-ts/macro types
+          monaco.languages.typescript.typescriptDefaults.addExtraLib(
+            `
+            declare module '@conf-ts/macro' {
+              export function String(value: any): string;
+              export function Number(value: any): number;
+              export function Boolean(value: any): boolean;
+              export function arrayMap<T, U>(array: T[], callback: (item: T) => U): U[];
+              export function arrayFilter<T>(
+                array: T[],
+                predicate: (item: T) => boolean,
+              ): T[];
+              export function env(key: string): string | undefined;
+            }
+            `,
+            'file:///node_modules/@conf-ts/macro/index.d.ts',
+          );
         }}
       />
     </div>

@@ -1,7 +1,7 @@
 import ts from 'typescript';
 
 import { MACRO_FUNCTIONS } from './constants';
-import { ConfTSError, SourceLocation } from './error';
+import { ConfTSError } from './error';
 import { evaluate } from './eval';
 
 type MacroFunction = {
@@ -36,7 +36,7 @@ function evaluateEnv(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ) {
   const callee = expression.expression.getText(sourceFile);
   const macroFunction = ENV_MACRO_FUNCTIONS.find(
@@ -82,7 +82,10 @@ function evaluateEnv(
         ),
       });
     }
-    // Support both Node and browser environments
+    // Support injected env, Node and browser environments
+    if (options?.env && Object.prototype.hasOwnProperty.call(options.env, argument)) {
+      return options.env[argument];
+    }
     // eslint-disable-next-line no-undef
     const proc: any = typeof process !== 'undefined' ? process : undefined;
     return proc?.env?.[argument];
@@ -103,7 +106,7 @@ function evaluateTypeCasting(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean },
+  options?: { preserveKeyOrder?: boolean; },
 ) {
   const callee = expression.expression.getText(sourceFile);
   const macroFunction = TYPE_CASTING_FUNCTIONS.find(
@@ -324,7 +327,7 @@ function evaluateArrayFilter(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ): any {
   const callee = expression.expression.getText(sourceFile);
   // Only process arrayFilter here
@@ -477,7 +480,7 @@ export function evaluateMacro(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ): any {
   let result = evaluateTypeCasting(
     expression,

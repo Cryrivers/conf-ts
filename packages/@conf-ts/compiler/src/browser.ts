@@ -8,6 +8,7 @@ import { evaluate } from './eval';
 interface CompileOptions {
   preserveKeyOrder?: boolean;
   macro?: boolean;
+  env?: Record<string, string>;
 }
 
 function orderedClone(value: any): any {

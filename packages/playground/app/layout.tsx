@@ -1,9 +1,14 @@
 import './globals.css';
-import type { ReactNode } from 'react';
+
+import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import { Inter, JetBrains_Mono } from 'next/font/google';
+import type { ReactNode } from 'react';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
-const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-mono',
+});
 
 export const metadata = {
   title: 'conf-ts Playground',
@@ -12,9 +17,12 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`dark h-full ${inter.variable} ${jetbrainsMono.variable}`}>
+    <html
+      lang="en"
+      className={`dark h-full ${inter.variable} ${jetbrainsMono.variable}`}
+    >
       <body className="h-full bg-[#050505] text-neutral-200 antialiased overflow-hidden font-sans selection:bg-white/10">
-        {children}
+        <NuqsAdapter>{children}</NuqsAdapter>
       </body>
     </html>
   );

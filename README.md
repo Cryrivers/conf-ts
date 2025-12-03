@@ -4,7 +4,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 
 ### Try it now
 
-- **Playground**: [conf-ts.rational.studio](https://conf-ts.rational.studio)
+- **Playground**: [conf-ts.by.zhongliang.wang](https://conf-ts.by.zhongliang.wang)
 
 ## Why conf-ts
 

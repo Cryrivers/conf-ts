@@ -15,7 +15,7 @@ export function evaluate(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ): any {
   evaluatedFiles.add(sourceFile.fileName);
   if (macro) {

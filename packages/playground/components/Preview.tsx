@@ -1,12 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Prism from 'prismjs';
-import 'prismjs/components/prism-json';
-import 'prismjs/components/prism-yaml';
-// We'll override Prism styles in globals.css or here to match the theme
 import clsx from 'clsx';
-import { Copy, Check } from 'lucide-react';
+import { Check, Copy } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { codeToHtml } from 'shiki';
 
 interface PreviewProps {
   output: string | null;
@@ -19,13 +16,36 @@ export function Preview({ output, error, format }: PreviewProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (output) {
-      const grammar = Prism.languages[format === 'json' ? 'json' : 'yaml'];
-      const html = Prism.highlight(output, grammar, format);
-      setHighlighted(html);
-    } else {
-      setHighlighted('');
+    let mounted = true;
+
+    async function highlight() {
+      if (output) {
+        try {
+          const html = await codeToHtml(output, {
+            lang: format,
+            theme: 'github-dark',
+          });
+          if (mounted) {
+            setHighlighted(html);
+          }
+        } catch (e) {
+          console.error('Shiki highlighting failed:', e);
+          if (mounted) {
+            setHighlighted(output); // Fallback to plain text
+          }
+        }
+      } else {
+        if (mounted) {
+          setHighlighted('');
+        }
+      }
     }
+
+    highlight();
+
+    return () => {
+      mounted = false;
+    };
   }, [output, format]);
 
   const handleCopy = async () => {
@@ -38,8 +58,8 @@ export function Preview({ output, error, format }: PreviewProps) {
 
   return (
     <div className="h-full flex flex-col text-neutral-300 relative">
-       {/* Subtle gradient overlay at the top */}
-       <div className="absolute top-0 left-0 right-0 h-12 bg-gradient-to-b from-[#050505] to-transparent z-10 pointer-events-none" />
+      {/* Subtle gradient overlay at the top */}
+      <div className="absolute top-0 left-0 right-0 h-12 bg-linear-to-b from-[#050505] to-transparent z-10 pointer-events-none" />
 
       <div className="flex items-center justify-between px-8 py-4 shrink-0 z-20">
         <span className="text-[10px] font-medium text-neutral-600 uppercase tracking-[0.2em]">
@@ -51,7 +71,11 @@ export function Preview({ output, error, format }: PreviewProps) {
             className="text-neutral-600 hover:text-white transition-colors"
             title="Copy to clipboard"
           >
-            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
           </button>
         )}
       </div>
@@ -62,8 +86,13 @@ export function Preview({ output, error, format }: PreviewProps) {
             {error}
           </div>
         ) : output ? (
-          <pre className={clsx('font-mono text-sm !bg-transparent !m-0 !p-0 !text-neutral-400', `language-${format}`)}>
-            <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+          <pre
+            className={clsx(
+              'font-mono text-sm bg-transparent! m-0! p-0! text-neutral-400!',
+              `language-${format}`,
+            )}
+          >
+            <code dangerouslySetInnerHTML={{ __html: highlighted }} className='[&>pre]:bg-transparent!'/>
           </pre>
         ) : (
           <div className="flex items-center justify-center h-full">

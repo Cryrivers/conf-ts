@@ -1,9 +1,10 @@
 'use client';
 
-import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, Circle, ChevronRight, ArrowRight } from 'lucide-react';
-import { TutorialStep } from '../lib/tutorial-steps';
 import clsx from 'clsx';
+import { AnimatePresence, motion } from 'framer-motion';
+import { ArrowRight, CheckCircle2, ChevronRight, Circle } from 'lucide-react';
+
+import { TutorialStep } from '../lib/tutorial-steps';
 
 interface TutorialProps {
   steps: TutorialStep[];
@@ -12,7 +13,12 @@ interface TutorialProps {
   isStepComplete: boolean;
 }
 
-export function Tutorial({ steps, currentStepIndex, onNext, isStepComplete }: TutorialProps) {
+export function Tutorial({
+  steps,
+  currentStepIndex,
+  onNext,
+  isStepComplete,
+}: TutorialProps) {
   const currentStep = steps[currentStepIndex];
 
   return (
@@ -35,9 +41,11 @@ export function Tutorial({ steps, currentStepIndex, onNext, isStepComplete }: Tu
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.4, ease: "easeOut" }}
+            transition={{ duration: 0.4, ease: 'easeOut' }}
           >
-            <h3 className="text-2xl font-medium text-white mb-4 tracking-tight">{currentStep.title}</h3>
+            <h3 className="text-2xl font-medium text-white mb-4 tracking-tight">
+              {currentStep.title}
+            </h3>
             <p className="text-neutral-400 leading-relaxed mb-8 font-light">
               {currentStep.description}
             </p>
@@ -47,9 +55,7 @@ export function Tutorial({ steps, currentStepIndex, onNext, isStepComplete }: Tu
               <h4 className="text-xs font-medium text-neutral-500 uppercase tracking-widest mb-2">
                 Goal
               </h4>
-              <p className="text-neutral-200 font-medium">
-                {currentStep.goal}
-              </p>
+              <p className="text-neutral-200 font-medium">{currentStep.goal}</p>
             </div>
           </motion.div>
         </AnimatePresence>
@@ -66,12 +72,16 @@ export function Tutorial({ steps, currentStepIndex, onNext, isStepComplete }: Tu
                 className="flex items-center gap-2 text-white"
               >
                 <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]" />
-                <span className="text-sm font-medium tracking-wide">Completed</span>
+                <span className="text-sm font-medium tracking-wide">
+                  Completed
+                </span>
               </motion.div>
             ) : (
               <div className="flex items-center gap-2 text-neutral-600">
                 <div className="w-1.5 h-1.5 rounded-full bg-neutral-700" />
-                <span className="text-sm font-medium tracking-wide">In Progress</span>
+                <span className="text-sm font-medium tracking-wide">
+                  In Progress
+                </span>
               </div>
             )}
           </div>
@@ -84,16 +94,20 @@ export function Tutorial({ steps, currentStepIndex, onNext, isStepComplete }: Tu
             'group w-full flex items-center justify-between py-4 px-6 rounded-none border border-neutral-800 transition-all duration-300',
             isStepComplete
               ? 'bg-white text-black hover:bg-neutral-200 border-transparent'
-              : 'bg-transparent text-neutral-600 cursor-not-allowed'
+              : 'bg-transparent text-neutral-600 cursor-not-allowed',
           )}
         >
           <span className="font-medium tracking-wide">
-            {currentStepIndex === steps.length - 1 ? 'Finish Tour' : 'Next Step'}
+            {currentStepIndex === steps.length - 1
+              ? 'Finish Tour'
+              : 'Next Step'}
           </span>
-          <ArrowRight className={clsx(
-            "w-4 h-4 transition-transform duration-300",
-            isStepComplete && "group-hover:translate-x-1"
-          )} />
+          <ArrowRight
+            className={clsx(
+              'w-4 h-4 transition-transform duration-300',
+              isStepComplete && 'group-hover:translate-x-1',
+            )}
+          />
         </button>
       </div>
     </div>
