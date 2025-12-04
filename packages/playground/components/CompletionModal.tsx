@@ -38,7 +38,8 @@ function Confetti({ count = 50 }: { count?: number }) {
         x: Math.random() * 100,
         delay: Math.random() * 0.5,
         duration: 2 + Math.random() * 2,
-        color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+        color:
+          CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
         size: 6 + Math.random() * 8,
         rotation: Math.random() * 360,
       });
@@ -48,7 +49,7 @@ function Confetti({ count = 50 }: { count?: number }) {
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {pieces.map((piece) => (
+      {pieces.map(piece => (
         <motion.div
           key={piece.id}
           className="absolute"
@@ -83,12 +84,19 @@ interface CompletionModalProps {
   onRestart: () => void;
 }
 
-export function CompletionModal({ isOpen, onClose, onRestart }: CompletionModalProps) {
-  const handleBackdropClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onClose();
-    }
-  }, [onClose]);
+export function CompletionModal({
+  isOpen,
+  onClose,
+  onRestart,
+}: CompletionModalProps) {
+  const handleBackdropClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) {
+        onClose();
+      }
+    },
+    [onClose],
+  );
 
   return (
     <AnimatePresence>
@@ -157,8 +165,8 @@ export function CompletionModal({ isOpen, onClose, onRestart }: CompletionModalP
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.4 }}
                 >
-                  You&apos;ve completed the interactive tour and learned the basics of conf-ts.
-                  Ready to build type-safe configurations?
+                  You&apos;ve completed the interactive tour and learned the
+                  basics of conf-ts. Ready to build type-safe configurations?
                 </motion.p>
 
                 {/* Action buttons */}

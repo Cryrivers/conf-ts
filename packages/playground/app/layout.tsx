@@ -1,7 +1,7 @@
 import './globals.css';
 
-import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import { Inter, JetBrains_Mono } from 'next/font/google';
+import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import type { ReactNode } from 'react';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });

@@ -83,7 +83,10 @@ function evaluateEnv(
       });
     }
     // Support injected env, Node and browser environments
-    if (options?.env && Object.prototype.hasOwnProperty.call(options.env, argument)) {
+    if (
+      options?.env &&
+      Object.prototype.hasOwnProperty.call(options.env, argument)
+    ) {
       return options.env[argument];
     }
     // eslint-disable-next-line no-undef
@@ -106,7 +109,7 @@ function evaluateTypeCasting(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; },
+  options?: { preserveKeyOrder?: boolean },
 ) {
   const callee = expression.expression.getText(sourceFile);
   const macroFunction = TYPE_CASTING_FUNCTIONS.find(

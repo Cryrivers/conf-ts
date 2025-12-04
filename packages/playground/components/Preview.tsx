@@ -92,7 +92,10 @@ export function Preview({ output, error, format }: PreviewProps) {
               `language-${format}`,
             )}
           >
-            <code dangerouslySetInnerHTML={{ __html: highlighted }} className='[&>pre]:bg-transparent!'/>
+            <code
+              dangerouslySetInnerHTML={{ __html: highlighted }}
+              className="[&>pre]:bg-transparent!"
+            />
           </pre>
         ) : (
           <div className="flex items-center justify-center h-full">
