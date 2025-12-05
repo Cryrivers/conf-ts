@@ -94,17 +94,16 @@ function PageContent() {
         if (format === 'json') {
           parsedOutput = JSON.parse(compiled.output);
         } else {
-          if (currentStep.check.toString().includes('output')) {
-            const jsonCompiled = compileInMemory(
-              files,
-              '/index.conf.ts',
-              'json',
-              macro,
-              undefined,
-              { env: { NODE_ENV: 'production' } },
-            );
-            parsedOutput = JSON.parse(jsonCompiled.output);
-          }
+          // Always compile to JSON for validation if we're not in JSON mode
+          const jsonCompiled = compileInMemory(
+            files,
+            '/index.conf.ts',
+            'json',
+            macro,
+            undefined,
+            { env: { NODE_ENV: 'production' } },
+          );
+          parsedOutput = JSON.parse(jsonCompiled.output);
         }
       } catch (e) {
         // ignore
