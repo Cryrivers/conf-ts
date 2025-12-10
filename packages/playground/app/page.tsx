@@ -2,6 +2,7 @@
 
 import clsx from 'clsx';
 import { Github, RotateCcw } from 'lucide-react';
+import Link from 'next/link';
 import { createParser, useQueryState } from 'nuqs';
 import {
   Suspense,
@@ -194,7 +195,8 @@ function PageContent() {
             </p>
             <div className="flex items-center mt-4 gap-4">
               <p className="text-xs text-neutral-700">
-                MIT License © 2025 Wang Zhongliang
+                MIT License © 2025{' '}
+                <Link href="https://zhongliang.wang">Wang Zhongliang</Link>
               </p>
             </div>
           </div>
