@@ -13,7 +13,7 @@
     "@monaco-editor/react": "^4.7.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.23.26",
-    "lucide-react": "^0.559.0",
+    "lucide-react": "^0.560.0",
     "monaco-editor": "^0.55.1",
     "next": "^16.0.8",
     "nuqs": "^2.8.5",
