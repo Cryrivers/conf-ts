@@ -1,8 +1,8 @@
 'use client';
 
 import clsx from 'clsx';
-import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowRight, CheckCircle2, ChevronRight, Circle } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 
 import { TutorialStep } from '../lib/tutorial-steps';
 

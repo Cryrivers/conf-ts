@@ -18,8 +18,9 @@ program
     'Enable macro mode for compile-time transformations.',
     false,
   )
+  .option('-p, --preserve-order', 'Preserve object key order in output.', false)
   .action((fileEntry, options) => {
-    const { format, macro } = options;
+    const { format, macro, preserveOrder } = options;
 
     if (format !== 'json' && format !== 'yaml') {
       console.error(
@@ -29,7 +30,10 @@ program
     }
 
     try {
-      const { output: result } = compile(fileEntry, format, macro);
+      const { output: result } = compile(fileEntry, format, {
+        macro,
+        preserveKeyOrder: preserveOrder,
+      });
       console.log(result);
     } catch (error: any) {
       console.error(`Error: ${error.message}`);

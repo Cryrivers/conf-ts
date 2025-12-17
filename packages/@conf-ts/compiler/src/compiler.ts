@@ -2,65 +2,9 @@ import { sep } from 'path';
 import ts from 'typescript';
 import { stringify as yamlStringify } from 'yaml';
 
-import { MACRO_FUNCTIONS, MACRO_PACKAGE } from './constants';
-import { ConfTSError, SourceLocation } from './error';
+import { ConfTSError } from './error';
 import { evaluate } from './eval';
-
-interface CompileOptions {
-  preserveKeyOrder?: boolean;
-  macro?: boolean;
-  env?: Record<string, string>;
-}
-
-function orderedClone(value: any): any {
-  if (Array.isArray(value)) {
-    return value.map(v => orderedClone(v));
-  }
-  if (value && typeof value === 'object') {
-    const out: any = {};
-    for (const k of Object.keys(value)) {
-      out[k] = orderedClone(value[k]);
-    }
-    return out;
-  }
-  return value;
-}
-
-function validateMacroImports(
-  sourceFile: ts.SourceFile,
-  macro: boolean,
-): Set<string> {
-  const macroImports = new Set<string>();
-
-  if (!macro) {
-    return macroImports;
-  }
-
-  ts.forEachChild(sourceFile, node => {
-    if (ts.isImportDeclaration(node) && node.moduleSpecifier) {
-      const moduleSpecifier = node.moduleSpecifier
-        .getText(sourceFile)
-        .slice(1, -1); // Remove quotes
-      if (moduleSpecifier === MACRO_PACKAGE) {
-        if (node.importClause && node.importClause.namedBindings) {
-          if (ts.isNamedImports(node.importClause.namedBindings)) {
-            node.importClause.namedBindings.elements.forEach(
-              importSpecifier => {
-                const importedName = importSpecifier.name.getText(sourceFile);
-                // @ts-expect-error
-                if (MACRO_FUNCTIONS.includes(importedName)) {
-                  macroImports.add(importedName);
-                }
-              },
-            );
-          }
-        }
-      }
-    }
-  });
-
-  return macroImports;
-}
+import { CompileOptions, orderedClone, validateMacroImports } from './shared';
 
 function _compile(
   inputFile: string,
