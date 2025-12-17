@@ -163,6 +163,7 @@ const files = {
 };
 
 const { output, dependencies } = compileInMemory(files, '/index.conf.ts', 'json', false);
+```
 
 ### Options
 
