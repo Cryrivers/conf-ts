@@ -2,9 +2,13 @@
   "name": "conf-ts",
   "private": true,
   "scripts": {
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "format": "pnpm -r format"
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "dev": "turbo run dev",
+    "format": "turbo run format"
   },
-  "packageManager": "pnpm@10.26.0"
+  "packageManager": "pnpm@10.26.1",
+  "devDependencies": {
+    "turbo": "^2.7.0"
+  }
 }
