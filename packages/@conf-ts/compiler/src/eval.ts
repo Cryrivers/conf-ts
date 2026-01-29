@@ -577,6 +577,12 @@ export function evaluate(
         return left != right;
       case ts.SyntaxKind.ExclamationEqualsEqualsToken:
         return left !== right;
+      case ts.SyntaxKind.AmpersandAmpersandToken:
+        return left && right;
+      case ts.SyntaxKind.BarBarToken:
+        return left || right;
+      case ts.SyntaxKind.QuestionQuestionToken:
+        return left ?? right;
       default:
         throw new ConfTSError(
           `Unsupported binary operator: ${
