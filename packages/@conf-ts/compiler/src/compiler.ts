@@ -22,11 +22,44 @@ function _compile(
   }
 
   const configFile = ts.readConfigFile(tsConfigPath, ts.sys.readFile);
+  if (configFile.error) {
+    throw new ConfTSError(
+      `Failed to read tsconfig.json: ${ts.flattenDiagnosticMessageText(
+        configFile.error.messageText,
+        '\n',
+      )}`,
+      {
+        file: configFile.error.file?.fileName ?? tsConfigPath,
+        ...(configFile.error.file && configFile.error.start !== undefined
+          ? ts.getLineAndCharacterOfPosition(
+              configFile.error.file,
+              configFile.error.start,
+            )
+          : { line: 1, character: 1 }),
+      },
+    );
+  }
+
   const compilerOptions = ts.parseJsonConfigFileContent(
     configFile.config,
     ts.sys,
     tsConfigPath.substring(0, tsConfigPath.lastIndexOf(sep)),
   );
+  if (compilerOptions.errors && compilerOptions.errors.length > 0) {
+    const first = compilerOptions.errors[0];
+    throw new ConfTSError(
+      `Invalid tsconfig.json: ${ts.flattenDiagnosticMessageText(
+        first.messageText,
+        '\n',
+      )}`,
+      {
+        file: first.file?.fileName ?? tsConfigPath,
+        ...(first.file && first.start !== undefined
+          ? ts.getLineAndCharacterOfPosition(first.file, first.start)
+          : { line: 1, character: 1 }),
+      },
+    );
+  }
 
   const program = ts.createProgram(
     [inputFile, ...compilerOptions.fileNames],
@@ -37,6 +70,7 @@ function _compile(
   const macroImportsMap: { [filePath: string]: Set<string> } = {};
   let output: { [key: string]: any } = {};
   const evaluatedFiles: Set<string> = new Set();
+  const enumEvaluatedFiles: Set<string> = new Set();
 
   // First pass: collect enum values and macro imports from all files
   for (const sourceFile of program.getSourceFiles()) {
@@ -68,7 +102,7 @@ function _compile(
               enumMap,
               macroImportsMap,
               macro,
-              evaluatedFiles,
+              enumEvaluatedFiles,
               undefined,
               options,
             );

@@ -44,6 +44,7 @@ function compileWithProgram(
   const macroImportsMap: { [filePath: string]: Set<string> } = {};
   let output: { [key: string]: any } = {};
   const evaluatedFiles: Set<string> = new Set();
+  const enumEvaluatedFiles: Set<string> = new Set();
 
   for (const sourceFile of program.getSourceFiles()) {
     if (sourceFile.isDeclarationFile) {
@@ -72,7 +73,7 @@ function compileWithProgram(
               enumMap,
               macroImportsMap,
               macro,
-              evaluatedFiles,
+              enumEvaluatedFiles,
               undefined,
               options,
             );

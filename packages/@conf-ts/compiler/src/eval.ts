@@ -411,18 +411,19 @@ export function evaluate(
             }
           }
         } else if (ts.isEnumMember(resolvedSymbol.valueDeclaration)) {
-          const enumName = resolvedSymbol.valueDeclaration.parent.name.getText(
-            resolvedSymbol.valueDeclaration.getSourceFile(),
-          );
-          const memberName = resolvedSymbol.valueDeclaration.name.getText(
-            resolvedSymbol.valueDeclaration.getSourceFile(),
-          );
+          const declSourceFile =
+            resolvedSymbol.valueDeclaration.getSourceFile();
+          const enumName =
+            resolvedSymbol.valueDeclaration.parent.name.getText(declSourceFile);
+          const memberName =
+            resolvedSymbol.valueDeclaration.name.getText(declSourceFile);
           const fullEnumMemberName = `${enumName}.${memberName}`;
           if (
-            enumMap[sourceFile.fileName] &&
-            enumMap[sourceFile.fileName].hasOwnProperty(fullEnumMemberName)
+            enumMap[declSourceFile.fileName] &&
+            enumMap[declSourceFile.fileName].hasOwnProperty(fullEnumMemberName)
           ) {
-            return enumMap[sourceFile.fileName][fullEnumMemberName];
+            evaluatedFiles.add(declSourceFile.fileName);
+            return enumMap[declSourceFile.fileName][fullEnumMemberName];
           }
         }
       }
@@ -481,6 +482,17 @@ export function evaluate(
               context,
               options,
             );
+          }
+          const declSourceFile = declaration.getSourceFile();
+          const enumName = declaration.parent.name.getText(declSourceFile);
+          const memberName = declaration.name.getText(declSourceFile);
+          const fullEnumMemberName = `${enumName}.${memberName}`;
+          if (
+            enumMap[declSourceFile.fileName] &&
+            enumMap[declSourceFile.fileName].hasOwnProperty(fullEnumMemberName)
+          ) {
+            evaluatedFiles.add(declSourceFile.fileName);
+            return enumMap[declSourceFile.fileName][fullEnumMemberName];
           }
         }
       }
