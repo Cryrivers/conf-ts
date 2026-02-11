@@ -1,0 +1,11 @@
+notTrue: false
+notFalse: true
+notZero: true
+notOne: false
+notEmptyString: true
+notString: false
+notNull: true
+notUndefined: true
+tildeFive: -6
+negativeFive: -5
+positiveFive: 5

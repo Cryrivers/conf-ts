@@ -1,0 +1,6 @@
+nullCoalescing: default
+undefinedCoalescing: default
+stringCoalescing: value
+numberCoalescing: 0
+falseCoalescing: false
+emptyStringCoalescing: ""
