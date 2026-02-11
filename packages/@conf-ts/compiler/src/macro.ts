@@ -44,7 +44,7 @@ function evaluateEnv(
   );
   if (
     macroFunction &&
-    expression.arguments.length === macroFunction.argLength
+    (expression.arguments.length === 1 || expression.arguments.length === 2)
   ) {
     // Check if the function is properly imported from @conf-ts/macro
     const allowedMacroImports =
@@ -82,16 +82,41 @@ function evaluateEnv(
         ),
       });
     }
+
+    let defaultValue: string | undefined;
+    if (expression.arguments.length === 2) {
+      defaultValue = evaluate(
+        expression.arguments[1],
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        true, // Allow nested macros inside env arguments
+        evaluatedFiles,
+        context,
+        options,
+      );
+      if (typeof defaultValue !== 'string' && defaultValue !== undefined) {
+        throw new ConfTSError('env macro default value must be a string', {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(
+            sourceFile,
+            expression.arguments[1].getStart(),
+          ),
+        });
+      }
+    }
+
     // Support injected env, Node and browser environments
     if (
       options?.env &&
       Object.prototype.hasOwnProperty.call(options.env, argument)
     ) {
-      return options.env[argument];
+      return options.env[argument] ?? defaultValue;
     }
     // eslint-disable-next-line no-undef
     const proc: any = typeof process !== 'undefined' ? process : undefined;
-    return proc?.env?.[argument];
+    return proc?.env?.[argument] ?? defaultValue;
   }
   return undefined;
 }
