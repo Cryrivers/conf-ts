@@ -1,0 +1,9 @@
+trueAndTrue: true
+trueAndFalse: false
+falseAndTrue: false
+falseAndFalse: false
+numberAndString: a
+zeroAndString: 0
+stringAndNumber: 1
+emptyStringAndNumber: ""
+nullAndString: null

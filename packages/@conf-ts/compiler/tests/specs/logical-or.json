@@ -1,0 +1,12 @@
+{
+  "trueOrTrue": true,
+  "trueOrFalse": true,
+  "falseOrTrue": true,
+  "falseOrFalse": false,
+  "numberOrString": 1,
+  "zeroOrString": "a",
+  "stringOrNumber": "a",
+  "emptyStringOrNumber": 1,
+  "nullOrString": "a",
+  "undefinedOrString": "a"
+}

@@ -296,6 +296,9 @@ export function evaluate(
     }
     return elements;
   } else if (ts.isIdentifier(expression)) {
+    if (expression.text === 'undefined') {
+      return undefined;
+    }
     if (
       context &&
       Object.prototype.hasOwnProperty.call(context, expression.text)
