@@ -56,6 +56,12 @@ describe('Macro Test', () => {
     assertMacroOutput('env');
   });
 
+  it('should handle env macro with default value', () => {
+    process.env.CONF_TS_EXISTS = 'exists';
+    delete process.env.CONF_TS_MISSING;
+    assertMacroOutput('env-default');
+  });
+
   it('should support nested macro: single call compatibility', () => {
     assertMacroOutput('nested-single');
   });

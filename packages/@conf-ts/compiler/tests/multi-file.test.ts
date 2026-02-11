@@ -43,4 +43,35 @@ describe('Multi-file test', () => {
     );
     expect(JSON.parse(result)).toEqual(expected);
   });
+
+  it('should resolve numeric enums across files without initializers', () => {
+    const configPath = path.resolve(__dirname, 'multi-file');
+    const { output: result } = compile(
+      path.join(configPath, 'numeric-enum.ts'),
+      'json',
+      false,
+    );
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(configPath, 'numeric-enum.json'), 'utf8'),
+    );
+    expect(JSON.parse(result)).toEqual(expected);
+  });
+
+  it('should not include unrelated enum files in dependencies', () => {
+    const configPath = path.resolve(__dirname, 'multi-file');
+    const { dependencies } = compile(
+      path.join(configPath, 'numeric-enum.ts'),
+      'json',
+      false,
+    );
+    expect(dependencies).toEqual(
+      expect.arrayContaining([
+        path.join(configPath, 'numeric-enum.ts'),
+        path.join(configPath, 'numeric-enum-decl.ts'),
+      ]),
+    );
+    expect(dependencies).not.toContain(
+      path.join(configPath, 'unrelated-enum.ts'),
+    );
+  });
 });
