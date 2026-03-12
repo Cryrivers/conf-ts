@@ -1,0 +1,23 @@
+{
+  "name": "@conf-ts/tests",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared tests and fixtures for conf-ts compilers",
+  "scripts": {
+    "test": "vitest run",
+    "bench": "tsx benchmark.ts",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@conf-ts/compiler": "workspace:*",
+    "@conf-ts/compiler-native": "workspace:*"
+  },
+  "devDependencies": {
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "prettier": "^3.8.1",
+    "tinybench": "^6.0.0",
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.0",
+    "yaml": "^2.8.2"
+  }
+}

@@ -1,11 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { compile } from '@conf-ts/compiler';
 import { expect } from 'vitest';
 
-import { compile } from '../src/compiler';
-
-const SPEC_DIR = path.join(__dirname, 'specs');
-const MACRO_DIR = path.join(__dirname, 'macros');
+const FIXTURES_DIR = path.resolve(__dirname, 'fixtures');
+const SPEC_DIR = path.join(FIXTURES_DIR, 'specs');
+const MACRO_DIR = path.join(FIXTURES_DIR, 'macros');
 
 function assertOutput(
   inputFolder: string,

@@ -17,8 +17,24 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 
 - `@conf-ts/cli`: CLI to compile `.ts`/`.conf.ts` to JSON/YAML
 - `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
+- `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
 - `@conf-ts/macro`: Macro functions available in macro mode
 - `@conf-ts/webpack-loader`: Webpack loader that emits generated JSON/YAML files
+
+### Performance: JS vs compiler-native
+
+Benchmarked with `@conf-ts/tests` on `complex-types.conf.ts` (2s per task, Node v24.11.1, local M-series Mac).
+
+```text
+┌─────────┬──────────────────────────┬────────────────────┬──────────────────────┬────────────────────────┬────────────────────────┬─────────┐
+│ (index) │ Task name                │ Latency avg (ns)   │ Latency med (ns)     │ Throughput avg (ops/s) │ Throughput med (ops/s) │ Samples │
+├─────────┼──────────────────────────┼────────────────────┼──────────────────────┼────────────────────────┼────────────────────────┼─────────┤
+│ 0       │ compiler (JS)            │ 97685109 ± 1.27%   │ 95375041 ± 1973083   │ 10 ± 1.20%             │ 10 ± 0                 │ 64      │
+│ 1       │ compiler-native (Rust)   │ 42164 ± 1.09%      │ 38750 ± 791.00       │ 24616 ± 0.10%          │ 25806 ± 538            │ 47434   │
+└─────────┴──────────────────────────┴────────────────────┴──────────────────────┴────────────────────────┴────────────────────────┴─────────┘
+```
+
+In this setup, **`@conf-ts/compiler-native` achieves roughly 2,400× higher throughput** than the pure JS compiler on the same config file.
 
 ## Installation
 

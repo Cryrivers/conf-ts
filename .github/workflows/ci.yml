@@ -1,43 +1,49 @@
 name: CI
 
+env:
+  DEBUG: napi:*
+  APP_NAME: compiler-native
+  MACOSX_DEPLOYMENT_TARGET: '10.13'
+  CARGO_INCREMENTAL: '1'
+
 on:
   push:
-    branches: ["main"]
+    branches: [main]
+    tags-ignore: ['**']
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE
+      - '**/*.gitignore'
+      - .editorconfig
+      - docs/**
   pull_request:
     types: [opened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Build and Test
     timeout-minutes: 15
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
-          version: 9
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          cache: true
 
       - name: Install dependencies
         run: pnpm install
@@ -47,3 +53,326 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  native-lint:
+    name: Lint (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          cache: true
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # - name: Oxlint
+      #   run: pnpm --filter @conf-ts/compiler-native lint
+
+      - name: Cargo fmt
+        run: cargo fmt -- --check
+        working-directory: packages/@conf-ts/compiler-native
+
+      - name: Clippy
+        run: cargo clippy
+        working-directory: packages/@conf-ts/compiler-native
+
+  native-build:
+    name: stable - ${{ matrix.settings.target }} - node@24
+    runs-on: ${{ matrix.settings.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: x86_64-apple-darwin
+            build: pnpm --filter @conf-ts/compiler-native build -- --target x86_64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            build: pnpm --filter @conf-ts/compiler-native build -- --target x86_64-pc-windows-msvc
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            build: pnpm --filter @conf-ts/compiler-native build -- --target x86_64-unknown-linux-gnu
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            build: pnpm --filter @conf-ts/compiler-native build -- --target aarch64-apple-darwin
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build: pnpm --filter @conf-ts/compiler-native build -- --target aarch64-unknown-linux-gnu
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            build: pnpm --filter @conf-ts/compiler-native build -- --target aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          cache: true
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.settings.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.napi-rs
+            packages/@conf-ts/compiler-native/.cargo-cache
+            packages/@conf-ts/compiler-native/target
+          key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
+
+      - uses: mlugg/setup-zig@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        with:
+          version: 0.14.1
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-zigbuild
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build
+        run: ${{ matrix.settings.build }}
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            packages/@conf-ts/compiler-native/${{ env.APP_NAME }}.*.node
+            packages/@conf-ts/compiler-native/${{ env.APP_NAME }}.*.wasm
+          if-no-files-found: error
+
+  test-macOS-windows-binding:
+    name: Test bindings on ${{ matrix.settings.target }} - node@${{ matrix.node }}
+    needs: [native-build]
+    runs-on: ${{ matrix.settings.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            architecture: x64
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            architecture: arm64
+          - host: macos-latest
+            target: x86_64-apple-darwin
+            architecture: x64
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          architecture: ${{ matrix.settings.architecture }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: packages/@conf-ts/compiler-native
+
+      - name: List packages
+        run: ls -R packages/@conf-ts/compiler-native
+        shell: bash
+
+      - name: Test bindings
+        run: pnpm test
+
+  test-linux-binding:
+    name: Test ${{ matrix.target }} - node@${{ matrix.node }}
+    needs: [native-build]
+    runs-on: ${{ contains(matrix.target, 'aarch64') && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          cache: true
+
+      - name: Output docker params
+        id: docker
+        run: |
+          node -e "
+            if ('${{ matrix.target }}'.startsWith('aarch64')) {
+              console.log('PLATFORM=linux/arm64')
+            } else if ('${{ matrix.target }}'.startsWith('armv7')) {
+              console.log('PLATFORM=linux/arm/v7')
+            } else {
+              console.log('PLATFORM=linux/amd64')
+            }
+          " >> $GITHUB_OUTPUT
+          node -e "
+            if ('${{ matrix.target }}'.endsWith('-musl')) {
+              console.log('IMAGE=node:${{ matrix.node }}-alpine')
+            } else {
+              console.log('IMAGE=node:${{ matrix.node }}-slim')
+            }
+          " >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: bindings-${{ matrix.target }}
+          path: packages/@conf-ts/compiler-native
+
+      - name: List packages
+        run: ls -R packages/@conf-ts/compiler-native
+        shell: bash
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        if: ${{ contains(matrix.target, 'armv7') }}
+        with:
+          platforms: all
+
+      - run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+        if: ${{ contains(matrix.target, 'armv7') }}
+
+      - name: Test bindings
+        uses: tj-actions/docker-run@v2
+        with:
+          image: ${{ steps.docker.outputs.IMAGE }}
+          name: test-bindings-${{ matrix.target }}
+          options: '-v ${{ github.workspace }}:${{ github.workspace }} -w ${{ github.workspace }} --platform ${{ steps.docker.outputs.PLATFORM }}'
+          args: npx pnpm@10 test
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    needs: [native-lint, test-macOS-windows-binding, test-linux-binding]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Create npm dirs
+        run: pnpm --filter @conf-ts/compiler-native exec napi create-npm-dirs --npm-dir packages/native-bindings
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Copy artifacts to package
+        run: cp -r artifacts packages/@conf-ts/compiler-native/
+
+      - name: Move artifacts
+        run: pnpm --filter @conf-ts/compiler-native exec napi artifacts --npm-dir packages/native-bindings
+
+      - name: List packages
+        run: ls -R packages/native-bindings
+        shell: bash
+
+      - name: Configure npm registry
+        run: |
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Determine publish tag
+        id: tag
+        run: |
+          if git log -1 --pretty=%B | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$"; then
+            echo "tag=" >> $GITHUB_OUTPUT
+            echo "reason=stable release"
+          elif git log -1 --pretty=%B | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+"; then
+            echo "tag=--tag next" >> $GITHUB_OUTPUT
+            echo "reason=pre-release"
+          else
+            echo "tag=skip" >> $GITHUB_OUTPUT
+            echo "reason=not a release commit"
+          fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish native-bindings and compiler-native
+        if: steps.tag.outputs.tag != 'skip'
+        run: |
+          pnpm config set provenance true
+          pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Skip publish
+        if: steps.tag.outputs.tag == 'skip'
+        run: echo "Not a release, skipping publish"

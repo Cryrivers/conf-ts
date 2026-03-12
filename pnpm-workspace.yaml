@@ -1,6 +1,6 @@
 packages:
   - packages/@conf-ts/*
-  - packages/@conf-ts/webpack-loader
+  - packages/native-bindings/*
   - packages/playground
 
 onlyBuiltDependencies:

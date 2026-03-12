@@ -1,12 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import { compile } from '@conf-ts/compiler';
 import { describe, expect, it } from 'vitest';
-
-import { compile } from '../src/compiler';
 
 describe('Multi-file test', () => {
   it('should handle multiple file edits correctly', () => {
-    const configPath = path.resolve(__dirname, 'multi-file');
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
     const { output: result } = compile(
       path.join(configPath, 'index.ts'),
       'json',
@@ -19,7 +18,7 @@ describe('Multi-file test', () => {
   });
 
   it('should handle path aliases in tsconfig.json', () => {
-    const configPath = path.resolve(__dirname, 'multi-file');
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
     const { output: result } = compile(
       path.join(configPath, 'index-with-aliases.ts'),
       'json',
@@ -32,7 +31,7 @@ describe('Multi-file test', () => {
   });
 
   it('should handle complex path aliases with multiple directories', () => {
-    const configPath = path.resolve(__dirname, 'multi-file');
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
     const { output: result } = compile(
       path.join(configPath, 'complex-aliases.ts'),
       'json',
@@ -45,7 +44,7 @@ describe('Multi-file test', () => {
   });
 
   it('should resolve numeric enums across files without initializers', () => {
-    const configPath = path.resolve(__dirname, 'multi-file');
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
     const { output: result } = compile(
       path.join(configPath, 'numeric-enum.ts'),
       'json',
@@ -58,7 +57,7 @@ describe('Multi-file test', () => {
   });
 
   it('should not include unrelated enum files in dependencies', () => {
-    const configPath = path.resolve(__dirname, 'multi-file');
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
     const { dependencies } = compile(
       path.join(configPath, 'numeric-enum.ts'),
       'json',

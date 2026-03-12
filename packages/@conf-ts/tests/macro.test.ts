@@ -1,6 +1,7 @@
+import path from 'path';
+import { compile } from '@conf-ts/compiler';
 import { describe, expect, it } from 'vitest';
 
-import { compile } from '../src/compiler';
 import { assertMacroError, assertMacroOutput } from './test-utils';
 
 describe('Macro Test', () => {
@@ -32,7 +33,11 @@ describe('Macro Test', () => {
 
   it('should throw error when type casting functions are not imported from @conf-ts/macro', () => {
     expect(() => {
-      compile('tests/macros/invalid-imports.conf.ts', 'json', { macro: true });
+      compile(
+        path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
+        'json',
+        { macro: true },
+      );
     }).toThrow(
       "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
     );
@@ -40,7 +45,11 @@ describe('Macro Test', () => {
 
   it('should throw error when only some type casting functions are imported', () => {
     expect(() => {
-      compile('tests/macros/partial-imports.conf.ts', 'json', { macro: true });
+      compile(
+        path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
+        'json',
+        { macro: true },
+      );
     }).toThrow(
       "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",
     );
