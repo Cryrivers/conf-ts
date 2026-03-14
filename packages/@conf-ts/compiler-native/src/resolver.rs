@@ -193,13 +193,40 @@ fn match_path_pattern<'a>(pattern: &str, specifier: &'a str) -> Option<&'a str> 
   None
 }
 
+fn is_supported_source_path(path: &str) -> bool {
+  let extensions = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".json.ts",
+    ".json.tsx",
+    ".json.js",
+    ".json.jsx",
+  ];
+  extensions.iter().any(|ext| path.ends_with(ext))
+}
+
 /// Try to resolve a path by appending common extensions.
 fn resolve_file_path(base: &Path) -> Option<PathBuf> {
-  let extensions = [".ts", ".tsx", ".js", ".jsx"];
+  let extensions = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".json.ts",
+    ".json.tsx",
+    ".json.js",
+    ".json.jsx",
+  ];
 
   // Try exact path
   if base.is_file() {
-    return Some(base.canonicalize().unwrap_or_else(|_| base.to_path_buf()));
+    let base_str = base.to_string_lossy();
+    if is_supported_source_path(&base_str) {
+      return Some(base.canonicalize().unwrap_or_else(|_| base.to_path_buf()));
+    }
+    return None;
   }
 
   // Try with extensions
@@ -236,11 +263,20 @@ pub fn resolve_module_in_memory(
   let base_str = base.to_string_lossy();
 
   // Try exact
-  if files.contains_key(base_str.as_ref()) {
+  if files.contains_key(base_str.as_ref()) && is_supported_source_path(&base_str) {
     return Some(base_str.to_string());
   }
 
-  let extensions = [".ts", ".tsx", ".js", ".jsx"];
+  let extensions = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".json.ts",
+    ".json.tsx",
+    ".json.js",
+    ".json.jsx",
+  ];
   for ext in &extensions {
     let with_ext = format!("{}{}", base_str, ext);
     if files.contains_key(&with_ext) {

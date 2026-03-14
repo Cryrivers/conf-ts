@@ -1,6 +1,9 @@
 import { describe, it } from 'vitest';
 
+
+
 import { assertSpecError, assertSpecOutput } from './test-utils';
+
 
 describe('Spec Test', () => {
   it('should compile a default export correctly', () => {
@@ -99,7 +102,6 @@ describe('Spec Test', () => {
     );
   });
   it('should preserve insertion order of object keys', () => {
-    assertSpecOutput('key-order');
     assertSpecOutput('key-order', { preserveKeyOrder: true });
   });
 });

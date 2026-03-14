@@ -1,8 +1,9 @@
 import ts from 'typescript';
 
 import { MACRO_FUNCTIONS } from './constants';
-import { ConfTSError, SourceLocation } from './error';
+import { ConfTSError } from './error';
 import { evaluateMacro } from './macro';
+import { FormattedNumber } from './shared';
 
 const macroModuleSpecifiers = ["'@conf-ts/macro'", '"@conf-ts/macro"'];
 
@@ -67,6 +68,17 @@ export function evaluate(
     }
     return result;
   } else if (ts.isNumericLiteral(expression)) {
+    const text = expression.getText(sourceFile);
+    if (
+      text.includes('.') ||
+      text.includes('e') ||
+      text.includes('E') ||
+      text.startsWith('0x') ||
+      text.startsWith('0b') ||
+      text.startsWith('0o')
+    ) {
+      return new FormattedNumber(Number(expression.text), text);
+    }
     return Number(expression.text);
   } else if (expression.kind === ts.SyntaxKind.TrueKeyword) {
     return true;
@@ -455,7 +467,7 @@ export function evaluate(
       if (obj && typeof obj === 'object' && propertyName in obj) {
         return obj[propertyName];
       }
-    } catch (error) {
+    } catch {
       // This can happen when the property access is on an enum,
       // so we fall through to the enum handling logic.
     }

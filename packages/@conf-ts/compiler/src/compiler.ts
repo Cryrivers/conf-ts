@@ -1,10 +1,13 @@
 import { sep } from 'path';
 import ts from 'typescript';
-import { stringify as yamlStringify } from 'yaml';
+import { Scalar, stringify as yamlStringify } from 'yaml';
+
+
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
-import { CompileOptions, orderedClone, validateMacroImports } from './shared';
+import { CompileOptions, FormattedNumber, jsonStringify, orderedClone, validateMacroImports } from './shared';
+
 
 function _compile(
   inputFile: string,
@@ -159,32 +162,50 @@ export function compile(
   format: 'json' | 'yaml',
   options?: CompileOptions,
 ) {
-  if (options && Object.prototype.hasOwnProperty.call(options, 'macro')) {
-    const v: any = options.macro;
+  if (options && Object.prototype.hasOwnProperty.call(options, 'macroMode')) {
+    const v: any = options.macroMode;
     if (v !== undefined && typeof v !== 'boolean') {
-      throw new ConfTSError('Invalid option: macro must be boolean', {
+      throw new ConfTSError('Invalid option: macroMode must be boolean', {
         file: 'unknown',
         line: 1,
         character: 1,
       });
     }
   }
-  const effectiveMacro = options?.macro ?? false;
+  const effectiveMacro = options?.macroMode ?? false;
   const { output, evaluatedFiles } = _compile(
     inputFile,
     effectiveMacro,
     options,
   );
   const fileNames = Array.from(evaluatedFiles);
+
+  const customTags = [
+    {
+      identify: (v: any) => v instanceof FormattedNumber,
+      default: true,
+      tag: 'tag:yaml.org,2002:float',
+      resolve: (v: string) => parseFloat(v),
+      stringify: ({ value }: any) => (value as FormattedNumber).text,
+    },
+  ];
+
   if (format === 'json') {
     const jsonSource = options?.preserveKeyOrder
-      ? JSON.stringify(orderedClone(output), null, 2)
-      : JSON.stringify(output, null, 2);
-    return { output: jsonSource, dependencies: fileNames };
+      ? jsonStringify(orderedClone(output), 2)
+      : jsonStringify(output, 2);
+    return {
+      output: jsonSource,
+      dependencies: fileNames,
+    };
   } else if (format === 'yaml') {
+    const yamlOptions = {
+      customTags,
+      indentSeq: false,
+    };
     const yamlSource = options?.preserveKeyOrder
-      ? yamlStringify(orderedClone(output))
-      : yamlStringify(output);
+      ? yamlStringify(orderedClone(output), yamlOptions)
+      : yamlStringify(output, yamlOptions);
     return { output: yamlSource, dependencies: fileNames };
   } else {
     throw new ConfTSError(`Unsupported format: ${format}`, {

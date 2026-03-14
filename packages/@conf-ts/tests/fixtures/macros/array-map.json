@@ -1,12 +1,42 @@
 {
-  "mapDouble": [1, 4, 6],
-  "mapToString": ["one", "2", "3"],
-  "mapNames": ["Alice", "Bob", "Charlie", "David", "Eve"],
+  "mapDouble": [
+    1,
+    4,
+    6
+  ],
+  "mapToString": [
+    "one",
+    "2",
+    "3"
+  ],
+  "mapNames": [
+    "Alice",
+    "Bob",
+    "Charlie",
+    "David",
+    "Eve"
+  ],
   "alternateObjects": [
-    { "id": 1, "name": "Alice" },
-    { "id": 2, "name": "Bob" },
-    { "id": 3, "name": "Charlie", "isAdmin": true },
-    { "id": 4, "name": "David" },
-    { "id": 5, "name": "Eve" }
+    {
+      "id": 1,
+      "name": "Alice"
+    },
+    {
+      "id": 2,
+      "name": "Bob"
+    },
+    {
+      "id": 3,
+      "name": "Charlie",
+      "isAdmin": true
+    },
+    {
+      "id": 4,
+      "name": "David"
+    },
+    {
+      "id": 5,
+      "name": "Eve"
+    }
   ]
 }

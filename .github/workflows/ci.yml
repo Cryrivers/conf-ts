@@ -108,12 +108,6 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
             build: pnpm --filter @conf-ts/compiler-native build -- --target aarch64-apple-darwin
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            build: pnpm --filter @conf-ts/compiler-native build -- --target aarch64-unknown-linux-gnu
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            build: pnpm --filter @conf-ts/compiler-native build -- --target aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v6
 
@@ -144,19 +138,6 @@ jobs:
             packages/@conf-ts/compiler-native/.cargo-cache
             packages/@conf-ts/compiler-native/target
           key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
-
-      - uses: mlugg/setup-zig@v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        with:
-          version: 0.14.1
-
-      - name: Install cargo-zigbuild
-        uses: taiki-e/install-action@v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          tool: cargo-zigbuild
 
       - name: Install dependencies
         run: pnpm install
@@ -199,7 +180,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
-          cache: pnpm
           architecture: ${{ matrix.settings.architecture }}
 
       - name: Install pnpm
@@ -232,8 +212,6 @@ jobs:
       matrix:
         target:
           - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - aarch64-unknown-linux-musl
         node: ['20', '22']
     steps:
       - uses: actions/checkout@v6
@@ -242,7 +220,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
-          cache: pnpm
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -262,11 +239,7 @@ jobs:
             }
           " >> $GITHUB_OUTPUT
           node -e "
-            if ('${{ matrix.target }}'.endsWith('-musl')) {
-              console.log('IMAGE=node:${{ matrix.node }}-alpine')
-            } else {
-              console.log('IMAGE=node:${{ matrix.node }}-slim')
-            }
+            console.log('IMAGE=node:${{ matrix.node }}-slim')
           " >> $GITHUB_OUTPUT
 
       - name: Install dependencies
@@ -314,7 +287,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: pnpm
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

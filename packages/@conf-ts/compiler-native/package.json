@@ -15,9 +15,7 @@
       "x86_64-pc-windows-msvc",
       "x86_64-apple-darwin",
       "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu",
-      "aarch64-apple-darwin",
-      "aarch64-unknown-linux-musl"
+      "aarch64-apple-darwin"
     ]
   },
   "engines": {
@@ -45,6 +43,7 @@
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/node": "^25.5.0",
+    "oxlint": "^1.55.0",
     "prettier": "^3.8.1",
     "tinybench": "^6.0.0",
     "tsx": "^4.21.0",

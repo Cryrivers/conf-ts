@@ -7,7 +7,7 @@ use crate::compiler::parse_ts_file;
 use crate::error::ConfTSError;
 use crate::eval::{EvalContext, collect_imports, collect_macro_imports, evaluate};
 use crate::resolver::resolve_module_in_memory;
-use crate::types::{CompileOptions, FileContext, Value};
+use crate::types::{CompileOptions, FileContext, Value, replace_raw_number_markers};
 
 /// Compile from in-memory files (browser mode).
 pub fn compile_in_memory(
@@ -95,7 +95,7 @@ pub fn compile_in_memory(
             match evaluate(init, &ctx, &mut eval_ctx, None, &effective_options) {
               Ok(val) => {
                 if let Value::Number(n) = &val {
-                  next_enum_value = *n as i64 + 1;
+                  next_enum_value = n.value as i64 + 1;
                 }
                 eval_ctx
                   .enum_map
@@ -108,7 +108,7 @@ pub fn compile_in_memory(
                   .enum_map
                   .entry(file_path.clone())
                   .or_default()
-                  .insert(full_name, Value::Number(next_enum_value as f64));
+                  .insert(full_name, Value::number(next_enum_value as f64));
                 next_enum_value += 1;
               }
             }
@@ -118,7 +118,7 @@ pub fn compile_in_memory(
               .enum_map
               .entry(file_path.clone())
               .or_default()
-              .insert(full_name, Value::Number(next_enum_value as f64));
+              .insert(full_name, Value::number(next_enum_value as f64));
             next_enum_value += 1;
           }
         }
@@ -172,14 +172,35 @@ pub fn compile_in_memory(
       let json_str = serde_json::to_string_pretty(&json_value).map_err(|e| {
         ConfTSError::new(format!("Failed to serialize JSON: {}", e), "unknown", 1, 1)
       })?;
-      Ok((json_str, file_names))
+      Ok((replace_raw_number_markers(&json_str), file_names))
     }
     "yaml" => {
       let yaml_value = output.to_yaml();
       let yaml_str = serde_yaml::to_string(&yaml_value).map_err(|e| {
         ConfTSError::new(format!("Failed to serialize YAML: {}", e), "unknown", 1, 1)
       })?;
-      Ok((yaml_str, file_names))
+
+      // Post-process to match JS compiler (yaml-library) format:
+      // 1. Remove leading --- and newline
+      let processed = yaml_str
+        .strip_prefix("---\n")
+        .unwrap_or(&yaml_str)
+        .to_string();
+
+      // 2. Adjust array item indentation and quotes
+      let mut processed_lines = String::new();
+      for line in processed.lines() {
+        let mut new_line = line.to_string();
+        // Convert single quotes to double quotes (heuristic for strings)
+        // For simple key: 'value' or - 'value'
+        if (new_line.contains(": '") || new_line.contains("- '")) && new_line.ends_with('\'') {
+          new_line = new_line.replace('\'', "\"");
+        }
+        processed_lines.push_str(&new_line);
+        processed_lines.push_str("\n");
+      }
+
+      Ok((replace_raw_number_markers(&processed_lines), file_names))
     }
     _ => Err(ConfTSError::new(
       format!("Unsupported format: {}", format),

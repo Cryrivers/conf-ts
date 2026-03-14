@@ -77,7 +77,7 @@ fn evaluate_type_casting(
   let arg = evaluate(&call.args[0].expr, file_ctx, ctx, local_context, options)?;
   match callee {
     "String" => Ok(Some(Value::String(arg.to_display_string()))),
-    "Number" => Ok(Some(Value::Number(arg.to_number()))),
+    "Number" => Ok(Some(Value::number(arg.to_number()))),
     "Boolean" => Ok(Some(Value::Bool(arg.is_truthy()))),
     _ => Ok(None),
   }
@@ -413,6 +413,9 @@ fn validate_node(
     }
     Expr::Lit(_) => Ok(()),
     Expr::Member(member) => {
+      if is_enum_member_access(member, ctx) {
+        return Ok(());
+      }
       if is_param_chain(&member.obj, param_name) {
         return Ok(());
       }
@@ -506,6 +509,22 @@ fn validate_node(
     Expr::TsNonNull(ts_nn) => validate_node(&ts_nn.expr, param_name, file_ctx, ctx, macro_name),
     _ => Ok(()),
   }
+}
+
+fn is_enum_member_access(member: &MemberExpr, ctx: &EvalContext) -> bool {
+  let obj_ident = match &*member.obj {
+    Expr::Ident(ident) => ident.sym.as_str(),
+    _ => return false,
+  };
+  let prop_name = match &member.prop {
+    MemberProp::Ident(ident) => ident.sym.as_str().to_string(),
+    _ => return false,
+  };
+  let full_name = format!("{}.{}", obj_ident, prop_name);
+  ctx
+    .enum_map
+    .values()
+    .any(|file_enums| file_enums.contains_key(&full_name))
 }
 
 fn is_param_chain(expr: &Expr, param_name: &str) -> bool {

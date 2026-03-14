@@ -1,6 +1,10 @@
 import { compile } from '@conf-ts/compiler';
 import { Command } from 'commander';
 
+
+
+
+
 const program = new Command();
 
 program
@@ -31,7 +35,7 @@ program
 
     try {
       const { output: result } = compile(fileEntry, format, {
-        macro,
+        macroMode: macro,
         preserveKeyOrder: preserveOrder,
       });
       console.log(result);

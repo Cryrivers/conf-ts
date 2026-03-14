@@ -191,7 +191,7 @@ const { output, dependencies } = compileInMemory(files, '/index.conf.ts', 'json'
 import { compile, compileInMemory } from '@conf-ts/compiler';
 
 compile('path/to/index.conf.ts', 'json', false, { preserveKeyOrder: true });
-compile('path/to/index.conf.ts', 'json', false, { macro: true });
+compile('path/to/index.conf.ts', 'json', false, { macroMode: true });
 
 compileInMemory(
   { '/index.conf.ts': "export default { a: 1, b: 2, c: 3 }" },
@@ -208,7 +208,7 @@ compileInMemory(
   'json',
   false,
   undefined,
-  { macro: true },
+  { macroMode: true },
 );
 ```
 
@@ -229,8 +229,7 @@ module.exports = {
             options: {
               format: 'json',
               extensionToRemove: '.conf.ts',
-              name: '[name].generated.json',
-              logDependencies: false,
+              name: '[name].generated.json'
             },
           },
         ],

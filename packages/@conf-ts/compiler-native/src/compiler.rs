@@ -8,7 +8,7 @@ use swc_ecma_parser::{Syntax, TsSyntax, parse_file_as_module};
 use crate::error::ConfTSError;
 use crate::eval::{EvalContext, collect_imports, collect_macro_imports, evaluate};
 use crate::resolver::{find_tsconfig, read_tsconfig, resolve_module};
-use crate::types::{CompileOptions, FileContext, Value};
+use crate::types::{CompileOptions, FileContext, Value, replace_raw_number_markers};
 
 /// Parse a TypeScript source file into a Module AST.
 pub fn parse_ts_file(
@@ -39,10 +39,48 @@ pub fn parse_ts_file(
   }
 }
 
-/// Load and parse a file from disk.
+fn decode_source(bytes: &[u8], file_path: &str) -> Result<String, ConfTSError> {
+  if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+    return String::from_utf8(bytes[3..].to_vec())
+      .map_err(|e| ConfTSError::new(format!("Failed to decode UTF-8: {}", e), file_path, 1, 1));
+  }
+  if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+    let is_le = bytes.starts_with(&[0xFF, 0xFE]);
+    let body = &bytes[2..];
+    if body.len() % 2 != 0 {
+      return Err(ConfTSError::new(
+        "Failed to decode UTF-16: odd byte length",
+        file_path,
+        1,
+        1,
+      ));
+    }
+    let mut units = Vec::with_capacity(body.len() / 2);
+    for chunk in body.chunks_exact(2) {
+      let unit = if is_le {
+        u16::from_le_bytes([chunk[0], chunk[1]])
+      } else {
+        u16::from_be_bytes([chunk[0], chunk[1]])
+      };
+      units.push(unit);
+    }
+    return String::from_utf16(&units)
+      .map_err(|e| ConfTSError::new(format!("Failed to decode UTF-16: {}", e), file_path, 1, 1));
+  }
+  String::from_utf8(bytes.to_vec()).map_err(|e| {
+    ConfTSError::new(
+      format!("Failed to decode file as UTF-8 or UTF-16: {}", e),
+      file_path,
+      1,
+      1,
+    )
+  })
+}
+
 fn load_file(file_path: &str, source_map: &Lrc<SourceMap>) -> Result<FileContext, ConfTSError> {
-  let source = std::fs::read_to_string(file_path)
+  let bytes = std::fs::read(file_path)
     .map_err(|e| ConfTSError::new(format!("Failed to read file: {}", e), file_path, 1, 1))?;
+  let source = decode_source(&bytes, file_path)?;
   let module = parse_ts_file(&source, file_path, source_map)?;
   let imports = collect_imports(&module);
   Ok(FileContext {
@@ -91,16 +129,16 @@ fn collect_enums(
           std::mem::swap(&mut ctx.evaluated_files, &mut enum_eval_files);
           let res = match evaluate(init, file_ctx, ctx, Some(&local_context), options) {
             Ok(v) => v,
-            Err(_) => Value::Number(next_enum_value as f64),
+            Err(_) => Value::number(next_enum_value as f64),
           };
           std::mem::swap(&mut ctx.evaluated_files, &mut enum_eval_files);
           res
         } else {
-          Value::Number(next_enum_value as f64)
+          Value::number(next_enum_value as f64)
         };
 
         if let Value::Number(n) = &val {
-          next_enum_value = *n as i64 + 1;
+          next_enum_value = n.value as i64 + 1;
         } else {
           next_enum_value += 1;
         }
@@ -268,14 +306,35 @@ pub fn compile(
       let json_str = serde_json::to_string_pretty(&json_value).map_err(|e| {
         ConfTSError::new(format!("Failed to serialize JSON: {}", e), "unknown", 1, 1)
       })?;
-      Ok((json_str, file_names))
+      Ok((replace_raw_number_markers(&json_str), file_names))
     }
     "yaml" => {
       let yaml_value = output.to_yaml();
       let yaml_str = serde_yaml::to_string(&yaml_value).map_err(|e| {
         ConfTSError::new(format!("Failed to serialize YAML: {}", e), "unknown", 1, 1)
       })?;
-      Ok((yaml_str, file_names))
+
+      // Post-process to match JS compiler (yaml-library) format:
+      // 1. Remove leading --- and newline
+      let processed = yaml_str
+        .strip_prefix("---\n")
+        .unwrap_or(&yaml_str)
+        .to_string();
+
+      // 2. Adjust array item indentation and quotes
+      let mut processed_lines = String::new();
+      for line in processed.lines() {
+        let mut new_line = line.to_string();
+        // Convert single quotes to double quotes (heuristic for strings)
+        // For simple key: 'value' or - 'value'
+        if (new_line.contains(": '") || new_line.contains("- '")) && new_line.ends_with('\'') {
+          new_line = new_line.replace('\'', "\"");
+        }
+        processed_lines.push_str(&new_line);
+        processed_lines.push_str("\n");
+      }
+
+      Ok((replace_raw_number_markers(&processed_lines), file_names))
     }
     _ => Err(ConfTSError::new(
       format!("Unsupported format: {}", format),

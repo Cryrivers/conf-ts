@@ -7,9 +7,9 @@ interface LoaderOptions {
   name?: string
   format?: 'json' | 'yaml'
   extensionToRemove?: string,
-  logDependencies?: boolean,
   macro?: boolean;
   preserveKeyOrder?: boolean;
+  check?: boolean;
 }
 
 export default function (this: LoaderContext<LoaderOptions>, source: string) {
@@ -21,19 +21,26 @@ export default function (this: LoaderContext<LoaderOptions>, source: string) {
 
   try {
     const { output, dependencies } = compile(this.resourcePath, format, {
-      macro: options.macro || false,
+      macroMode: options.macro || false,
       preserveKeyOrder: options.preserveKeyOrder || false,
     })
     dependencies.forEach(dep => this.addDependency(dep));
-    if (options.logDependencies) {
-      console.log('Dependencies:', dependencies)
-    }
     const baseName = path.basename(this.resourcePath, extToRemove);
     const fileName = path.join(
       path.dirname(this.resourcePath),
       options.name || `${baseName}.generated.${format}`
     )
-    fs.writeFileSync(fileName, output)
+    if (options.check) {
+      if (!fs.existsSync(fileName)) {
+        throw new Error(`Generated file not found: ${fileName}`)
+      }
+      const existing = fs.readFileSync(fileName, 'utf8')
+      if (existing !== output) {
+        throw new Error(`Generated output mismatch: ${fileName}`)
+      }
+    } else {
+      fs.writeFileSync(fileName, output)
+    }
   } catch (error) {
     this.emitError(error as Error)
   } finally {

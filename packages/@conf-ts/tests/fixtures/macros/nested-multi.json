@@ -1,5 +1,12 @@
 {
-  "multiLevelCast": [false, true, true],
-  "nestedInArg": ["1", "2"],
+  "multiLevelCast": [
+    false,
+    true,
+    true
+  ],
+  "nestedInArg": [
+    "1",
+    "2"
+  ],
   "deepChain": "5"
 }

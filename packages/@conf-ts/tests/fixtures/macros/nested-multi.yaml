@@ -1,8 +1,8 @@
 multiLevelCast:
-  - false
-  - true
-  - true
+- false
+- true
+- true
 nestedInArg:
-  - "1"
-  - "2"
+- "1"
+- "2"
 deepChain: "5"

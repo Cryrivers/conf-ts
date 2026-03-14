@@ -1,8 +1,12 @@
 import path from 'path';
-import { compile } from '@conf-ts/compiler';
+import { compile as compileJs } from '@conf-ts/compiler';
+import { compile as compileNative } from '@conf-ts/compiler-native';
 import { describe, expect, it } from 'vitest';
 
+
+
 import { assertMacroError, assertMacroOutput } from './test-utils';
+
 
 describe('Macro Test', () => {
   it('should handle type casting using String(), Number(), and Boolean() in Macro Mode', () => {
@@ -33,10 +37,19 @@ describe('Macro Test', () => {
 
   it('should throw error when type casting functions are not imported from @conf-ts/macro', () => {
     expect(() => {
-      compile(
+      compileJs(
         path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
         'json',
-        { macro: true },
+        { macroMode: true },
+      );
+    }).toThrow(
+      "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
+    );
+    expect(() => {
+      compileNative(
+        path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
+        'json',
+        { macroMode: true },
       );
     }).toThrow(
       "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
@@ -45,10 +58,19 @@ describe('Macro Test', () => {
 
   it('should throw error when only some type casting functions are imported', () => {
     expect(() => {
-      compile(
+      compileJs(
         path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
         'json',
-        { macro: true },
+        { macroMode: true },
+      );
+    }).toThrow(
+      "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",
+    );
+    expect(() => {
+      compileNative(
+        path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
+        'json',
+        { macroMode: true },
       );
     }).toThrow(
       "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",

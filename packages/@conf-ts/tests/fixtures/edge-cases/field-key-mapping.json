@@ -1,0 +1,24 @@
+{
+  "config": [
+    {
+      "string": "EnumA",
+      "stringifiedNumber": "1"
+    },
+    {
+      "string": "EnumA",
+      "stringifiedNumber": "2"
+    },
+    {
+      "string": "EnumA",
+      "stringifiedNumber": "3"
+    },
+    {
+      "string": "EnumA",
+      "stringifiedNumber": "4"
+    },
+    {
+      "string": "EnumA",
+      "stringifiedNumber": "5"
+    }
+  ]
+}

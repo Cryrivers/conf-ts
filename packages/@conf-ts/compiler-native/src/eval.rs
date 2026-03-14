@@ -5,7 +5,7 @@ use swc_ecma_ast::*;
 
 use crate::error::ConfTSError;
 use crate::macro_eval::evaluate_macro;
-use crate::types::{CompileOptions, FileContext, Value};
+use crate::types::{CompileOptions, FileContext, Value, normalize_number_raw};
 
 const MACRO_FUNCTIONS: &[&str] = &[
   "String",
@@ -50,7 +50,10 @@ pub fn evaluate(
     Expr::Lit(Lit::Str(s)) => Ok(Value::String(s.value.as_str().unwrap_or("").to_string())),
 
     // Numeric literals
-    Expr::Lit(Lit::Num(n)) => Ok(Value::Number(n.value)),
+    Expr::Lit(Lit::Num(n)) => {
+      let raw = n.raw.as_ref().map(|value| value.as_str().to_string());
+      Ok(Value::number_with_raw(n.value, normalize_number_raw(raw)))
+    }
 
     // Boolean literals
     Expr::Lit(Lit::Bool(b)) => Ok(Value::Bool(b.value)),
@@ -96,7 +99,16 @@ pub fn evaluate(
                   continue;
                 }
               }
-              let val = resolve_identifier(&name, file_ctx, ctx, local_context, options)?;
+              let (line, character) = get_location(&file_ctx.source_map, ident.span.lo);
+              let val = resolve_identifier(
+                &name,
+                file_ctx,
+                ctx,
+                local_context,
+                options,
+                line,
+                character,
+              )?;
               map.retain(|(k, _)| k != &name);
               map.push((name, val));
             }
@@ -161,22 +173,27 @@ pub fn evaluate(
           return Ok(val.clone());
         }
       }
-      resolve_identifier(name, file_ctx, ctx, local_context, options)
+      let (line, character) = get_location(&file_ctx.source_map, ident.span.lo);
+      resolve_identifier(name, file_ctx, ctx, local_context, options, line, character)
     }
 
     // Property access: obj.prop
     Expr::Member(member) => eval_member_expr(member, file_ctx, ctx, local_context, options),
 
+    Expr::OptChain(opt_chain) => {
+      eval_opt_chain_expr(opt_chain, file_ctx, ctx, local_context, options)
+    }
+
     // Unary prefix: +, -, !, ~
     Expr::Unary(unary) => {
       let operand = evaluate(&unary.arg, file_ctx, ctx, local_context, options)?;
       match unary.op {
-        UnaryOp::Plus => Ok(Value::Number(operand.to_number())),
-        UnaryOp::Minus => Ok(Value::Number(-operand.to_number())),
+        UnaryOp::Plus => Ok(Value::number(operand.to_number())),
+        UnaryOp::Minus => Ok(Value::number(-operand.to_number())),
         UnaryOp::Bang => Ok(Value::Bool(!operand.is_truthy())),
         UnaryOp::Tilde => {
           let n = operand.to_number() as i32;
-          Ok(Value::Number((!n) as f64))
+          Ok(Value::number((!n) as f64))
         }
         _ => {
           let (line, character) = get_location(&file_ctx.source_map, unary.span.lo);
@@ -221,17 +238,26 @@ pub fn evaluate(
     // Non-null assertion (!)
     Expr::TsNonNull(ts_non_null) => {
       let val = evaluate(&ts_non_null.expr, file_ctx, ctx, local_context, options)?;
-      match &val {
-        Value::Null | Value::Undefined => {
-          let (line, character) = get_location(&file_ctx.source_map, ts_non_null.span.lo);
-          Err(ConfTSError::new(
+      let (line, character) = get_location(&file_ctx.source_map, ts_non_null.span.lo);
+      let is_typed_nullish = is_strictly_nullish_expr(&ts_non_null.expr, file_ctx);
+
+      if is_typed_nullish {
+        Err(ConfTSError::new(
+          "Non-null assertion applied to value typed as 'null' or 'undefined'",
+          &file_ctx.file_path,
+          line,
+          character,
+        ))
+      } else {
+        match &val {
+          Value::Null | Value::Undefined => Err(ConfTSError::new(
             "Non-null assertion failed: value is null or undefined",
             &file_ctx.file_path,
             line,
             character,
-          ))
+          )),
+          _ => Ok(val),
         }
-        _ => Ok(val),
       }
     }
 
@@ -363,8 +389,22 @@ fn eval_member_expr(
     }
   };
 
-  // First, try to evaluate as object property access
-  if let Ok(obj) = evaluate(&member.obj, file_ctx, ctx, local_context, options) {
+  let mut obj_debug = String::new();
+  let obj_eval = evaluate(&member.obj, file_ctx, ctx, local_context, options);
+  if let Ok(obj) = obj_eval {
+    obj_debug = match &obj {
+      Value::Object(map) => {
+        let mut keys: Vec<String> = map.iter().map(|(k, _)| k.clone()).collect();
+        keys.sort();
+        if keys.is_empty() {
+          "object keys=[]".to_string()
+        } else {
+          format!("object keys=[{}]", keys.join(", "))
+        }
+      }
+      Value::Array(arr) => format!("array length={}", arr.len()),
+      _ => format!("value={}", obj.to_display_string()),
+    };
     if let Value::Object(ref map) = obj {
       for (k, v) in map {
         if k == &prop_name {
@@ -372,6 +412,8 @@ fn eval_member_expr(
         }
       }
     }
+  } else if let Err(err) = obj_eval {
+    obj_debug = format!("eval_error={}", err.message);
   }
 
   // Then try as enum access
@@ -379,6 +421,18 @@ fn eval_member_expr(
     format!("{}.{}", ident_name(ident), prop_name)
   } else {
     String::new()
+  };
+
+  let enum_in_file = ctx
+    .enum_map
+    .get(&file_ctx.file_path)
+    .map(|map| map.len())
+    .unwrap_or(0);
+  let enum_total: usize = ctx.enum_map.values().map(|map| map.len()).sum();
+  let enum_lookup = if full_name.is_empty() {
+    "skipped (non-identifier object)"
+  } else {
+    "checked"
   };
 
   if !full_name.is_empty() {
@@ -398,14 +452,80 @@ fn eval_member_expr(
   let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
   Err(ConfTSError::new(
     format!(
-      "Unsupported property access expression: {}.{}",
+      "Unsupported property access expression: {}.{}. Debug: obj={}, enum_lookup={}, enum_candidates={}/{}",
       expr_to_string(&member.obj),
-      prop_name
+      prop_name,
+      obj_debug,
+      enum_lookup,
+      enum_in_file,
+      enum_total
     ),
     &file_ctx.file_path,
     line,
     character,
   ))
+}
+
+fn eval_opt_chain_expr(
+  opt_chain: &OptChainExpr,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  match &*opt_chain.base {
+    OptChainBase::Member(member) => {
+      eval_optional_member_expr(member, file_ctx, ctx, local_context, options)
+    }
+    OptChainBase::Call(_) => {
+      let (line, character) = get_location(&file_ctx.source_map, opt_chain.span.lo);
+      Err(ConfTSError::new(
+        "Unsupported optional call expression",
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+  }
+}
+
+fn eval_optional_member_expr(
+  member: &MemberExpr,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  let prop_name = match &member.prop {
+    MemberProp::Ident(ident_name_node) => ident_name_node.sym.as_str().to_string(),
+    MemberProp::Computed(comp) => {
+      let val = evaluate(&comp.expr, file_ctx, ctx, local_context, options)?;
+      val.to_display_string()
+    }
+    _ => {
+      let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
+      return Err(ConfTSError::new(
+        "Unsupported member expression property type",
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  let obj = evaluate(&member.obj, file_ctx, ctx, local_context, options)?;
+  match obj {
+    Value::Null | Value::Undefined => Ok(Value::Undefined),
+    Value::Object(map) => {
+      for (k, v) in map {
+        if k == prop_name {
+          return Ok(v);
+        }
+      }
+      Ok(Value::Undefined)
+    }
+    _ => Ok(Value::Undefined),
+  }
 }
 
 /// Evaluate a binary operation.
@@ -421,12 +541,12 @@ fn eval_binary_op(
     BinaryOp::Add => match (&left, &right) {
       (Value::String(l), _) => Ok(Value::String(format!("{}{}", l, right.to_display_string()))),
       (_, Value::String(r)) => Ok(Value::String(format!("{}{}", left.to_display_string(), r))),
-      _ => Ok(Value::Number(left.to_number() + right.to_number())),
+      _ => Ok(Value::number(left.to_number() + right.to_number())),
     },
-    BinaryOp::Sub => Ok(Value::Number(left.to_number() - right.to_number())),
-    BinaryOp::Mul => Ok(Value::Number(left.to_number() * right.to_number())),
-    BinaryOp::Div => Ok(Value::Number(left.to_number() / right.to_number())),
-    BinaryOp::Mod => Ok(Value::Number(left.to_number() % right.to_number())),
+    BinaryOp::Sub => Ok(Value::number(left.to_number() - right.to_number())),
+    BinaryOp::Mul => Ok(Value::number(left.to_number() * right.to_number())),
+    BinaryOp::Div => Ok(Value::number(left.to_number() / right.to_number())),
+    BinaryOp::Mod => Ok(Value::number(left.to_number() % right.to_number())),
     BinaryOp::Gt => Ok(Value::Bool(left.to_number() > right.to_number())),
     BinaryOp::Lt => Ok(Value::Bool(left.to_number() < right.to_number())),
     BinaryOp::GtEq => Ok(Value::Bool(left.to_number() >= right.to_number())),
@@ -492,6 +612,8 @@ pub fn resolve_identifier(
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
+  line: usize,
+  character: usize,
 ) -> Result<Value, ConfTSError> {
   // Check in current file's declarations
   if let Some(val) = resolve_in_file(name, file_ctx, ctx, local_context, options)? {
@@ -499,22 +621,40 @@ pub fn resolve_identifier(
   }
 
   // Check imports
+  let mut import_debug = "none".to_string();
   if let Some(import_info) = file_ctx.imports.get(name) {
+    let original_name = import_info.original_name.as_deref().unwrap_or(name);
     let resolved_path = if let Some(ref resolver) = ctx.resolver {
       resolver(&import_info.source, &file_ctx.file_path)
     } else {
       None
     };
+    let mut import_context_loaded = false;
 
-    if let Some(resolved_path) = resolved_path {
+    if let Some(resolved_path) = resolved_path.clone() {
       if let Some(imported_ctx) = ctx.file_contexts.get(&resolved_path).cloned() {
-        let original_name = import_info.original_name.as_deref().unwrap_or(name);
+        import_context_loaded = true;
         if let Some(val) = resolve_in_file(original_name, &imported_ctx, ctx, None, options)? {
           return Ok(val);
         }
       }
     }
+
+    import_debug = format!(
+      "source={}, original={}, resolved={}, context_loaded={}",
+      import_info.source,
+      original_name,
+      resolved_path.unwrap_or_else(|| "<unresolved>".to_string()),
+      import_context_loaded
+    );
   }
+
+  let enum_in_file = ctx
+    .enum_map
+    .get(&file_ctx.file_path)
+    .map(|map| map.len())
+    .unwrap_or(0);
+  let enum_total: usize = ctx.enum_map.values().map(|map| map.len()).sum();
 
   // Check enum map
   for (file_path, file_enums) in &ctx.enum_map {
@@ -526,11 +666,26 @@ pub fn resolve_identifier(
     }
   }
 
+  let local_keys = local_context
+    .map(|ctx| {
+      let mut keys: Vec<String> = ctx.keys().cloned().collect();
+      keys.sort();
+      if keys.is_empty() {
+        "none".to_string()
+      } else {
+        keys.join(", ")
+      }
+    })
+    .unwrap_or_else(|| "none".to_string());
+
   Err(ConfTSError::new(
-    format!("Unsupported variable type for identifier: {}", name),
+    format!(
+      "Unsupported variable type for identifier: {}. Debug: local_context_keys={}, import={}, enum_candidates={}/{}",
+      name, local_keys, import_debug, enum_in_file, enum_total
+    ),
     &file_ctx.file_path,
-    1,
-    1,
+    line,
+    character,
   ))
 }
 
@@ -542,6 +697,23 @@ fn resolve_in_file(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
+  if name == "default" {
+    for item in &file_ctx.module.body {
+      if let ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) = item {
+        let val = evaluate(&export.expr, file_ctx, ctx, local_context, options)?;
+        return Ok(Some(val));
+      }
+      if let ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(_)) = item {
+        let (line, character) = get_location(&file_ctx.source_map, item.span().lo);
+        return Err(ConfTSError::new(
+          "Unsupported default export declaration",
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+    }
+  }
   for item in &file_ctx.module.body {
     match item {
       ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) => {
@@ -804,6 +976,66 @@ pub struct EvalContext {
   pub evaluated_files: HashSet<String>,
   pub file_contexts: HashMap<String, FileContext>,
   pub resolver: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
+}
+
+/// Check if an expression is strictly typed as null or undefined.
+fn is_strictly_nullish_expr(expr: &Expr, file_ctx: &FileContext) -> bool {
+  match expr {
+    Expr::Lit(Lit::Null(_)) => true,
+    Expr::Ident(ident) if ident.sym == "undefined" => true,
+    Expr::Ident(ident) => {
+      // Look for variable declaration in the current file
+      for item in &file_ctx.module.body {
+        match item {
+          ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
+            if let Decl::Var(var_decl) = &export_decl.decl {
+              if let Some(type_ann) = find_type_ann_in_var_decl(&ident.sym, var_decl) {
+                return is_nullish_type(type_ann);
+              }
+            }
+          }
+          ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) => {
+            if let Some(type_ann) = find_type_ann_in_var_decl(&ident.sym, var_decl) {
+              return is_nullish_type(type_ann);
+            }
+          }
+          _ => {}
+        }
+      }
+      false
+    }
+    Expr::TsAs(ts_as) => is_nullish_type(&ts_as.type_ann),
+    Expr::TsSatisfies(ts_sat) => is_nullish_type(&ts_sat.type_ann),
+    Expr::Paren(paren) => is_strictly_nullish_expr(&paren.expr, file_ctx),
+    _ => false,
+  }
+}
+
+/// Find the type annotation for a variable in a declaration.
+fn find_type_ann_in_var_decl<'a>(name: &str, var_decl: &'a VarDecl) -> Option<&'a TsType> {
+  for decl in &var_decl.decls {
+    if let Pat::Ident(binding_ident) = &decl.name {
+      if binding_ident.id.sym == name {
+        return binding_ident.type_ann.as_ref().map(|at| &*at.type_ann);
+      }
+    }
+  }
+  None
+}
+
+/// Check if a TypeScript type is strictly null or undefined (or a union of them).
+fn is_nullish_type(t: &TsType) -> bool {
+  match t {
+    TsType::TsKeywordType(kt) => {
+      kt.kind == TsKeywordTypeKind::TsNullKeyword
+        || kt.kind == TsKeywordTypeKind::TsUndefinedKeyword
+    }
+    TsType::TsUnionOrIntersectionType(TsUnionOrIntersectionType::TsUnionType(ut)) => {
+      ut.types.iter().all(|sub_t| is_nullish_type(sub_t))
+    }
+    TsType::TsParenthesizedType(pt) => is_nullish_type(&pt.type_ann),
+    _ => false,
+  }
 }
 
 impl EvalContext {

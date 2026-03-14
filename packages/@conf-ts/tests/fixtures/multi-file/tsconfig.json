@@ -3,10 +3,9 @@
     "moduleResolution": "node",
     "target": "esnext",
     "module": "esnext",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["*"],
-      "@utils/*": ["utils/*"]
+      "@/*": ["./*"],
+      "@utils/*": ["./utils/*"]
     }
   }
 }

@@ -1,9 +1,12 @@
 import ts from 'typescript';
 import { stringify as yamlStringify } from 'yaml';
 
+
+
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
 import { CompileOptions, orderedClone, validateMacroImports } from './shared';
+
 
 export type InMemoryFiles = { [fileName: string]: string };
 
@@ -128,14 +131,14 @@ export function compileInMemory(
   files: InMemoryFiles,
   entryFile: string,
   format: 'json' | 'yaml',
-  macro: boolean,
+  macroMode: boolean,
   tsconfig?: { compilerOptions?: ts.CompilerOptions },
   options?: CompileOptions,
 ) {
-  if (options && Object.prototype.hasOwnProperty.call(options, 'macro')) {
-    const v: any = options.macro;
+  if (options && Object.prototype.hasOwnProperty.call(options, 'macroMode')) {
+    const v: any = options.macroMode;
     if (v !== undefined && typeof v !== 'boolean') {
-      throw new ConfTSError('Invalid option: macro must be boolean', {
+      throw new ConfTSError('Invalid option: macroMode must be boolean', {
         file: 'unknown',
         line: 1,
         character: 1,
@@ -173,7 +176,7 @@ export function compileInMemory(
   const { output, evaluatedFiles } = compileWithProgram(
     program,
     entryFile,
-    options?.macro ?? macro,
+    options?.macroMode ?? macroMode,
     options,
   );
   const fileNames = Array.from(evaluatedFiles);
@@ -185,8 +188,8 @@ export function compileInMemory(
     return { output: jsonSource, dependencies: fileNames };
   } else if (format === 'yaml') {
     const yamlSource = options?.preserveKeyOrder
-      ? yamlStringify(orderedClone(output))
-      : yamlStringify(output);
+      ? yamlStringify(orderedClone(output), { indentSeq: false })
+      : yamlStringify(output, { indentSeq: false });
     return { output: yamlSource, dependencies: fileNames };
   } else {
     throw new ConfTSError(`Unsupported format: ${format}`, {

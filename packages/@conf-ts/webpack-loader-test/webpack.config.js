@@ -19,8 +19,7 @@ module.exports = {
           {
             loader: '@conf-ts/webpack-loader',
             options: {
-              extensionToRemove: '.conf.ts',
-              logDependencies: true,
+              extensionToRemove: '.conf.ts'
             },
           },
         ],
