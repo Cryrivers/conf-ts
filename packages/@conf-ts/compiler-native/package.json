@@ -15,6 +15,7 @@
       "x86_64-pc-windows-msvc",
       "x86_64-apple-darwin",
       "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
       "aarch64-apple-darwin"
     ]
   },
@@ -53,9 +54,8 @@
   "optionalDependencies": {
     "@conf-ts/compiler-native-darwin-arm64": "workspace:*",
     "@conf-ts/compiler-native-darwin-x64": "workspace:*",
-    "@conf-ts/compiler-native-linux-arm64-gnu": "workspace:*",
-    "@conf-ts/compiler-native-linux-arm64-musl": "workspace:*",
     "@conf-ts/compiler-native-linux-x64-gnu": "workspace:*",
+    "@conf-ts/compiler-native-linux-x64-musl": "workspace:*",
     "@conf-ts/compiler-native-win32-x64-msvc": "workspace:*"
   }
 }
