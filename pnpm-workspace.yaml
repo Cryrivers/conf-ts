@@ -1,6 +1,6 @@
 packages:
   - packages/@conf-ts/*
-  - packages/native-bindings/*
+  - packages/@conf-ts/compiler-native/npm/*
   - packages/playground
 
 onlyBuiltDependencies:
