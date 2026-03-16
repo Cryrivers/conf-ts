@@ -3,10 +3,7 @@ import { compile as compileJs } from '@conf-ts/compiler';
 import { compile as compileNative } from '@conf-ts/compiler-native';
 import { describe, expect, it } from 'vitest';
 
-
-
 import { assertMacroError, assertMacroOutput } from './test-utils';
-
 
 describe('Macro Test', () => {
   it('should handle type casting using String(), Number(), and Boolean() in Macro Mode', () => {

@@ -1,19 +1,22 @@
 import { sep } from 'path';
 import ts from 'typescript';
-import { Scalar, stringify as yamlStringify } from 'yaml';
-
-
+import { stringify as yamlStringify } from 'yaml';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
-import { CompileOptions, FormattedNumber, jsonStringify, orderedClone, validateMacroImports } from './shared';
-
+import {
+  CompileOptions,
+  FormattedNumber,
+  jsonStringify,
+  orderedClone,
+  validateMacroImports,
+} from './shared';
 
 function _compile(
   inputFile: string,
   macro: boolean,
   options?: CompileOptions,
-): { output: object; evaluatedFiles: Set<string> } {
+): { output: object; evaluatedFiles: Set<string>; tsConfigPath: string } {
   const tsConfigPath = ts.findConfigFile(inputFile, ts.sys.fileExists);
 
   if (!tsConfigPath) {
@@ -64,10 +67,7 @@ function _compile(
     );
   }
 
-  const program = ts.createProgram(
-    [inputFile, ...compilerOptions.fileNames],
-    compilerOptions.options,
-  );
+  const program = ts.createProgram([inputFile], compilerOptions.options);
   const typeChecker = program.getTypeChecker();
   const enumMap: { [filePath: string]: { [key: string]: any } } = {};
   const macroImportsMap: { [filePath: string]: Set<string> } = {};
@@ -154,7 +154,7 @@ function _compile(
     }
   }
 
-  return { output, evaluatedFiles };
+  return { output, evaluatedFiles, tsConfigPath };
 }
 
 export function compile(
@@ -173,12 +173,12 @@ export function compile(
     }
   }
   const effectiveMacro = options?.macroMode ?? false;
-  const { output, evaluatedFiles } = _compile(
+  const { output, evaluatedFiles, tsConfigPath } = _compile(
     inputFile,
     effectiveMacro,
     options,
   );
-  const fileNames = Array.from(evaluatedFiles);
+  const fileNames = Array.from([tsConfigPath, ...evaluatedFiles]);
 
   const customTags = [
     {

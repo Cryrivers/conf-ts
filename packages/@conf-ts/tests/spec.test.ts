@@ -1,9 +1,6 @@
 import { describe, it } from 'vitest';
 
-
-
 import { assertSpecError, assertSpecOutput } from './test-utils';
-
 
 describe('Spec Test', () => {
   it('should compile a default export correctly', () => {

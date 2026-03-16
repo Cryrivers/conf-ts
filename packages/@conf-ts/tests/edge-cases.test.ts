@@ -1,9 +1,6 @@
 import { describe, it } from 'vitest';
 
-
-
 import { assertEdgeCaseOutput } from './test-utils';
-
 
 describe('Edge Cases Test', () => {
   it('should compile field key mappings correctly', () => {

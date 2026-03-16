@@ -288,6 +288,9 @@ fn _compile(
     ));
   }
 
+  eval_ctx
+    .evaluated_files
+    .insert(tsconfig_path.display().to_string());
   Ok((output, eval_ctx.evaluated_files))
 }
 
