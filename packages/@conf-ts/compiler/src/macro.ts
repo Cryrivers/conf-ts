@@ -1,7 +1,5 @@
 import ts from 'typescript';
 
-
-
 import { MACRO_FUNCTIONS } from './constants';
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
@@ -11,7 +9,10 @@ type MacroFunction = {
   argLength: number;
 };
 
-type MacroOptions = { preserveKeyOrder?: boolean; env?: Record<string, string> };
+type MacroOptions = {
+  preserveKeyOrder?: boolean;
+  env?: Record<string, string>;
+};
 
 const TYPE_CASTING_FUNCTIONS = [
   { name: 'String', argLength: 1 },
@@ -152,7 +153,8 @@ function createArrayCallbackChecker(params: {
   paramName: string;
   errorMessage: string;
 }): (node: ts.Node) => void {
-  const { sourceFile, typeChecker, enumMap, macroImportsMap, paramName } = params;
+  const { sourceFile, typeChecker, enumMap, macroImportsMap, paramName } =
+    params;
   const allowedMacroImports = macroImportsMap[sourceFile.fileName] || new Set();
 
   function isAllowedIdentifier(node: ts.Node): boolean {
@@ -508,7 +510,8 @@ function evaluateArrayMap(
     macroImportsMap,
     arrowErrorMessage: 'arrayMap: callback must be an arrow function',
     paramErrorMessage: 'arrayMap: callback must have exactly one parameter',
-    bodyErrorMessage: 'arrayMap: callback body must be a single return statement',
+    bodyErrorMessage:
+      'arrayMap: callback body must be a single return statement',
     identifierErrorMessage:
       'arrayMap: callback can only use its parameter and literals',
   });

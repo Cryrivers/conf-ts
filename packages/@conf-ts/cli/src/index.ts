@@ -1,10 +1,6 @@
 import { compile } from '@conf-ts/compiler';
 import { Command } from 'commander';
 
-
-
-
-
 const program = new Command();
 
 program

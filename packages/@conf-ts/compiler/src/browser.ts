@@ -1,12 +1,9 @@
 import ts from 'typescript';
 import { stringify as yamlStringify } from 'yaml';
 
-
-
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
 import { CompileOptions, orderedClone, validateMacroImports } from './shared';
-
 
 export type InMemoryFiles = { [fileName: string]: string };
 
