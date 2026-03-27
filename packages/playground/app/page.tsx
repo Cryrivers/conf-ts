@@ -191,11 +191,11 @@ function PageContent() {
             </a>
 
             <p className="text-xs text-neutral-500 leading-relaxed">
-              Type-safe configuration for modern applications.
+              Type-safe &amp; Composable JSON / YAML
             </p>
             <div className="flex items-center mt-4 gap-4">
               <p className="text-xs text-neutral-700">
-                MIT License © 2025{' '}
+                MIT License © 2026{' '}
                 <Link href="https://zhongliang.wang">Wang Zhongliang</Link>
               </p>
             </div>
