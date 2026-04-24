@@ -1,0 +1,14 @@
+{
+  "typeofStr": "string",
+  "typeofNum": "number",
+  "typeofBool": "boolean",
+  "typeofArr": "object",
+  "typeofObj": "object",
+  "typeofNull": "object",
+  "typeofUndef": "undefined",
+  "typeofUnresolved": "undefined",
+  "inObj": true,
+  "missingInObj": false,
+  "inArr": true,
+  "outOfRangeInArr": false
+}

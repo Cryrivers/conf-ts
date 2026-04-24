@@ -101,4 +101,24 @@ describe('Spec Test', () => {
   it('should preserve insertion order of object keys', () => {
     assertSpecOutput('key-order', { preserveKeyOrder: true });
   });
+
+  it('should handle element access on arrays and objects', () => {
+    assertSpecOutput('element-access');
+  });
+
+  it('should handle array destructuring in const bindings', () => {
+    assertSpecOutput('array-destructuring');
+  });
+
+  it('should handle optional chaining (?., ?.[])', () => {
+    assertSpecOutput('optional-chaining');
+  });
+
+  it('should handle bitwise and exponentiation operators', () => {
+    assertSpecOutput('bitwise-and-exp');
+  });
+
+  it('should handle typeof and in operators', () => {
+    assertSpecOutput('typeof-in');
+  });
 });

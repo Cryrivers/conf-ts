@@ -1,0 +1,9 @@
+first: 10
+second: 20
+rest:
+- 30
+- 40
+secondOnly: 20
+third: 30
+left: a
+right: b

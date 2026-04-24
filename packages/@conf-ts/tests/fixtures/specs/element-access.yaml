@@ -1,0 +1,8 @@
+first: 10
+last: 30
+indexed: 20
+computed: 30
+byKey: alice
+byComputedKey: alice
+nested: 3
+outOfRangeFallback: none

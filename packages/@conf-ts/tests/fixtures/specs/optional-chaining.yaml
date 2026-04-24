@@ -1,0 +1,6 @@
+name: alice
+city: NYC
+firstItem: 10
+missingName: fallback
+missingDeep: fallback
+missingItem: fallback

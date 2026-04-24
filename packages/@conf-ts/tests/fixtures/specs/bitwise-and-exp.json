@@ -1,0 +1,10 @@
+{
+  "and": 1,
+  "or": 7,
+  "xor": 4,
+  "lshift": 8,
+  "rshift": -2,
+  "zeroFill": 15,
+  "pow": 1024,
+  "complex": 5
+}
