@@ -244,10 +244,15 @@ module.exports = {
 - Literals: string, number, boolean, null
 - String template literals
 - Object/array literals, spreads, shorthand properties
+- Object and array destructuring in `const` bindings (including rest)
 - Enums (string and numeric)
 - Property access (including enums)
-- Binary operators (+ - * / % comparisons)
-- Unary prefix (+ - ! ~)
+- Element access: `arr[i]`, `obj["key"]`, `obj[CONST]`
+- Optional chaining: `a?.b`, `a?.[i]`, `a?.()`
+- Binary operators (+ - * / % ** comparisons)
+- Bitwise operators (`& | ^ << >> >>>`)
+- Logical (`&& || ??`) and `in` operators
+- Unary prefix (+ - ! ~) and `typeof`
 - Non-null assertions (`!` postfix)
 - Conditional (ternary)
 - Parenthesized and `as`/`satisfies` expressions

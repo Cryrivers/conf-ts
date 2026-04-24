@@ -27,6 +27,16 @@ pub enum Value {
 }
 
 impl Value {
+  pub fn typeof_string(&self) -> &'static str {
+    match self {
+      Value::String(_) => "string",
+      Value::Number(_) => "number",
+      Value::Bool(_) => "boolean",
+      Value::Undefined => "undefined",
+      Value::Null | Value::Object(_) | Value::Array(_) => "object",
+    }
+  }
+
   pub fn is_truthy(&self) -> bool {
     match self {
       Value::Bool(b) => *b,

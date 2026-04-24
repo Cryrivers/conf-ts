@@ -184,8 +184,17 @@ pub fn evaluate(
       eval_opt_chain_expr(opt_chain, file_ctx, ctx, local_context, options)
     }
 
-    // Unary prefix: +, -, !, ~
+    // Unary prefix: +, -, !, ~, typeof
     Expr::Unary(unary) => {
+      // typeof does not throw on undefined identifiers in JS; mirror that
+      // by catching resolve errors and returning "undefined".
+      if matches!(unary.op, UnaryOp::TypeOf) {
+        let operand = match evaluate(&unary.arg, file_ctx, ctx, local_context, options) {
+          Ok(val) => val,
+          Err(_) => Value::Undefined,
+        };
+        return Ok(Value::String(operand.typeof_string().to_string()));
+      }
       let operand = evaluate(&unary.arg, file_ctx, ctx, local_context, options)?;
       match unary.op {
         UnaryOp::Plus => Ok(Value::number(operand.to_number())),
@@ -207,18 +216,42 @@ pub fn evaluate(
       }
     }
 
-    // Binary expressions
+    // Binary expressions (with short-circuit evaluation for logical ops)
     Expr::Bin(bin) => {
       let left = evaluate(&bin.left, file_ctx, ctx, local_context, options)?;
-      let right = evaluate(&bin.right, file_ctx, ctx, local_context, options)?;
-      eval_binary_op(
-        bin.op,
-        left,
-        right,
-        &file_ctx.file_path,
-        &file_ctx.source_map,
-        bin.span.lo,
-      )
+      match bin.op {
+        BinaryOp::LogicalAnd => {
+          if left.is_truthy() {
+            evaluate(&bin.right, file_ctx, ctx, local_context, options)
+          } else {
+            Ok(left)
+          }
+        }
+        BinaryOp::LogicalOr => {
+          if left.is_truthy() {
+            Ok(left)
+          } else {
+            evaluate(&bin.right, file_ctx, ctx, local_context, options)
+          }
+        }
+        BinaryOp::NullishCoalescing => match left {
+          Value::Null | Value::Undefined => {
+            evaluate(&bin.right, file_ctx, ctx, local_context, options)
+          }
+          _ => Ok(left),
+        },
+        _ => {
+          let right = evaluate(&bin.right, file_ctx, ctx, local_context, options)?;
+          eval_binary_op(
+            bin.op,
+            left,
+            right,
+            &file_ctx.file_path,
+            &file_ctx.source_map,
+            bin.span.lo,
+          )
+        }
+      }
     }
 
     // Parenthesized expressions
@@ -405,12 +438,36 @@ fn eval_member_expr(
       Value::Array(arr) => format!("array length={}", arr.len()),
       _ => format!("value={}", obj.to_display_string()),
     };
-    if let Value::Object(ref map) = obj {
-      for (k, v) in map {
-        if k == &prop_name {
-          return Ok(v.clone());
+    match &obj {
+      Value::Object(map) => {
+        for (k, v) in map {
+          if k == &prop_name {
+            return Ok(v.clone());
+          }
         }
       }
+      Value::Array(arr) => {
+        if matches!(member.prop, MemberProp::Computed(_)) {
+          if let Ok(idx) = prop_name.parse::<usize>() {
+            return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
+          }
+          return Ok(Value::Undefined);
+        }
+      }
+      Value::String(s) => {
+        if matches!(member.prop, MemberProp::Computed(_)) {
+          if let Ok(idx) = prop_name.parse::<usize>() {
+            return Ok(
+              s.chars()
+                .nth(idx)
+                .map(|c| Value::String(c.to_string()))
+                .unwrap_or(Value::Undefined),
+            );
+          }
+          return Ok(Value::Undefined);
+        }
+      }
+      _ => {}
     }
   } else if let Err(err) = obj_eval {
     obj_debug = format!("eval_error={}", err.message);
@@ -477,14 +534,20 @@ fn eval_opt_chain_expr(
     OptChainBase::Member(member) => {
       eval_optional_member_expr(member, file_ctx, ctx, local_context, options)
     }
-    OptChainBase::Call(_) => {
-      let (line, character) = get_location(&file_ctx.source_map, opt_chain.span.lo);
-      Err(ConfTSError::new(
-        "Unsupported optional call expression",
-        &file_ctx.file_path,
-        line,
-        character,
-      ))
+    OptChainBase::Call(call) => {
+      match evaluate(&call.callee, file_ctx, ctx, local_context, options) {
+        Ok(Value::Null) | Ok(Value::Undefined) => Ok(Value::Undefined),
+        _ => {
+          let wrapped = Expr::Call(CallExpr {
+            span: call.span,
+            ctxt: call.ctxt,
+            callee: Callee::Expr(call.callee.clone()),
+            args: call.args.clone(),
+            type_args: call.type_args.clone(),
+          });
+          evaluate(&wrapped, file_ctx, ctx, local_context, options)
+        }
+      }
     }
   }
 }
@@ -524,6 +587,14 @@ fn eval_optional_member_expr(
       }
       Ok(Value::Undefined)
     }
+    Value::Array(arr) => {
+      if matches!(member.prop, MemberProp::Computed(_)) {
+        if let Ok(idx) = prop_name.parse::<usize>() {
+          return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
+        }
+      }
+      Ok(Value::Undefined)
+    }
     _ => Ok(Value::Undefined),
   }
 }
@@ -547,6 +618,7 @@ fn eval_binary_op(
     BinaryOp::Mul => Ok(Value::number(left.to_number() * right.to_number())),
     BinaryOp::Div => Ok(Value::number(left.to_number() / right.to_number())),
     BinaryOp::Mod => Ok(Value::number(left.to_number() % right.to_number())),
+    BinaryOp::Exp => Ok(Value::number(left.to_number().powf(right.to_number()))),
     BinaryOp::Gt => Ok(Value::Bool(left.to_number() > right.to_number())),
     BinaryOp::Lt => Ok(Value::Bool(left.to_number() < right.to_number())),
     BinaryOp::GtEq => Ok(Value::Bool(left.to_number() >= right.to_number())),
@@ -555,24 +627,43 @@ fn eval_binary_op(
     BinaryOp::EqEqEq => Ok(Value::Bool(left.strict_eq(&right))),
     BinaryOp::NotEq => Ok(Value::Bool(!left.loose_eq(&right))),
     BinaryOp::NotEqEq => Ok(Value::Bool(!left.strict_eq(&right))),
-    BinaryOp::LogicalAnd => {
-      if left.is_truthy() {
-        Ok(right)
-      } else {
-        Ok(left)
+    BinaryOp::BitAnd => Ok(Value::number(
+      ((left.to_number() as i32) & (right.to_number() as i32)) as f64,
+    )),
+    BinaryOp::BitOr => Ok(Value::number(
+      ((left.to_number() as i32) | (right.to_number() as i32)) as f64,
+    )),
+    BinaryOp::BitXor => Ok(Value::number(
+      ((left.to_number() as i32) ^ (right.to_number() as i32)) as f64,
+    )),
+    BinaryOp::LShift => Ok(Value::number(
+      ((left.to_number() as i32) << ((right.to_number() as i32) & 31)) as f64,
+    )),
+    BinaryOp::RShift => Ok(Value::number(
+      ((left.to_number() as i32) >> ((right.to_number() as i32) & 31)) as f64,
+    )),
+    BinaryOp::ZeroFillRShift => Ok(Value::number(
+      ((left.to_number() as i32 as u32) >> ((right.to_number() as i32) & 31)) as f64,
+    )),
+    BinaryOp::In => {
+      let key = left.to_display_string();
+      match &right {
+        Value::Object(map) => Ok(Value::Bool(map.iter().any(|(k, _)| k == &key))),
+        Value::Array(arr) => match key.parse::<usize>() {
+          Ok(idx) => Ok(Value::Bool(idx < arr.len())),
+          Err(_) => Ok(Value::Bool(false)),
+        },
+        _ => {
+          let (line, character) = get_location(sm, pos);
+          Err(ConfTSError::new(
+            "Cannot use 'in' operator on non-object value",
+            file,
+            line,
+            character,
+          ))
+        }
       }
     }
-    BinaryOp::LogicalOr => {
-      if left.is_truthy() {
-        Ok(left)
-      } else {
-        Ok(right)
-      }
-    }
-    BinaryOp::NullishCoalescing => match left {
-      Value::Null | Value::Undefined => Ok(right),
-      _ => Ok(left),
-    },
     _ => {
       let (line, character) = get_location(sm, pos);
       Err(ConfTSError::new(
@@ -782,6 +873,60 @@ fn check_var_decl(
             resolve_destructured(name, obj_pat, init, file_ctx, ctx, local_context, options)?
           {
             return Ok(Some(val));
+          }
+        }
+      }
+      Pat::Array(arr_pat) => {
+        if let Some(ref init) = decl.init {
+          if let Some(val) =
+            resolve_array_destructured(name, arr_pat, init, file_ctx, ctx, local_context, options)?
+          {
+            return Ok(Some(val));
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+  Ok(None)
+}
+
+/// Resolve a name from an array destructuring pattern.
+fn resolve_array_destructured(
+  name: &str,
+  arr_pat: &ArrayPat,
+  init: &Expr,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  for (idx, elem) in arr_pat.elems.iter().enumerate() {
+    let Some(pat) = elem else {
+      continue;
+    };
+    match pat {
+      Pat::Ident(bind_ident) => {
+        if ident_name(&bind_ident.id) == name {
+          let source = evaluate(init, file_ctx, ctx, local_context, options)?;
+          if let Value::Array(items) = source {
+            return Ok(Some(items.get(idx).cloned().unwrap_or(Value::Undefined)));
+          }
+          return Ok(Some(Value::Undefined));
+        }
+      }
+      Pat::Rest(rest) => {
+        if let Pat::Ident(rest_ident) = &*rest.arg {
+          if ident_name(&rest_ident.id) == name {
+            let source = evaluate(init, file_ctx, ctx, local_context, options)?;
+            if let Value::Array(mut items) = source {
+              return Ok(Some(Value::Array(if idx >= items.len() {
+                Vec::new()
+              } else {
+                items.split_off(idx)
+              })));
+            }
+            return Ok(Some(Value::Array(Vec::new())));
           }
         }
       }

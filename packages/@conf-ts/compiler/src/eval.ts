@@ -7,6 +7,16 @@ import { FormattedNumber } from './shared';
 
 const macroModuleSpecifiers = ["'@conf-ts/macro'", '"@conf-ts/macro"'];
 
+function resolveArrayPatternElement(
+  sourceArr: unknown,
+  pattern: ts.ArrayBindingPattern,
+  binding: ts.BindingElement,
+): any {
+  const arr: any[] = Array.isArray(sourceArr) ? sourceArr : [];
+  const index = pattern.elements.indexOf(binding);
+  return binding.dotDotDotToken ? arr.slice(index) : arr[index];
+}
+
 export function evaluate(
   expression: ts.Expression,
   sourceFile: ts.SourceFile,
@@ -219,6 +229,27 @@ export function evaluate(
                 }
                 obj[name] = sourceObj ? sourceObj[keyName] : undefined;
               }
+            } else if (
+              ts.isArrayBindingPattern(pattern) &&
+              ts.isVariableDeclaration(varDeclParent) &&
+              varDeclParent.initializer
+            ) {
+              const sourceArr = evaluate(
+                varDeclParent.initializer,
+                varDeclParent.getSourceFile(),
+                typeChecker,
+                enumMap,
+                macroImportsMap,
+                macro,
+                evaluatedFiles,
+                context,
+                options,
+              );
+              obj[name] = resolveArrayPatternElement(
+                sourceArr,
+                pattern,
+                binding,
+              );
             } else {
               throw new ConfTSError(
                 `Could not resolve shorthand property '${name}' because its declaration is not a variable or has no initializer.`,
@@ -424,6 +455,23 @@ export function evaluate(
               }
               return sourceObj ? sourceObj[keyName] : undefined;
             }
+          } else if (
+            ts.isArrayBindingPattern(pattern) &&
+            ts.isVariableDeclaration(varDeclParent) &&
+            varDeclParent.initializer
+          ) {
+            const sourceArr = evaluate(
+              varDeclParent.initializer,
+              varDeclParent.getSourceFile(),
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            );
+            return resolveArrayPatternElement(sourceArr, pattern, binding);
           }
         } else if (ts.isEnumMember(resolvedSymbol.valueDeclaration)) {
           const declSourceFile =
@@ -450,6 +498,62 @@ export function evaluate(
         ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
       },
     );
+  } else if (ts.isElementAccessExpression(expression)) {
+    const obj = evaluate(
+      expression.expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    if (expression.questionDotToken && (obj === null || obj === undefined)) {
+      return undefined;
+    }
+    if (obj === null || obj === undefined) {
+      throw new ConfTSError(
+        `Cannot read property of ${obj === null ? 'null' : 'undefined'}`,
+        {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(
+            sourceFile,
+            expression.getStart(),
+          ),
+        },
+      );
+    }
+    const key = evaluate(
+      expression.argumentExpression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    if (Array.isArray(obj)) {
+      const idx = Number(key);
+      return Number.isInteger(idx) && idx >= 0 ? obj[idx] : undefined;
+    }
+    if (typeof obj === 'object') {
+      return (obj as Record<string, any>)[String(key)];
+    }
+    if (typeof obj === 'string') {
+      const idx = Number(key);
+      return Number.isInteger(idx) && idx >= 0 ? obj[idx] : undefined;
+    }
+    throw new ConfTSError(
+      `Unsupported element access on ${typeof obj}`,
+      {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
+      },
+    );
   } else if (ts.isPropertyAccessExpression(expression)) {
     try {
       const obj = evaluate(
@@ -463,6 +567,12 @@ export function evaluate(
         context,
         options,
       );
+      if (
+        expression.questionDotToken &&
+        (obj === null || obj === undefined)
+      ) {
+        return undefined;
+      }
       const propertyName = expression.name.getText(sourceFile);
       if (obj && typeof obj === 'object' && propertyName in obj) {
         return obj[propertyName];
@@ -519,6 +629,25 @@ export function evaluate(
         ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
       },
     );
+  } else if (ts.isTypeOfExpression(expression)) {
+    // `typeof` on an unresolved identifier should yield "undefined" (matches JS).
+    let operand: any;
+    try {
+      operand = evaluate(
+        expression.expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+    } catch {
+      operand = undefined;
+    }
+    return typeof operand;
   } else if (ts.isPrefixUnaryExpression(expression)) {
     const operand = evaluate(
       expression.operand,
@@ -565,6 +694,53 @@ export function evaluate(
       context,
       options,
     );
+
+    // Short-circuiting operators: only evaluate the right operand when needed.
+    switch (expression.operatorToken.kind) {
+      case ts.SyntaxKind.AmpersandAmpersandToken:
+        return left
+          ? evaluate(
+              expression.right,
+              sourceFile,
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            )
+          : left;
+      case ts.SyntaxKind.BarBarToken:
+        return left
+          ? left
+          : evaluate(
+              expression.right,
+              sourceFile,
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            );
+      case ts.SyntaxKind.QuestionQuestionToken:
+        return left !== null && left !== undefined
+          ? left
+          : evaluate(
+              expression.right,
+              sourceFile,
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            );
+    }
+
     const right = evaluate(
       expression.right,
       sourceFile,
@@ -584,6 +760,8 @@ export function evaluate(
         return left - right;
       case ts.SyntaxKind.AsteriskToken:
         return left * right;
+      case ts.SyntaxKind.AsteriskAsteriskToken:
+        return left ** right;
       case ts.SyntaxKind.SlashToken:
         return left / right;
       case ts.SyntaxKind.PercentToken:
@@ -604,12 +782,33 @@ export function evaluate(
         return left != right;
       case ts.SyntaxKind.ExclamationEqualsEqualsToken:
         return left !== right;
-      case ts.SyntaxKind.AmpersandAmpersandToken:
-        return left && right;
-      case ts.SyntaxKind.BarBarToken:
-        return left || right;
-      case ts.SyntaxKind.QuestionQuestionToken:
-        return left ?? right;
+      case ts.SyntaxKind.AmpersandToken:
+        return left & right;
+      case ts.SyntaxKind.BarToken:
+        return left | right;
+      case ts.SyntaxKind.CaretToken:
+        return left ^ right;
+      case ts.SyntaxKind.LessThanLessThanToken:
+        return left << right;
+      case ts.SyntaxKind.GreaterThanGreaterThanToken:
+        return left >> right;
+      case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken:
+        return left >>> right;
+      case ts.SyntaxKind.InKeyword: {
+        if (right === null || right === undefined) {
+          throw new ConfTSError(
+            "Cannot use 'in' operator on null or undefined",
+            {
+              file: sourceFile.fileName,
+              ...ts.getLineAndCharacterOfPosition(
+                sourceFile,
+                expression.getStart(),
+              ),
+            },
+          );
+        }
+        return String(left) in (right as object);
+      }
       default:
         throw new ConfTSError(
           `Unsupported binary operator: ${
@@ -647,6 +846,22 @@ export function evaluate(
       },
     );
   } else if (ts.isCallExpression(expression)) {
+    if (expression.questionDotToken) {
+      const callee = evaluate(
+        expression.expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+      if (callee === null || callee === undefined) {
+        return undefined;
+      }
+    }
     if (macro) {
       return evaluateMacro(
         expression,
