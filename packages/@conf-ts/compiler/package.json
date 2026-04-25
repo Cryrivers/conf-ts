@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Compiler for conf-ts.",
   "main": "dist/cjs/index.js",
   "exports": {

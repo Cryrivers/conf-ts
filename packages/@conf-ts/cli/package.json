@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/cli",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "CLI for conf-ts.",
   "main": "dist/cjs/index.js",
   "exports": {

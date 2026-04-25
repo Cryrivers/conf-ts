@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Native Rust compiler for conf-ts.",
   "main": "index.js",
   "types": "index.d.ts",
