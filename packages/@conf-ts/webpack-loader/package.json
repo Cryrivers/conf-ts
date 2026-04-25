@@ -14,10 +14,11 @@
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "@types/node": "^25.6.0",
     "@types/webpack": "^5.28.5",
-    "prettier": "^3.8.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.2",
-    "webpack": "^5.105.4"
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5",
+    "webpack": "^5.106.2"
   }
 }

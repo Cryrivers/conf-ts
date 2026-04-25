@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import { Github, RotateCcw } from 'lucide-react';
+import { GitFork, RotateCcw } from 'lucide-react';
 import Link from 'next/link';
 import { createParser, useQueryState } from 'nuqs';
 import {
@@ -186,7 +186,7 @@ function PageContent() {
               rel="noopener noreferrer"
               className="text-white hover:text-white transition-colors flex items-center gap-2 mb-2 font-medium tracking-tight"
             >
-              <Github className="w-4 h-4" />
+              <GitFork className="w-4 h-4" />
               <span>conf-ts</span>
             </a>
 

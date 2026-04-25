@@ -34,19 +34,19 @@
     "version": "napi version"
   },
   "dependencies": {
-    "@napi-rs/cli": "^3.5.1"
+    "@napi-rs/cli": "^3.6.2"
   },
   "devDependencies": {
     "@conf-ts/compiler": "workspace:*",
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@types/node": "^25.5.0",
-    "oxlint": "^1.56.0",
-    "prettier": "^3.8.1",
+    "@types/node": "^25.6.0",
+    "oxlint": "^1.61.0",
+    "prettier": "^3.8.3",
     "tinybench": "^6.0.0",
     "tsx": "^4.21.0",
-    "vitest": "^4.1.2",
-    "yaml": "^2.8.2"
+    "vitest": "^4.1.5",
+    "yaml": "^2.8.3"
   },
   "optionalDependencies": {
     "@conf-ts/compiler-native-darwin-arm64": "workspace:*",

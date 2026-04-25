@@ -1,6 +1,6 @@
 'use client';
 
-import { Github, PartyPopper, RotateCcw, X } from 'lucide-react';
+import { GitFork, PartyPopper, RotateCcw, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -189,7 +189,7 @@ export function CompletionModal({
                     rel="noopener noreferrer"
                     className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-white text-black font-medium hover:bg-neutral-200 transition-all"
                   >
-                    <Github className="w-4 h-4" />
+                    <GitFork className="w-4 h-4" />
                     View on GitHub
                   </a>
                 </motion.div>

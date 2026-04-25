@@ -7,17 +7,17 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = "3.0.0"
-napi-derive = "3.0.0"
-swc_common = { version = "19", features = ["sourcemap"] }
-swc_ecma_parser = "35"
-swc_ecma_ast = "21"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-serde_yaml = "0.9"
+napi = "3.8.5"
+napi-derive = "3.5.4"
+swc_common = { version = "21.0.1", features = ["sourcemap"] }
+swc_ecma_parser = "39.0.0"
+swc_ecma_ast = "23.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+serde_yaml = "0.9.34"
 
 [build-dependencies]
-napi-build = "2"
+napi-build = "2.3.1"
 
 [profile.release]
 lto = true
