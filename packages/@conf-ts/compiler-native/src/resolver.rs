@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -260,11 +260,11 @@ pub fn resolve_module_in_memory(
 
   let from_dir = Path::new(from_file).parent().unwrap_or(Path::new("/"));
   let base = from_dir.join(specifier);
-  let base_str = base.to_string_lossy();
+  let base_str = normalize_virtual_path(&base);
 
   // Try exact
-  if files.contains_key(base_str.as_ref()) && is_supported_source_path(&base_str) {
-    return Some(base_str.to_string());
+  if files.contains_key(base_str.as_str()) && is_supported_source_path(&base_str) {
+    return Some(base_str);
   }
 
   let extensions = [
@@ -292,4 +292,26 @@ pub fn resolve_module_in_memory(
   }
 
   None
+}
+
+fn normalize_virtual_path(path: &Path) -> String {
+  let mut parts: Vec<String> = Vec::new();
+  let mut absolute = false;
+  for component in path.components() {
+    match component {
+      Component::RootDir => absolute = true,
+      Component::CurDir => {}
+      Component::ParentDir => {
+        parts.pop();
+      }
+      Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+      _ => {}
+    }
+  }
+  let joined = parts.join("/");
+  if absolute {
+    format!("/{}", joined)
+  } else {
+    joined
+  }
 }

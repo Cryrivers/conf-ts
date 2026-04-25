@@ -1,7 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import { compile as compileJs } from '@conf-ts/compiler';
-import { compile as compileNative } from '@conf-ts/compiler-native';
+import {
+  compileInMemory as compileInMemoryJs,
+  compile as compileJs,
+} from '@conf-ts/compiler';
+import {
+  compileInMemory as compileInMemoryNative,
+  compile as compileNative,
+} from '@conf-ts/compiler-native';
 import { describe, expect, it } from 'vitest';
 
 describe('Multi-file test', () => {
@@ -148,5 +154,82 @@ describe('Multi-file test', () => {
     expect(nativeDependencies).not.toContain(
       path.join(configPath, 'unrelated-enum.ts'),
     );
+  });
+
+  it('should handle default imports, namespace imports, and re-exports', () => {
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
+    const { output: resultJs, dependencies: dependenciesJs } = compileJs(
+      path.join(configPath, 'reexports.ts'),
+      'json',
+      { macroMode: false },
+    );
+    const { output: resultNative, dependencies: dependenciesNative } =
+      compileNative(path.join(configPath, 'reexports.ts'), 'json', {
+        macroMode: false,
+      });
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(configPath, 'reexports.json'), 'utf8'),
+    );
+    expect(JSON.parse(resultJs)).toEqual(expected);
+    expect(JSON.parse(resultNative)).toEqual(expected);
+
+    const expectedDependencies = [
+      path.join(configPath, 'tsconfig.json'),
+      path.join(configPath, 'reexports.ts'),
+      path.join(configPath, 'reexport-source.ts'),
+      path.join(configPath, 'reexport-extra.ts'),
+    ];
+    expect([...dependenciesJs].sort()).toEqual(
+      [...expectedDependencies].sort(),
+    );
+    expect([...dependenciesNative].sort()).toEqual(
+      [...expectedDependencies].sort(),
+    );
+  });
+
+  it('should resolve default re-exports and track the re-exporting file', () => {
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
+    const { output: resultJs, dependencies: dependenciesJs } = compileJs(
+      path.join(configPath, 'default-reexport.ts'),
+      'json',
+      { macroMode: false },
+    );
+    const { output: resultNative, dependencies: dependenciesNative } =
+      compileNative(path.join(configPath, 'default-reexport.ts'), 'json', {
+        macroMode: false,
+      });
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(configPath, 'default-reexport.json'), 'utf8'),
+    );
+    expect(JSON.parse(resultJs)).toEqual(expected);
+    expect(JSON.parse(resultNative)).toEqual(expected);
+
+    const expectedDependencies = [
+      path.join(configPath, 'tsconfig.json'),
+      path.join(configPath, 'default-reexport.ts'),
+      path.join(configPath, 'reexport-source.ts'),
+    ];
+    expect([...dependenciesJs].sort()).toEqual(
+      [...expectedDependencies].sort(),
+    );
+    expect([...dependenciesNative].sort()).toEqual(
+      [...expectedDependencies].sort(),
+    );
+  });
+
+  it('should resolve in-memory default re-exports and track the entry file', () => {
+    const files = {
+      '/index.ts': "export { default } from './source';",
+      '/source.ts': "export default { name: 'default-config' };",
+    };
+    const { output: resultJs, dependencies: dependenciesJs } =
+      compileInMemoryJs(files, '/index.ts', 'json', false);
+    const { output: resultNative, dependencies: dependenciesNative } =
+      compileInMemoryNative(files, '/index.ts', 'json', false);
+
+    expect(JSON.parse(resultJs)).toEqual({ name: 'default-config' });
+    expect(JSON.parse(resultNative)).toEqual({ name: 'default-config' });
+    expect([...dependenciesJs].sort()).toEqual(['/index.ts', '/source.ts']);
+    expect([...dependenciesNative].sort()).toEqual(['/index.ts', '/source.ts']);
   });
 });

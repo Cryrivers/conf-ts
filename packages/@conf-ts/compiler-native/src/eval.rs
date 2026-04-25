@@ -27,6 +27,61 @@ fn ident_name(ident: &Ident) -> &str {
   ident.sym.as_str()
 }
 
+fn module_export_name_to_string(name: &ModuleExportName) -> String {
+  match name {
+    ModuleExportName::Ident(ident) => ident_name(ident).to_string(),
+    ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+  }
+}
+
+fn set_object_prop(map: &mut Vec<(String, Value)>, key: String, value: Value) {
+  map.retain(|(k, _)| k != &key);
+  map.push((key, value));
+}
+
+fn get_object_prop(map: &[(String, Value)], key: &str) -> Value {
+  map
+    .iter()
+    .find(|(k, _)| k == key)
+    .map(|(_, v)| v.clone())
+    .unwrap_or(Value::Undefined)
+}
+
+fn enum_object_from_decl(enum_decl: &TsEnumDecl, file_path: &str, ctx: &mut EvalContext) -> Value {
+  let enum_name = enum_decl.id.sym.as_str();
+  let mut forward = Vec::new();
+  let mut reverse: Vec<(String, Value)> = Vec::new();
+  if let Some(file_enums) = ctx.enum_map.get(file_path) {
+    for member in &enum_decl.members {
+      let member_name = match &member.id {
+        TsEnumMemberId::Ident(ident) => ident.sym.as_str().to_string(),
+        TsEnumMemberId::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+      };
+      let full_name = format!("{}.{}", enum_name, member_name);
+      if let Some(value) = file_enums.get(&full_name) {
+        set_object_prop(&mut forward, member_name.clone(), value.clone());
+        if let Value::Number(n) = value {
+          set_object_prop(
+            &mut reverse,
+            Value::number(n.value).to_display_string(),
+            Value::String(member_name),
+          );
+        }
+      }
+    }
+  }
+  reverse.sort_by(
+    |(a, _), (b, _)| match (a.parse::<u32>(), b.parse::<u32>()) {
+      (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num),
+      _ => a.cmp(b),
+    },
+  );
+  let mut map = reverse;
+  map.extend(forward);
+  ctx.evaluated_files.insert(file_path.to_string());
+  Value::Object(map)
+}
+
 /// Evaluate an expression node to a Value.
 pub fn evaluate(
   expr: &Expr,
@@ -87,15 +142,13 @@ pub fn evaluate(
             Prop::KeyValue(kv) => {
               let key = eval_prop_name(&kv.key, file_ctx, ctx, local_context, options)?;
               let val = evaluate(&kv.value, file_ctx, ctx, local_context, options)?;
-              map.retain(|(k, _)| k != &key);
-              map.push((key, val));
+              set_object_prop(&mut map, key, val);
             }
             Prop::Shorthand(ident) => {
               let name = ident_name(ident).to_string();
               if let Some(lc) = local_context {
                 if let Some(val) = lc.get(&name) {
-                  map.retain(|(k, _)| k != &name);
-                  map.push((name, val.clone()));
+                  set_object_prop(&mut map, name, val.clone());
                   continue;
                 }
               }
@@ -109,25 +162,15 @@ pub fn evaluate(
                 line,
                 character,
               )?;
-              map.retain(|(k, _)| k != &name);
-              map.push((name, val));
+              set_object_prop(&mut map, name, val);
             }
-            _ => {
-              let (line, character) = get_location(&file_ctx.source_map, prop.span().lo);
-              return Err(ConfTSError::new(
-                "Unsupported property type in object literal",
-                &file_ctx.file_path,
-                line,
-                character,
-              ));
-            }
+            _ => {}
           },
           PropOrSpread::Spread(spread) => {
             let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
             if let Value::Object(spread_map) = val {
               for (k, v) in spread_map {
-                map.retain(|(key, _)| key != &k);
-                map.push((k, v));
+                set_object_prop(&mut map, k, v);
               }
             }
           }
@@ -155,7 +198,7 @@ pub fn evaluate(
             elements.push(val);
           }
           None => {
-            elements.push(Value::Null);
+            elements.push(Value::Undefined);
           }
         }
       }
@@ -440,11 +483,7 @@ fn eval_member_expr(
     };
     match &obj {
       Value::Object(map) => {
-        for (k, v) in map {
-          if k == &prop_name {
-            return Ok(v.clone());
-          }
-        }
+        return Ok(get_object_prop(map, &prop_name));
       }
       Value::Array(arr) => {
         if matches!(member.prop, MemberProp::Computed(_)) {
@@ -453,6 +492,10 @@ fn eval_member_expr(
           }
           return Ok(Value::Undefined);
         }
+        if prop_name == "length" {
+          return Ok(Value::number(arr.len() as f64));
+        }
+        return Ok(Value::Undefined);
       }
       Value::String(s) => {
         if matches!(member.prop, MemberProp::Computed(_)) {
@@ -466,6 +509,26 @@ fn eval_member_expr(
           }
           return Ok(Value::Undefined);
         }
+        if prop_name == "length" {
+          return Ok(Value::number(s.chars().count() as f64));
+        }
+        return Ok(Value::Undefined);
+      }
+      Value::Null | Value::Undefined => {
+        let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
+        return Err(ConfTSError::new(
+          format!(
+            "Cannot read property of {}",
+            if matches!(obj, Value::Null) {
+              "null"
+            } else {
+              "undefined"
+            }
+          ),
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
       }
       _ => {}
     }
@@ -579,19 +642,31 @@ fn eval_optional_member_expr(
   let obj = evaluate(&member.obj, file_ctx, ctx, local_context, options)?;
   match obj {
     Value::Null | Value::Undefined => Ok(Value::Undefined),
-    Value::Object(map) => {
-      for (k, v) in map {
-        if k == prop_name {
-          return Ok(v);
-        }
-      }
-      Ok(Value::Undefined)
-    }
+    Value::Object(map) => Ok(get_object_prop(&map, &prop_name)),
     Value::Array(arr) => {
       if matches!(member.prop, MemberProp::Computed(_)) {
         if let Ok(idx) = prop_name.parse::<usize>() {
           return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
         }
+      }
+      if prop_name == "length" {
+        return Ok(Value::number(arr.len() as f64));
+      }
+      Ok(Value::Undefined)
+    }
+    Value::String(s) => {
+      if matches!(member.prop, MemberProp::Computed(_)) {
+        if let Ok(idx) = prop_name.parse::<usize>() {
+          return Ok(
+            s.chars()
+              .nth(idx)
+              .map(|c| Value::String(c.to_string()))
+              .unwrap_or(Value::Undefined),
+          );
+        }
+      }
+      if prop_name == "length" {
+        return Ok(Value::number(s.chars().count() as f64));
       }
       Ok(Value::Undefined)
     }
@@ -725,7 +800,10 @@ pub fn resolve_identifier(
     if let Some(resolved_path) = resolved_path.clone() {
       if let Some(imported_ctx) = ctx.file_contexts.get(&resolved_path).cloned() {
         import_context_loaded = true;
-        if let Some(val) = resolve_in_file(original_name, &imported_ctx, ctx, None, options)? {
+        if original_name == "*" {
+          return Ok(Value::Object(exported_values(&imported_ctx, ctx, options)?));
+        } else if let Some(val) = resolve_in_file(original_name, &imported_ctx, ctx, None, options)?
+        {
           return Ok(val);
         }
       }
@@ -780,8 +858,20 @@ pub fn resolve_identifier(
   ))
 }
 
-/// Try to resolve a name within a file's declarations.
-fn resolve_in_file(
+fn resolve_imported_file(
+  source: &str,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+) -> Option<FileContext> {
+  let resolved_path = ctx
+    .resolver
+    .as_ref()
+    .and_then(|resolver| resolver(source, &file_ctx.file_path))?;
+  ctx.file_contexts.get(&resolved_path).cloned()
+}
+
+/// Try to resolve a name from direct declarations in a file.
+fn resolve_declared_in_file(
   name: &str,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
@@ -813,11 +903,90 @@ fn resolve_in_file(
           return Ok(Some(result));
         }
       }
-      ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
-        if let Decl::Var(var_decl) = &export_decl.decl {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => match &export_decl.decl {
+        Decl::Var(var_decl) => {
           if let Some(result) =
             check_var_decl(name, var_decl, file_ctx, ctx, local_context, options)?
           {
+            return Ok(Some(result));
+          }
+        }
+        Decl::TsEnum(enum_decl) if enum_decl.id.sym.as_str() == name => {
+          return Ok(Some(enum_object_from_decl(
+            enum_decl.as_ref(),
+            &file_ctx.file_path,
+            ctx,
+          )));
+        }
+        _ => {}
+      },
+      ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(enum_decl)))
+        if enum_decl.id.sym.as_str() == name =>
+      {
+        return Ok(Some(enum_object_from_decl(
+          enum_decl.as_ref(),
+          &file_ctx.file_path,
+          ctx,
+        )));
+      }
+      _ => {}
+    }
+  }
+  Ok(None)
+}
+
+/// Try to resolve a name within a file's declarations and re-exports.
+pub fn resolve_in_file(
+  name: &str,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  if let Some(result) = resolve_declared_in_file(name, file_ctx, ctx, local_context, options)? {
+    return Ok(Some(result));
+  }
+
+  for item in &file_ctx.module.body {
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        for specifier in &named_export.specifiers {
+          if let ExportSpecifier::Named(named) = specifier {
+            let exported_name = named
+              .exported
+              .as_ref()
+              .map(module_export_name_to_string)
+              .unwrap_or_else(|| module_export_name_to_string(&named.orig));
+            if exported_name != name {
+              continue;
+            }
+            let original_name = module_export_name_to_string(&named.orig);
+            if let Some(src) = &named_export.src {
+              if let Some(imported_ctx) =
+                resolve_imported_file(src.value.as_str().unwrap_or(""), file_ctx, ctx)
+              {
+                return resolve_in_file(&original_name, &imported_ctx, ctx, None, options);
+              }
+            } else {
+              return resolve_declared_in_file(
+                &original_name,
+                file_ctx,
+                ctx,
+                local_context,
+                options,
+              );
+            }
+          }
+        }
+      }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
+        if name == "default" {
+          continue;
+        }
+        if let Some(imported_ctx) =
+          resolve_imported_file(export_all.src.value.as_str().unwrap_or(""), file_ctx, ctx)
+        {
+          if let Some(result) = resolve_in_file(name, &imported_ctx, ctx, None, options)? {
             return Ok(Some(result));
           }
         }
@@ -825,7 +994,82 @@ fn resolve_in_file(
       _ => {}
     }
   }
+
   Ok(None)
+}
+
+fn exported_values(
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<Vec<(String, Value)>, ConfTSError> {
+  let mut exports = Vec::new();
+
+  for item in &file_ctx.module.body {
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) => {
+        let val = evaluate(&export.expr, file_ctx, ctx, None, options)?;
+        set_object_prop(&mut exports, "default".to_string(), val);
+      }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => match &export_decl.decl {
+        Decl::Var(var_decl) => {
+          for decl in &var_decl.decls {
+            if let Pat::Ident(ident) = &decl.name {
+              let name = ident_name(&ident.id).to_string();
+              if let Some(val) = resolve_declared_in_file(&name, file_ctx, ctx, None, options)? {
+                set_object_prop(&mut exports, name, val);
+              }
+            }
+          }
+        }
+        Decl::TsEnum(enum_decl) => {
+          let name = enum_decl.id.sym.as_str().to_string();
+          let val = enum_object_from_decl(enum_decl.as_ref(), &file_ctx.file_path, ctx);
+          set_object_prop(&mut exports, name, val);
+        }
+        _ => {}
+      },
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        for specifier in &named_export.specifiers {
+          if let ExportSpecifier::Named(named) = specifier {
+            let original_name = module_export_name_to_string(&named.orig);
+            let exported_name = named
+              .exported
+              .as_ref()
+              .map(module_export_name_to_string)
+              .unwrap_or_else(|| original_name.clone());
+            let val = if let Some(src) = &named_export.src {
+              resolve_imported_file(src.value.as_str().unwrap_or(""), file_ctx, ctx)
+                .map(|imported_ctx| {
+                  resolve_in_file(&original_name, &imported_ctx, ctx, None, options)
+                })
+                .transpose()?
+                .flatten()
+            } else {
+              resolve_declared_in_file(&original_name, file_ctx, ctx, None, options)?
+            };
+            if let Some(val) = val {
+              set_object_prop(&mut exports, exported_name, val);
+            }
+          }
+        }
+      }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
+        if let Some(imported_ctx) =
+          resolve_imported_file(export_all.src.value.as_str().unwrap_or(""), file_ctx, ctx)
+        {
+          for (key, val) in exported_values(&imported_ctx, ctx, options)? {
+            if key != "default" {
+              set_object_prop(&mut exports, key, val);
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  Ok(exports)
 }
 
 fn check_var_decl(
@@ -901,39 +1145,8 @@ fn resolve_array_destructured(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
-  for (idx, elem) in arr_pat.elems.iter().enumerate() {
-    let Some(pat) = elem else {
-      continue;
-    };
-    match pat {
-      Pat::Ident(bind_ident) => {
-        if ident_name(&bind_ident.id) == name {
-          let source = evaluate(init, file_ctx, ctx, local_context, options)?;
-          if let Value::Array(items) = source {
-            return Ok(Some(items.get(idx).cloned().unwrap_or(Value::Undefined)));
-          }
-          return Ok(Some(Value::Undefined));
-        }
-      }
-      Pat::Rest(rest) => {
-        if let Pat::Ident(rest_ident) = &*rest.arg {
-          if ident_name(&rest_ident.id) == name {
-            let source = evaluate(init, file_ctx, ctx, local_context, options)?;
-            if let Value::Array(mut items) = source {
-              return Ok(Some(Value::Array(if idx >= items.len() {
-                Vec::new()
-              } else {
-                items.split_off(idx)
-              })));
-            }
-            return Ok(Some(Value::Array(Vec::new())));
-          }
-        }
-      }
-      _ => {}
-    }
-  }
-  Ok(None)
+  let source = evaluate(init, file_ctx, ctx, local_context, options)?;
+  resolve_array_pattern_value(name, arr_pat, source, file_ctx, ctx, local_context, options)
 }
 
 /// Resolve a name from a destructuring pattern.
@@ -946,67 +1159,201 @@ fn resolve_destructured(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
+  let source_obj = evaluate(init, file_ctx, ctx, local_context, options)?;
+  resolve_object_pattern_value(
+    name,
+    obj_pat,
+    source_obj,
+    file_ctx,
+    ctx,
+    local_context,
+    options,
+  )
+}
+
+fn resolve_pattern_value(
+  name: &str,
+  pat: &Pat,
+  value: Value,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  match pat {
+    Pat::Ident(bind_ident) => {
+      if ident_name(&bind_ident.id) == name {
+        Ok(Some(value))
+      } else {
+        Ok(None)
+      }
+    }
+    Pat::Object(obj_pat) => {
+      resolve_object_pattern_value(name, obj_pat, value, file_ctx, ctx, local_context, options)
+    }
+    Pat::Array(arr_pat) => {
+      resolve_array_pattern_value(name, arr_pat, value, file_ctx, ctx, local_context, options)
+    }
+    Pat::Assign(assign) => {
+      let actual = if matches!(value, Value::Undefined) {
+        evaluate(&assign.right, file_ctx, ctx, local_context, options)?
+      } else {
+        value
+      };
+      resolve_pattern_value(
+        name,
+        &assign.left,
+        actual,
+        file_ctx,
+        ctx,
+        local_context,
+        options,
+      )
+    }
+    Pat::Rest(rest) => resolve_pattern_value(
+      name,
+      &rest.arg,
+      value,
+      file_ctx,
+      ctx,
+      local_context,
+      options,
+    ),
+    _ => Ok(None),
+  }
+}
+
+fn resolve_array_pattern_value(
+  name: &str,
+  arr_pat: &ArrayPat,
+  source: Value,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  let items = match source {
+    Value::Array(items) => items,
+    _ => Vec::new(),
+  };
+  for (idx, elem) in arr_pat.elems.iter().enumerate() {
+    let Some(pat) = elem else {
+      continue;
+    };
+    let value = if let Pat::Rest(_) = pat {
+      Value::Array(if idx >= items.len() {
+        Vec::new()
+      } else {
+        items[idx..].to_vec()
+      })
+    } else {
+      items.get(idx).cloned().unwrap_or(Value::Undefined)
+    };
+    if let Some(resolved) =
+      resolve_pattern_value(name, pat, value, file_ctx, ctx, local_context, options)?
+    {
+      return Ok(Some(resolved));
+    }
+  }
+  Ok(None)
+}
+
+fn resolve_object_pattern_value(
+  name: &str,
+  obj_pat: &ObjectPat,
+  source_obj: Value,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  let map = match source_obj {
+    Value::Object(map) => map,
+    _ => Vec::new(),
+  };
   for prop in &obj_pat.props {
     match prop {
       ObjectPatProp::KeyValue(kv) => {
-        if let Pat::Ident(bind_ident) = &*kv.value {
-          if ident_name(&bind_ident.id) == name {
-            let source_obj = evaluate(init, file_ctx, ctx, local_context, options)?;
-            let key = prop_name_to_string(&kv.key);
-            if let Value::Object(map) = source_obj {
-              for (k, v) in &map {
-                if k == &key {
-                  return Ok(Some(v.clone()));
-                }
-              }
-            }
-            return Ok(Some(Value::Undefined));
-          }
+        let key = eval_pat_prop_name(&kv.key, file_ctx, ctx, local_context, options)?;
+        let value = get_object_prop(&map, &key);
+        if let Some(resolved) = resolve_pattern_value(
+          name,
+          &kv.value,
+          value,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )? {
+          return Ok(Some(resolved));
         }
       }
       ObjectPatProp::Assign(assign) => {
         if ident_name(&assign.key) == name {
-          let source_obj = evaluate(init, file_ctx, ctx, local_context, options)?;
-          if let Value::Object(map) = source_obj {
-            for (k, v) in &map {
-              if k == name {
-                return Ok(Some(v.clone()));
-              }
+          let mut value = get_object_prop(&map, name);
+          if matches!(value, Value::Undefined) {
+            if let Some(default_value) = &assign.value {
+              value = evaluate(default_value, file_ctx, ctx, local_context, options)?;
             }
           }
-          return Ok(Some(Value::Undefined));
+          return Ok(Some(value));
         }
       }
       ObjectPatProp::Rest(rest) => {
-        if let Pat::Ident(rest_ident) = &*rest.arg {
-          if ident_name(&rest_ident.id) == name {
-            let source_obj = evaluate(init, file_ctx, ctx, local_context, options)?;
-            let mut keys_to_remove = HashSet::new();
-            for p in &obj_pat.props {
-              match p {
-                ObjectPatProp::KeyValue(kv) => {
-                  keys_to_remove.insert(prop_name_to_string(&kv.key));
-                }
-                ObjectPatProp::Assign(assign) => {
-                  keys_to_remove.insert(ident_name(&assign.key).to_string());
-                }
-                ObjectPatProp::Rest(_) => {}
-              }
+        let mut keys_to_remove = HashSet::new();
+        for p in &obj_pat.props {
+          match p {
+            ObjectPatProp::KeyValue(kv) => {
+              keys_to_remove.insert(eval_pat_prop_name(
+                &kv.key,
+                file_ctx,
+                ctx,
+                local_context,
+                options,
+              )?);
             }
-            if let Value::Object(map) = source_obj {
-              let rest_obj: Vec<(String, Value)> = map
-                .into_iter()
-                .filter(|(k, _)| !keys_to_remove.contains(k))
-                .collect();
-              return Ok(Some(Value::Object(rest_obj)));
+            ObjectPatProp::Assign(assign) => {
+              keys_to_remove.insert(ident_name(&assign.key).to_string());
             }
-            return Ok(Some(Value::Object(Vec::new())));
+            ObjectPatProp::Rest(_) => {}
           }
+        }
+        let rest_obj: Vec<(String, Value)> = map
+          .iter()
+          .filter(|(k, _)| !keys_to_remove.contains(k))
+          .map(|(k, v)| (k.clone(), v.clone()))
+          .collect();
+        if let Some(resolved) = resolve_pattern_value(
+          name,
+          &rest.arg,
+          Value::Object(rest_obj),
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )? {
+          return Ok(Some(resolved));
         }
       }
     }
   }
   Ok(None)
+}
+
+fn eval_pat_prop_name(
+  prop: &PropName,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<String, ConfTSError> {
+  match prop {
+    PropName::Computed(comp) => {
+      let val = evaluate(&comp.expr, file_ctx, ctx, local_context, options)?;
+      Ok(val.to_display_string())
+    }
+    _ => Ok(prop_name_to_string(prop)),
+  }
 }
 
 fn prop_name_to_string(prop: &PropName) -> String {
@@ -1070,45 +1417,68 @@ pub struct ImportInfo {
 /// Collect all imports from a module.
 pub fn collect_imports(module: &Module) -> HashMap<String, ImportInfo> {
   let mut imports = HashMap::new();
+  let mut export_source_index = 0;
   for item in &module.body {
-    if let ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl)) = item {
-      let source = import_decl.src.value.as_str().unwrap_or("").to_string();
-      for specifier in &import_decl.specifiers {
-        match specifier {
-          ImportSpecifier::Named(named) => {
-            let local_name = ident_name(&named.local).to_string();
-            let original_name = named.imported.as_ref().map(|imp| match imp {
-              ModuleExportName::Ident(ident) => ident_name(ident).to_string(),
-              ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-            });
-            imports.insert(
-              local_name,
-              ImportInfo {
-                source: source.clone(),
-                original_name,
-              },
-            );
-          }
-          ImportSpecifier::Default(default) => {
-            imports.insert(
-              ident_name(&default.local).to_string(),
-              ImportInfo {
-                source: source.clone(),
-                original_name: Some("default".to_string()),
-              },
-            );
-          }
-          ImportSpecifier::Namespace(ns) => {
-            imports.insert(
-              ident_name(&ns.local).to_string(),
-              ImportInfo {
-                source: source.clone(),
-                original_name: Some("*".to_string()),
-              },
-            );
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl)) => {
+        let source = import_decl.src.value.as_str().unwrap_or("").to_string();
+        for specifier in &import_decl.specifiers {
+          match specifier {
+            ImportSpecifier::Named(named) => {
+              let local_name = ident_name(&named.local).to_string();
+              let original_name = named.imported.as_ref().map(module_export_name_to_string);
+              imports.insert(
+                local_name,
+                ImportInfo {
+                  source: source.clone(),
+                  original_name,
+                },
+              );
+            }
+            ImportSpecifier::Default(default) => {
+              imports.insert(
+                ident_name(&default.local).to_string(),
+                ImportInfo {
+                  source: source.clone(),
+                  original_name: Some("default".to_string()),
+                },
+              );
+            }
+            ImportSpecifier::Namespace(ns) => {
+              imports.insert(
+                ident_name(&ns.local).to_string(),
+                ImportInfo {
+                  source: source.clone(),
+                  original_name: Some("*".to_string()),
+                },
+              );
+            }
           }
         }
       }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        if let Some(src) = &named_export.src {
+          imports.insert(
+            format!("__conf_ts_export_source_{}", export_source_index),
+            ImportInfo {
+              source: src.value.as_str().unwrap_or("").to_string(),
+              original_name: None,
+            },
+          );
+          export_source_index += 1;
+        }
+      }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
+        imports.insert(
+          format!("__conf_ts_export_source_{}", export_source_index),
+          ImportInfo {
+            source: export_all.src.value.as_str().unwrap_or("").to_string(),
+            original_name: None,
+          },
+        );
+        export_source_index += 1;
+      }
+      _ => {}
     }
   }
   imports

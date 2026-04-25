@@ -17,6 +17,392 @@ function resolveArrayPatternElement(
   return binding.dotDotDotToken ? arr.slice(index) : arr[index];
 }
 
+type EvalResult = { found: true; value: any } | { found: false };
+
+function getPropertyNameText(
+  name: ts.PropertyName,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): string {
+  if (ts.isComputedPropertyName(name)) {
+    return String(
+      evaluate(
+        name.expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      ),
+    );
+  }
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) {
+    return name.text;
+  }
+  if (ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return name.getText(sourceFile);
+}
+
+function getBindingPropertyName(
+  binding: ts.BindingElement,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): string {
+  if (binding.propertyName) {
+    return getPropertyNameText(
+      binding.propertyName,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+  }
+  if (ts.isIdentifier(binding.name)) {
+    return binding.name.text;
+  }
+  return binding.name.getText(sourceFile);
+}
+
+function resolveBindingName(
+  targetName: string,
+  bindingName: ts.BindingName,
+  value: any,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): EvalResult {
+  if (ts.isIdentifier(bindingName)) {
+    return bindingName.text === targetName
+      ? { found: true, value }
+      : { found: false };
+  }
+  if (ts.isObjectBindingPattern(bindingName)) {
+    return resolveObjectBindingPattern(
+      targetName,
+      bindingName,
+      value,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+  }
+  return resolveArrayBindingPattern(
+    targetName,
+    bindingName,
+    value,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    macro,
+    evaluatedFiles,
+    context,
+    options,
+  );
+}
+
+function resolveObjectBindingPattern(
+  targetName: string,
+  pattern: ts.ObjectBindingPattern,
+  sourceObj: any,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): EvalResult {
+  const obj = sourceObj && typeof sourceObj === 'object' ? sourceObj : {};
+
+  for (const binding of pattern.elements) {
+    let value: any;
+    if (binding.dotDotDotToken) {
+      const keysToRemove = new Set<string>();
+      for (const el of pattern.elements) {
+        if (el === binding || el.dotDotDotToken) continue;
+        keysToRemove.add(
+          getBindingPropertyName(
+            el,
+            sourceFile,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            context,
+            options,
+          ),
+        );
+      }
+      value = {};
+      for (const key of Object.keys(obj)) {
+        if (!keysToRemove.has(key)) {
+          value[key] = obj[key];
+        }
+      }
+    } else {
+      const keyName = getBindingPropertyName(
+        binding,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+      value = obj[keyName];
+      if (value === undefined && binding.initializer) {
+        value = evaluate(
+          binding.initializer,
+          sourceFile,
+          typeChecker,
+          enumMap,
+          macroImportsMap,
+          macro,
+          evaluatedFiles,
+          context,
+          options,
+        );
+      }
+    }
+
+    const resolved = resolveBindingName(
+      targetName,
+      binding.name,
+      value,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    if (resolved.found) {
+      return resolved;
+    }
+  }
+
+  return { found: false };
+}
+
+function resolveArrayBindingPattern(
+  targetName: string,
+  pattern: ts.ArrayBindingPattern,
+  sourceArr: any,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): EvalResult {
+  const arr = Array.isArray(sourceArr) ? sourceArr : [];
+
+  for (let index = 0; index < pattern.elements.length; index++) {
+    const binding = pattern.elements[index];
+    if (!binding || ts.isOmittedExpression(binding)) {
+      continue;
+    }
+
+    let value = binding.dotDotDotToken ? arr.slice(index) : arr[index];
+    if (value === undefined && binding.initializer) {
+      value = evaluate(
+        binding.initializer,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+    }
+
+    const resolved = resolveBindingName(
+      targetName,
+      binding.name,
+      value,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    if (resolved.found) {
+      return resolved;
+    }
+  }
+
+  return { found: false };
+}
+
+function resolveBindingElementValue(
+  targetName: string,
+  binding: ts.BindingElement,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): any {
+  let root: ts.Node = binding.parent;
+  while (ts.isBindingElement(root.parent)) {
+    root = root.parent.parent;
+  }
+  if (
+    !(ts.isObjectBindingPattern(root) || ts.isArrayBindingPattern(root)) ||
+    !ts.isVariableDeclaration(root.parent) ||
+    !root.parent.initializer
+  ) {
+    return undefined;
+  }
+
+  const bindingSourceFile = root.parent.getSourceFile();
+  const sourceValue = evaluate(
+    root.parent.initializer,
+    bindingSourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    macro,
+    evaluatedFiles,
+    context,
+    options,
+  );
+
+  const resolved = ts.isObjectBindingPattern(root)
+    ? resolveObjectBindingPattern(
+        targetName,
+        root,
+        sourceValue,
+        bindingSourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      )
+    : resolveArrayBindingPattern(
+        targetName,
+        root,
+        sourceValue,
+        bindingSourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+
+  return resolved.found ? resolved.value : undefined;
+}
+
+function getEnumMemberName(
+  name: ts.PropertyName,
+  sourceFile: ts.SourceFile,
+): string {
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  return name.getText(sourceFile);
+}
+
+function evaluateEnumDeclaration(
+  declaration: ts.EnumDeclaration,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): Record<string, any> {
+  const declSourceFile = declaration.getSourceFile();
+  const enumName = declaration.name.getText(declSourceFile);
+  const fileEnums = enumMap[declSourceFile.fileName] || {};
+  const result: Record<string, any> = {};
+  evaluatedFiles.add(declSourceFile.fileName);
+
+  for (const member of declaration.members) {
+    const memberName = getEnumMemberName(member.name, declSourceFile);
+    const fullEnumMemberName = `${enumName}.${memberName}`;
+    if (Object.prototype.hasOwnProperty.call(fileEnums, fullEnumMemberName)) {
+      result[memberName] = fileEnums[fullEnumMemberName];
+    } else if (member.initializer) {
+      result[memberName] = evaluate(
+        member.initializer,
+        declSourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        undefined,
+        options,
+      );
+    }
+    const value = result[memberName];
+    if (typeof value === 'number' || value instanceof FormattedNumber) {
+      result[String(Number(value))] = memberName;
+    }
+  }
+
+  return result;
+}
+
 export function evaluate(
   expression: ts.Expression,
   sourceFile: ts.SourceFile,
@@ -100,26 +486,17 @@ export function evaluate(
     const obj: { [key: string]: any } = {};
     expression.properties.forEach(prop => {
       if (ts.isPropertyAssignment(prop)) {
-        let name: string;
-        if (ts.isComputedPropertyName(prop.name)) {
-          name = evaluate(
-            prop.name.expression,
-            sourceFile,
-            typeChecker,
-            enumMap,
-            macroImportsMap,
-            macro,
-            evaluatedFiles,
-            context,
-            options,
-          );
-        } else if (ts.isIdentifier(prop.name)) {
-          name = prop.name.text;
-        } else if (ts.isStringLiteral(prop.name)) {
-          name = prop.name.text;
-        } else {
-          name = prop.name.getText(sourceFile);
-        }
+        const name = getPropertyNameText(
+          prop.name,
+          sourceFile,
+          typeChecker,
+          enumMap,
+          macroImportsMap,
+          macro,
+          evaluatedFiles,
+          context,
+          options,
+        );
         obj[name] = evaluate(
           prop.initializer,
           sourceFile,
@@ -155,113 +532,37 @@ export function evaluate(
               macro,
               evaluatedFiles,
               context,
+              options,
             );
           } else if (
             resolvedSymbol.valueDeclaration &&
             ts.isBindingElement(resolvedSymbol.valueDeclaration)
           ) {
-            const binding = resolvedSymbol.valueDeclaration;
-            const pattern = binding.parent;
-            const varDeclParent = pattern.parent;
-            if (
-              ts.isObjectBindingPattern(pattern) &&
-              ts.isVariableDeclaration(varDeclParent) &&
-              varDeclParent.initializer
-            ) {
-              const sourceObj = evaluate(
-                varDeclParent.initializer,
-                varDeclParent.getSourceFile(),
-                typeChecker,
-                enumMap,
-                macroImportsMap,
-                macro,
-                evaluatedFiles,
-                context,
-                options,
-              );
-
-              if (binding.dotDotDotToken) {
-                const keysToRemove = new Set<string>();
-                for (const el of pattern.elements) {
-                  if (el === binding) continue;
-                  if (el.dotDotDotToken) continue;
-                  let keyName: string;
-                  if (el.propertyName) {
-                    if (ts.isIdentifier(el.propertyName)) {
-                      keyName = el.propertyName.text;
-                    } else if (ts.isStringLiteral(el.propertyName)) {
-                      keyName = el.propertyName.text;
-                    } else {
-                      keyName = el.propertyName.getText(
-                        varDeclParent.getSourceFile(),
-                      );
-                    }
-                  } else if (ts.isIdentifier(el.name)) {
-                    keyName = el.name.text;
-                  } else {
-                    keyName = el.name.getText(varDeclParent.getSourceFile());
-                  }
-                  keysToRemove.add(keyName);
-                }
-                const restObj: any = {};
-                for (const key of Object.keys(sourceObj || {})) {
-                  if (!keysToRemove.has(key)) {
-                    restObj[key] = sourceObj[key];
-                  }
-                }
-                obj[name] = restObj;
-              } else {
-                let keyName: string;
-                if (binding.propertyName) {
-                  if (ts.isIdentifier(binding.propertyName)) {
-                    keyName = binding.propertyName.text;
-                  } else if (ts.isStringLiteral(binding.propertyName)) {
-                    keyName = binding.propertyName.text;
-                  } else {
-                    keyName = binding.propertyName.getText(
-                      varDeclParent.getSourceFile(),
-                    );
-                  }
-                } else if (ts.isIdentifier(binding.name)) {
-                  keyName = binding.name.text;
-                } else {
-                  keyName = binding.name.getText(varDeclParent.getSourceFile());
-                }
-                obj[name] = sourceObj ? sourceObj[keyName] : undefined;
-              }
-            } else if (
-              ts.isArrayBindingPattern(pattern) &&
-              ts.isVariableDeclaration(varDeclParent) &&
-              varDeclParent.initializer
-            ) {
-              const sourceArr = evaluate(
-                varDeclParent.initializer,
-                varDeclParent.getSourceFile(),
-                typeChecker,
-                enumMap,
-                macroImportsMap,
-                macro,
-                evaluatedFiles,
-                context,
-                options,
-              );
-              obj[name] = resolveArrayPatternElement(
-                sourceArr,
-                pattern,
-                binding,
-              );
-            } else {
-              throw new ConfTSError(
-                `Could not resolve shorthand property '${name}' because its declaration is not a variable or has no initializer.`,
-                {
-                  file: sourceFile.fileName,
-                  ...ts.getLineAndCharacterOfPosition(
-                    sourceFile,
-                    prop.getStart(),
-                  ),
-                },
-              );
-            }
+            obj[name] = resolveBindingElementValue(
+              name,
+              resolvedSymbol.valueDeclaration,
+              sourceFile,
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            );
+          } else if (
+            resolvedSymbol.valueDeclaration &&
+            ts.isEnumDeclaration(resolvedSymbol.valueDeclaration)
+          ) {
+            obj[name] = evaluateEnumDeclaration(
+              resolvedSymbol.valueDeclaration,
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              options,
+            );
           } else {
             throw new ConfTSError(
               `Could not resolve shorthand property '${name}' because its declaration is not a variable or has no initializer.`,
@@ -321,6 +622,8 @@ export function evaluate(
           options,
         );
         elements.push(...spreadElements);
+      } else if (ts.isOmittedExpression(element)) {
+        elements.push(undefined);
       } else {
         elements.push(
           evaluate(
@@ -386,93 +689,18 @@ export function evaluate(
             );
           }
         } else if (ts.isBindingElement(resolvedSymbol.valueDeclaration)) {
-          const binding = resolvedSymbol.valueDeclaration;
-          const pattern = binding.parent;
-          const varDeclParent = pattern.parent;
-          if (
-            ts.isObjectBindingPattern(pattern) &&
-            ts.isVariableDeclaration(varDeclParent) &&
-            varDeclParent.initializer
-          ) {
-            const sourceObj = evaluate(
-              varDeclParent.initializer,
-              varDeclParent.getSourceFile(),
-              typeChecker,
-              enumMap,
-              macroImportsMap,
-              macro,
-              evaluatedFiles,
-              context,
-              options,
-            );
-
-            if (binding.dotDotDotToken) {
-              const keysToRemove = new Set<string>();
-              for (const el of pattern.elements) {
-                if (el === binding) continue;
-                if (el.dotDotDotToken) continue;
-                let keyName: string;
-                if (el.propertyName) {
-                  if (ts.isIdentifier(el.propertyName)) {
-                    keyName = el.propertyName.text;
-                  } else if (ts.isStringLiteral(el.propertyName)) {
-                    keyName = el.propertyName.text;
-                  } else {
-                    keyName = el.propertyName.getText(
-                      varDeclParent.getSourceFile(),
-                    );
-                  }
-                } else if (ts.isIdentifier(el.name)) {
-                  keyName = el.name.text;
-                } else {
-                  keyName = el.name.getText(varDeclParent.getSourceFile());
-                }
-                keysToRemove.add(keyName);
-              }
-              const restObj: any = {};
-              for (const key of Object.keys(sourceObj || {})) {
-                if (!keysToRemove.has(key)) {
-                  restObj[key] = sourceObj[key];
-                }
-              }
-              return restObj;
-            } else {
-              let keyName: string;
-              if (binding.propertyName) {
-                if (ts.isIdentifier(binding.propertyName)) {
-                  keyName = binding.propertyName.text;
-                } else if (ts.isStringLiteral(binding.propertyName)) {
-                  keyName = binding.propertyName.text;
-                } else {
-                  keyName = binding.propertyName.getText(
-                    varDeclParent.getSourceFile(),
-                  );
-                }
-              } else if (ts.isIdentifier(binding.name)) {
-                keyName = binding.name.text;
-              } else {
-                keyName = binding.name.getText(varDeclParent.getSourceFile());
-              }
-              return sourceObj ? sourceObj[keyName] : undefined;
-            }
-          } else if (
-            ts.isArrayBindingPattern(pattern) &&
-            ts.isVariableDeclaration(varDeclParent) &&
-            varDeclParent.initializer
-          ) {
-            const sourceArr = evaluate(
-              varDeclParent.initializer,
-              varDeclParent.getSourceFile(),
-              typeChecker,
-              enumMap,
-              macroImportsMap,
-              macro,
-              evaluatedFiles,
-              context,
-              options,
-            );
-            return resolveArrayPatternElement(sourceArr, pattern, binding);
-          }
+          return resolveBindingElementValue(
+            expression.text,
+            resolvedSymbol.valueDeclaration,
+            sourceFile,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            context,
+            options,
+          );
         } else if (ts.isEnumMember(resolvedSymbol.valueDeclaration)) {
           const declSourceFile =
             resolvedSymbol.valueDeclaration.getSourceFile();
@@ -488,6 +716,28 @@ export function evaluate(
             evaluatedFiles.add(declSourceFile.fileName);
             return enumMap[declSourceFile.fileName][fullEnumMemberName];
           }
+        } else if (ts.isEnumDeclaration(resolvedSymbol.valueDeclaration)) {
+          return evaluateEnumDeclaration(
+            resolvedSymbol.valueDeclaration,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            options,
+          );
+        } else if (ts.isExportAssignment(resolvedSymbol.valueDeclaration)) {
+          return evaluate(
+            resolvedSymbol.valueDeclaration.expression,
+            resolvedSymbol.valueDeclaration.getSourceFile(),
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            context,
+            options,
+          );
         }
       }
     }
@@ -547,13 +797,10 @@ export function evaluate(
       const idx = Number(key);
       return Number.isInteger(idx) && idx >= 0 ? obj[idx] : undefined;
     }
-    throw new ConfTSError(
-      `Unsupported element access on ${typeof obj}`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      },
-    );
+    throw new ConfTSError(`Unsupported element access on ${typeof obj}`, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
+    });
   } else if (ts.isPropertyAccessExpression(expression)) {
     try {
       const obj = evaluate(
@@ -567,15 +814,15 @@ export function evaluate(
         context,
         options,
       );
-      if (
-        expression.questionDotToken &&
-        (obj === null || obj === undefined)
-      ) {
+      if (expression.questionDotToken && (obj === null || obj === undefined)) {
         return undefined;
       }
       const propertyName = expression.name.getText(sourceFile);
-      if (obj && typeof obj === 'object' && propertyName in obj) {
+      if (obj !== null && obj !== undefined && typeof obj === 'object') {
         return obj[propertyName];
+      }
+      if (typeof obj === 'string' && propertyName === 'length') {
+        return obj.length;
       }
     } catch {
       // This can happen when the property access is on an enum,
@@ -589,11 +836,18 @@ export function evaluate(
     ) {
       return enumMap[sourceFile.fileName][name];
     }
-    const symbol = typeChecker.getSymbolAtLocation(expression);
+    const symbol =
+      typeChecker.getSymbolAtLocation(expression) ||
+      typeChecker.getSymbolAtLocation(expression.name);
     if (symbol) {
-      const declarations = symbol.getDeclarations();
+      let resolvedSymbol = symbol;
+      if (symbol.flags & ts.SymbolFlags.Alias) {
+        resolvedSymbol = typeChecker.getAliasedSymbol(symbol);
+      }
+      const declarations =
+        resolvedSymbol.getDeclarations() || symbol.getDeclarations();
       if (declarations && declarations.length > 0) {
-        const declaration = declarations[0];
+        const declaration = resolvedSymbol.valueDeclaration || declarations[0];
         if (ts.isEnumMember(declaration)) {
           if (declaration.initializer) {
             return evaluate(
@@ -619,6 +873,45 @@ export function evaluate(
             evaluatedFiles.add(declSourceFile.fileName);
             return enumMap[declSourceFile.fileName][fullEnumMemberName];
           }
+        } else if (ts.isVariableDeclaration(declaration)) {
+          const declarationList = declaration.parent;
+          if (!(declarationList.flags & ts.NodeFlags.Const)) {
+            const kind =
+              declarationList.flags & ts.NodeFlags.Let ? 'let' : 'var';
+            throw new ConfTSError(
+              `Failed to evaluate variable "${expression.getText(sourceFile)}". Only 'const' declarations are supported, but it was declared with '${kind}'.`,
+              {
+                file: sourceFile.fileName,
+                ...ts.getLineAndCharacterOfPosition(
+                  sourceFile,
+                  expression.getStart(),
+                ),
+              },
+            );
+          }
+          if (declaration.initializer) {
+            return evaluate(
+              declaration.initializer,
+              declaration.getSourceFile(),
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            );
+          }
+        } else if (ts.isEnumDeclaration(declaration)) {
+          return evaluateEnumDeclaration(
+            declaration,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            options,
+          );
         }
       }
     }
@@ -754,6 +1047,8 @@ export function evaluate(
     );
 
     switch (expression.operatorToken.kind) {
+      case ts.SyntaxKind.CommaToken:
+        return right;
       case ts.SyntaxKind.PlusToken:
         return left + right;
       case ts.SyntaxKind.MinusToken:

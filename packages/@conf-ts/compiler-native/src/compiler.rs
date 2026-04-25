@@ -6,9 +6,16 @@ use swc_ecma_ast::*;
 use swc_ecma_parser::{Syntax, TsSyntax, parse_file_as_module};
 
 use crate::error::ConfTSError;
-use crate::eval::{EvalContext, collect_imports, collect_macro_imports, evaluate};
+use crate::eval::{EvalContext, collect_imports, collect_macro_imports, evaluate, resolve_in_file};
 use crate::resolver::{find_tsconfig, read_tsconfig, resolve_module};
 use crate::types::{CompileOptions, FileContext, Value, replace_raw_number_markers};
+
+fn export_name_to_string(name: &ModuleExportName) -> String {
+  match name {
+    ModuleExportName::Ident(ident) => ident.sym.as_str().to_string(),
+    ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+  }
+}
 
 /// Parse a TypeScript source file into a Module AST.
 pub fn parse_ts_file(
@@ -214,13 +221,13 @@ fn _compile(
 
   // Set up resolver closure
   let tsconfig_dir_clone = tsconfig_dir.clone();
-  let tsconfig_clone = tsconfig;
+  let tsconfig_for_resolver = tsconfig.clone();
   eval_ctx.resolver = Some(Box::new(move |specifier: &str, from_file: &str| {
     resolve_module(
       specifier,
       Path::new(from_file),
       &tsconfig_dir_clone,
-      &tsconfig_clone,
+      &tsconfig_for_resolver,
     )
     .map(|p| p.display().to_string())
   }));
@@ -263,16 +270,67 @@ fn _compile(
   let mut output = Value::Null;
 
   for item in &entry_ctx.module.body {
-    if let ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) = item {
-      output = evaluate(
-        &export.expr,
-        &entry_ctx,
-        &mut eval_ctx,
-        None,
-        &options_with_macro,
-      )?;
-      found_default = true;
-      break;
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) => {
+        output = evaluate(
+          &export.expr,
+          &entry_ctx,
+          &mut eval_ctx,
+          None,
+          &options_with_macro,
+        )?;
+        found_default = true;
+        break;
+      }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        for specifier in &named_export.specifiers {
+          if let ExportSpecifier::Named(named) = specifier {
+            let original_name = export_name_to_string(&named.orig);
+            let exported_name = named
+              .exported
+              .as_ref()
+              .map(export_name_to_string)
+              .unwrap_or_else(|| original_name.clone());
+            if exported_name != "default" {
+              continue;
+            }
+            eval_ctx.evaluated_files.insert(entry_ctx.file_path.clone());
+            let target_ctx = if let Some(src) = &named_export.src {
+              let resolved = resolve_module(
+                src.value.as_str().unwrap_or(""),
+                Path::new(&abs_input_str),
+                &tsconfig_dir,
+                &tsconfig,
+              );
+              resolved.and_then(|path| {
+                eval_ctx
+                  .file_contexts
+                  .get(&path.display().to_string())
+                  .cloned()
+              })
+            } else {
+              Some(entry_ctx.clone())
+            };
+            if let Some(target_ctx) = target_ctx {
+              if let Some(value) = resolve_in_file(
+                &original_name,
+                &target_ctx,
+                &mut eval_ctx,
+                None,
+                &options_with_macro,
+              )? {
+                output = value;
+                found_default = true;
+                break;
+              }
+            }
+          }
+        }
+        if found_default {
+          break;
+        }
+      }
+      _ => {}
     }
   }
 
@@ -328,6 +386,14 @@ pub fn compile(
       let mut processed_lines = String::new();
       for line in processed.lines() {
         let mut new_line = line.to_string();
+        let indent_len = new_line.len() - new_line.trim_start().len();
+        if new_line[indent_len..].starts_with('\'') {
+          if let Some(rel_key_end) = new_line[indent_len + 1..].find("':") {
+            let key_end = indent_len + 1 + rel_key_end;
+            new_line.replace_range(key_end..key_end + 1, "\"");
+            new_line.replace_range(indent_len..indent_len + 1, "\"");
+          }
+        }
         // Convert single quotes to double quotes (heuristic for strings)
         // For simple key: 'value' or - 'value'
         if (new_line.contains(": '") || new_line.contains("- '")) && new_line.ends_with('\'') {

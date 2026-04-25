@@ -140,6 +140,29 @@ function _compile(
           options,
         );
         foundDefaultExport = true;
+      } else if (
+        ts.isExportDeclaration(node) &&
+        node.exportClause &&
+        ts.isNamedExports(node.exportClause)
+      ) {
+        for (const specifier of node.exportClause.elements) {
+          if (specifier.name.text !== 'default') {
+            continue;
+          }
+          output = evaluate(
+            specifier.propertyName || specifier.name,
+            entrySourceFile,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            undefined,
+            options,
+          );
+          foundDefaultExport = true;
+          break;
+        }
       }
     });
     if (!foundDefaultExport) {

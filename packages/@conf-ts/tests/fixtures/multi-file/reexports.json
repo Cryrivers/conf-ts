@@ -1,0 +1,8 @@
+{
+  "defaultName": "default-config",
+  "namespaceAlpha": 1,
+  "namespaceBeta": 2,
+  "alpha": 1,
+  "beta": 2,
+  "gamma": 3
+}

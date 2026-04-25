@@ -242,12 +242,15 @@ module.exports = {
 ## Supported TypeScript
 
 - Literals: string, number, boolean, null
+- `undefined` with JS serialization semantics
 - String template literals
 - Object/array literals, spreads, shorthand properties
-- Object and array destructuring in `const` bindings (including rest)
-- Enums (string and numeric)
+- Array holes serialize like JavaScript arrays (`null` in JSON/YAML output)
+- Object and array destructuring in `const` bindings (including nested patterns, computed keys, default values, and rest)
+- Enums (string and numeric), including whole enum object expansion
 - Property access (including enums)
 - Element access: `arr[i]`, `obj["key"]`, `obj[CONST]`
+- Default imports, namespace imports, and re-exports for constants
 - Optional chaining: `a?.b`, `a?.[i]`, `a?.()`
 - Binary operators (+ - * / % ** comparisons)
 - Bitwise operators (`& | ^ << >> >>>`)
@@ -255,6 +258,7 @@ module.exports = {
 - Unary prefix (+ - ! ~) and `typeof`
 - Non-null assertions (`!` postfix)
 - Conditional (ternary)
+- Sequence/comma expressions
 - Parenthesized and `as`/`satisfies` expressions
 
 ## Not supported

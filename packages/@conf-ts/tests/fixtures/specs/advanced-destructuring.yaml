@@ -1,0 +1,10 @@
+value: 10
+missing: 30
+computed: 20
+rest:
+  keep: yes
+first: 1
+second: 2
+third: 3
+fallback: 4
+tail: []

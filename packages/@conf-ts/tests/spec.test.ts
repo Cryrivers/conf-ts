@@ -110,6 +110,10 @@ describe('Spec Test', () => {
     assertSpecOutput('array-destructuring');
   });
 
+  it('should handle advanced destructuring in const bindings', () => {
+    assertSpecOutput('advanced-destructuring');
+  });
+
   it('should handle optional chaining (?., ?.[])', () => {
     assertSpecOutput('optional-chaining');
   });
@@ -120,5 +124,17 @@ describe('Spec Test', () => {
 
   it('should handle typeof and in operators', () => {
     assertSpecOutput('typeof-in');
+  });
+
+  it('should match JS semantics for undefined, holes, and sequence expressions', () => {
+    assertSpecOutput('js-semantics');
+  });
+
+  it('should expand enum objects with TypeScript runtime shape', () => {
+    assertSpecOutput('enum-object');
+  });
+
+  it('should handle named default exports', () => {
+    assertSpecOutput('named-default-export');
   });
 });

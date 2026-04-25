@@ -5,9 +5,16 @@ use swc_ecma_ast::*;
 
 use crate::compiler::parse_ts_file;
 use crate::error::ConfTSError;
-use crate::eval::{EvalContext, collect_imports, collect_macro_imports, evaluate};
+use crate::eval::{EvalContext, collect_imports, collect_macro_imports, evaluate, resolve_in_file};
 use crate::resolver::resolve_module_in_memory;
 use crate::types::{CompileOptions, FileContext, Value, replace_raw_number_markers};
+
+fn export_name_to_string(name: &ModuleExportName) -> String {
+  match name {
+    ModuleExportName::Ident(ident) => ident.sym.as_str().to_string(),
+    ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+  }
+}
 
 /// Compile from in-memory files (browser mode).
 pub fn compile_in_memory(
@@ -142,16 +149,61 @@ pub fn compile_in_memory(
   let mut output = Value::Null;
 
   for item in &entry_ctx.module.body {
-    if let ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) = item {
-      output = evaluate(
-        &export.expr,
-        &entry_ctx,
-        &mut eval_ctx,
-        None,
-        &effective_options,
-      )?;
-      found_default = true;
-      break;
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) => {
+        output = evaluate(
+          &export.expr,
+          &entry_ctx,
+          &mut eval_ctx,
+          None,
+          &effective_options,
+        )?;
+        found_default = true;
+        break;
+      }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        for specifier in &named_export.specifiers {
+          if let ExportSpecifier::Named(named) = specifier {
+            let original_name = export_name_to_string(&named.orig);
+            let exported_name = named
+              .exported
+              .as_ref()
+              .map(export_name_to_string)
+              .unwrap_or_else(|| original_name.clone());
+            if exported_name != "default" {
+              continue;
+            }
+            eval_ctx.evaluated_files.insert(entry_ctx.file_path.clone());
+            let target_ctx = if let Some(src) = &named_export.src {
+              let resolved = resolve_module_in_memory(
+                src.value.as_str().unwrap_or(""),
+                &entry_ctx.file_path,
+                files,
+              );
+              resolved.and_then(|path| eval_ctx.file_contexts.get(&path).cloned())
+            } else {
+              Some(entry_ctx.clone())
+            };
+            if let Some(target_ctx) = target_ctx {
+              if let Some(value) = resolve_in_file(
+                &original_name,
+                &target_ctx,
+                &mut eval_ctx,
+                None,
+                &effective_options,
+              )? {
+                output = value;
+                found_default = true;
+                break;
+              }
+            }
+          }
+        }
+        if found_default {
+          break;
+        }
+      }
+      _ => {}
     }
   }
 
@@ -191,6 +243,14 @@ pub fn compile_in_memory(
       let mut processed_lines = String::new();
       for line in processed.lines() {
         let mut new_line = line.to_string();
+        let indent_len = new_line.len() - new_line.trim_start().len();
+        if new_line[indent_len..].starts_with('\'') {
+          if let Some(rel_key_end) = new_line[indent_len + 1..].find("':") {
+            let key_end = indent_len + 1 + rel_key_end;
+            new_line.replace_range(key_end..key_end + 1, "\"");
+            new_line.replace_range(indent_len..indent_len + 1, "\"");
+          }
+        }
         // Convert single quotes to double quotes (heuristic for strings)
         // For simple key: 'value' or - 'value'
         if (new_line.contains(": '") || new_line.contains("- '")) && new_line.ends_with('\'') {

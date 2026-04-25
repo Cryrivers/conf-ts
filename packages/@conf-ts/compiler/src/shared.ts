@@ -83,9 +83,7 @@ export function jsonStringify(value: any, space: number | string = 2): string {
         if (Array.isArray(val)) {
           if (val.length === 0) return '[]';
           const newIndent = indent + gap;
-          const items = val
-            .map(item => serialize(item, newIndent))
-            .filter((item): item is string => item !== undefined);
+          const items = val.map(item => serialize(item, newIndent) ?? 'null');
           if (items.length === 0) return '[]';
           return `[\n${newIndent}${items.join(`,\n${newIndent}`)}\n${indent}]`;
         } else {
