@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "typescript": "^6.0.3",
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.4"
   },
   "devDependencies": {
     "@conf-ts/macro": "workspace:*",
