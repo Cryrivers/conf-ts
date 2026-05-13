@@ -426,10 +426,20 @@ pub fn evaluate(
 
     // JSX fragment
     Expr::JSXFragment(jsx_fragment) => {
-      let children = evaluate_jsx_children(&jsx_fragment.children, file_ctx, ctx, local_context, options)?;
+      let children = evaluate_jsx_children(
+        &jsx_fragment.children,
+        file_ctx,
+        ctx,
+        local_context,
+        options,
+      )?;
       let mut props: Vec<(String, Value)> = Vec::new();
       match children.len() {
-        1 => set_object_prop(&mut props, "children".to_string(), children.into_iter().next().unwrap()),
+        1 => set_object_prop(
+          &mut props,
+          "children".to_string(),
+          children.into_iter().next().unwrap(),
+        ),
         n if n > 1 => set_object_prop(&mut props, "children".to_string(), Value::Array(children)),
         _ => {}
       }
@@ -1615,7 +1625,11 @@ fn clean_jsx_text(raw: &str) -> Option<String> {
       result.push_str(&processed);
     }
   }
-  if result.is_empty() { None } else { Some(result) }
+  if result.is_empty() {
+    None
+  } else {
+    Some(result)
+  }
 }
 
 fn evaluate_jsx_element(
@@ -1638,11 +1652,21 @@ fn evaluate_jsx_element(
     }
   };
 
-  let mut props = evaluate_jsx_attributes(&element.opening.attrs, file_ctx, ctx, local_context, options)?;
+  let mut props = evaluate_jsx_attributes(
+    &element.opening.attrs,
+    file_ctx,
+    ctx,
+    local_context,
+    options,
+  )?;
 
   let children = evaluate_jsx_children(&element.children, file_ctx, ctx, local_context, options)?;
   match children.len() {
-    1 => set_object_prop(&mut props, "children".to_string(), children.into_iter().next().unwrap()),
+    1 => set_object_prop(
+      &mut props,
+      "children".to_string(),
+      children.into_iter().next().unwrap(),
+    ),
     n if n > 1 => set_object_prop(&mut props, "children".to_string(), Value::Array(children)),
     _ => {}
   }
@@ -1672,24 +1696,29 @@ fn evaluate_jsx_attributes(
         };
         let value = match &jsx_attr.value {
           None => Value::Bool(true),
-          Some(JSXAttrValue::Str(s)) => {
-            Value::String(s.value.as_str().unwrap_or("").to_string())
-          }
-          Some(JSXAttrValue::JSXExprContainer(expr_container)) => {
-            match &expr_container.expr {
-              JSXExpr::Expr(expr) => evaluate(expr, file_ctx, ctx, local_context, options)?,
-              JSXExpr::JSXEmptyExpr(_) => Value::Undefined,
-            }
-          }
+          Some(JSXAttrValue::Str(s)) => Value::String(s.value.as_str().unwrap_or("").to_string()),
+          Some(JSXAttrValue::JSXExprContainer(expr_container)) => match &expr_container.expr {
+            JSXExpr::Expr(expr) => evaluate(expr, file_ctx, ctx, local_context, options)?,
+            JSXExpr::JSXEmptyExpr(_) => Value::Undefined,
+          },
           Some(JSXAttrValue::JSXElement(el)) => {
             evaluate_jsx_element(el, file_ctx, ctx, local_context, options)?
           }
           Some(JSXAttrValue::JSXFragment(frag)) => {
-            let children = evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
+            let children =
+              evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
             let mut frag_props: Vec<(String, Value)> = Vec::new();
             match children.len() {
-              1 => set_object_prop(&mut frag_props, "children".to_string(), children.into_iter().next().unwrap()),
-              n if n > 1 => set_object_prop(&mut frag_props, "children".to_string(), Value::Array(children)),
+              1 => set_object_prop(
+                &mut frag_props,
+                "children".to_string(),
+                children.into_iter().next().unwrap(),
+              ),
+              n if n > 1 => set_object_prop(
+                &mut frag_props,
+                "children".to_string(),
+                Value::Array(children),
+              ),
               _ => {}
             }
             Value::Object(vec![
@@ -1728,23 +1757,36 @@ fn evaluate_jsx_children(
           result.push(Value::String(cleaned));
         }
       }
-      JSXElementChild::JSXExprContainer(expr_container) => {
-        match &expr_container.expr {
-          JSXExpr::Expr(expr) => {
-            result.push(evaluate(expr, file_ctx, ctx, local_context, options)?);
-          }
-          JSXExpr::JSXEmptyExpr(_) => {}
+      JSXElementChild::JSXExprContainer(expr_container) => match &expr_container.expr {
+        JSXExpr::Expr(expr) => {
+          result.push(evaluate(expr, file_ctx, ctx, local_context, options)?);
         }
-      }
+        JSXExpr::JSXEmptyExpr(_) => {}
+      },
       JSXElementChild::JSXElement(el) => {
-        result.push(evaluate_jsx_element(el, file_ctx, ctx, local_context, options)?);
+        result.push(evaluate_jsx_element(
+          el,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )?);
       }
       JSXElementChild::JSXFragment(frag) => {
-        let children = evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
+        let children =
+          evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
         let mut frag_props: Vec<(String, Value)> = Vec::new();
         match children.len() {
-          1 => set_object_prop(&mut frag_props, "children".to_string(), children.into_iter().next().unwrap()),
-          n if n > 1 => set_object_prop(&mut frag_props, "children".to_string(), Value::Array(children)),
+          1 => set_object_prop(
+            &mut frag_props,
+            "children".to_string(),
+            children.into_iter().next().unwrap(),
+          ),
+          n if n > 1 => set_object_prop(
+            &mut frag_props,
+            "children".to_string(),
+            Value::Array(children),
+          ),
           _ => {}
         }
         result.push(Value::Object(vec![
