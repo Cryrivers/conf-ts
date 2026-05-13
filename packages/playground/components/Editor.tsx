@@ -25,6 +25,8 @@ export function Editor({
   readOnly = false,
   path = '/index.conf.ts',
 }: EditorProps) {
+  const language = path.endsWith('.tsx') ? 'typescriptreact' : 'typescript';
+
   return (
     <div className="h-full w-full relative group">
       {/* Subtle gradient overlay at the top */}
@@ -32,7 +34,8 @@ export function Editor({
 
       <MonacoEditor
         height="100%"
-        defaultLanguage="typescript"
+        defaultLanguage={language}
+        language={language}
         path={path}
         theme="vs-dark"
         value={value}
