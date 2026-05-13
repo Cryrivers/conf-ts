@@ -16,9 +16,15 @@ interface EditorProps {
   value: string;
   onChange: (value: string | undefined) => void;
   readOnly?: boolean;
+  path?: string;
 }
 
-export function Editor({ value, onChange, readOnly = false }: EditorProps) {
+export function Editor({
+  value,
+  onChange,
+  readOnly = false,
+  path = '/index.conf.ts',
+}: EditorProps) {
   return (
     <div className="h-full w-full relative group">
       {/* Subtle gradient overlay at the top */}
@@ -27,7 +33,7 @@ export function Editor({ value, onChange, readOnly = false }: EditorProps) {
       <MonacoEditor
         height="100%"
         defaultLanguage="typescript"
-        path="/index.conf.ts"
+        path={path}
         theme="vs-dark"
         value={value}
         onChange={onChange}
@@ -78,6 +84,8 @@ export function Editor({ value, onChange, readOnly = false }: EditorProps) {
             module: monaco.languages.typescript.ModuleKind.CommonJS,
             noEmit: true,
             esModuleInterop: true,
+            jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+            jsxImportSource: '@conf-ts/macro',
           });
 
           // Add @conf-ts/macro types
@@ -96,6 +104,27 @@ export function Editor({ value, onChange, readOnly = false }: EditorProps) {
             }
             `,
             'file:///node_modules/@conf-ts/macro/index.d.ts',
+          );
+
+          // Add @conf-ts/macro/jsx-runtime types
+          monaco.languages.typescript.typescriptDefaults.addExtraLib(
+            `
+            declare module '@conf-ts/macro/jsx-runtime' {
+              export const Fragment: string;
+              export function jsx(
+                type: string,
+                props: Record<string, any>,
+                key?: string,
+              ): { type: string; props: Record<string, any> };
+              export const jsxs: typeof jsx;
+              export namespace JSX {
+                interface Element { type: string; props: Record<string, any>; }
+                interface IntrinsicElements { [elemName: string]: Record<string, any>; }
+                interface ElementChildrenAttribute { children: {}; }
+              }
+            }
+            `,
+            'file:///node_modules/@conf-ts/macro/jsx-runtime.d.ts',
           );
         }}
       />

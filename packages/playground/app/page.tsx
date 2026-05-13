@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import { GitFork, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import Link from 'next/link';
 import { createParser, useQueryState } from 'nuqs';
 import {
@@ -15,6 +15,7 @@ import {
 
 import { CompletionModal } from '../components/CompletionModal';
 import { Editor } from '../components/Editor';
+import Github from '../components/Github';
 import { Preview } from '../components/Preview';
 import { Tutorial } from '../components/Tutorial';
 import { tutorialSteps } from '../lib/tutorial-steps';
@@ -59,10 +60,11 @@ function PageContent() {
   }, [currentStepIndex]);
 
   const currentStep = tutorialSteps[currentStepIndex];
+  const filePath = `/index.conf.${currentStep.fileExtension ?? 'ts'}`;
 
   const files = useMemo(() => {
     return {
-      '/index.conf.ts': input,
+      [filePath]: input,
       '/tsconfig.json': JSON.stringify({
         compilerOptions: {
           target: 'ES2020',
@@ -72,10 +74,11 @@ function PageContent() {
           skipLibCheck: true,
           resolveJsonModule: true,
           jsx: 'react-jsx',
+          jsxImportSource: '@conf-ts/macro',
         },
       }),
     } as Record<string, string>;
-  }, [input]);
+  }, [input, filePath]);
 
   const compile = useCallback(async () => {
     setError(null);
@@ -83,7 +86,7 @@ function PageContent() {
       const { compileInMemory } = await import('@conf-ts/compiler/browser');
       const compiled = compileInMemory(
         files,
-        '/index.conf.ts',
+        filePath,
         format,
         macro,
         undefined,
@@ -98,7 +101,7 @@ function PageContent() {
           // Always compile to JSON for validation if we're not in JSON mode
           const jsonCompiled = compileInMemory(
             files,
-            '/index.conf.ts',
+            filePath,
             'json',
             macro,
             undefined,
@@ -186,7 +189,7 @@ function PageContent() {
               rel="noopener noreferrer"
               className="text-white hover:text-white transition-colors flex items-center gap-2 mb-2 font-medium tracking-tight"
             >
-              <GitFork className="w-4 h-4" />
+              <Github className="w-4 h-4" />
               <span>conf-ts</span>
             </a>
 
@@ -263,7 +266,11 @@ function PageContent() {
           <div className="flex-1 flex min-h-0 relative">
             {/* Editor */}
             <div className="flex-1 relative border-r border-white/5">
-              <Editor value={input} onChange={val => setInput(val ?? '')} />
+              <Editor
+                value={input}
+                onChange={val => setInput(val ?? '')}
+                path={filePath}
+              />
             </div>
 
             {/* Preview */}

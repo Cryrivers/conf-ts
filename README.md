@@ -18,7 +18,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/cli`: CLI to compile `.ts`/`.conf.ts` to JSON/YAML
 - `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
-- `@conf-ts/macro`: Macro functions available in macro mode
+- `@conf-ts/macro`: Macro functions and JSX runtime available in macro mode
 - `@conf-ts/webpack-loader`: Webpack loader that emits generated JSON/YAML files
 
 ### Performance: JS vs compiler-native
@@ -157,6 +157,53 @@ Constraints remain the same for array callbacks:
 - Only the callback parameter and literals are allowed (property access and computed keys with the parameter are fine)
 - Nested macros are allowed both in the array argument and inside the callback body
 
+## JSX support
+
+conf-ts can compile JSX/TSX files to structured `{ type, props }` objects. Use `@conf-ts/macro` as the JSX runtime by adding the pragma at the top of your file.
+
+```tsx
+/** @jsxImportSource @conf-ts/macro */
+
+export default {
+  button: <button id="submit" disabled />,
+  // compiles to: { type: "button", props: { id: "submit", disabled: true } }
+
+  withChildren: <ul><li>a</li><li>b</li></ul>,
+  // compiles to: { type: "ul", props: { children: [{ type: "li", ... }, ...] } }
+
+  fragment: <><span /><span /></>,
+  // compiles to: { type: "Fragment", props: { children: [...] } }
+};
+```
+
+Spread attributes and key handling are supported:
+
+```tsx
+/** @jsxImportSource @conf-ts/macro */
+
+const shared = { type: "text", name: "field" };
+
+export default {
+  spreadWithOverride: <input {...shared} name="override" />,
+  withKey: <div {...shared} key="k1" />,
+};
+```
+
+JSX can be combined with macros when `--macro` is enabled:
+
+```tsx
+/** @jsxImportSource @conf-ts/macro */
+import { String, env } from '@conf-ts/macro';
+
+export default {
+  config: <service name={String(42)} env={env('API_ENV', 'development')} />,
+};
+```
+
+Each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
+
+TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
+
 ## Programmatic API
 
 ### Node (compile files on disk)
@@ -241,6 +288,7 @@ module.exports = {
 
 ## Supported TypeScript
 
+- JSX elements, fragments, spread attributes, and children (via `@jsxImportSource @conf-ts/macro`)
 - Literals: string, number, boolean, null
 - `undefined` with JS serialization semantics
 - String template literals

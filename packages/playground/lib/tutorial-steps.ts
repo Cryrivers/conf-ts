@@ -5,6 +5,7 @@ export type TutorialStep = {
   initialCode: string;
   goal: string;
   check: (output: any, code: string) => boolean;
+  fileExtension?: 'ts' | 'tsx';
 };
 
 export const tutorialSteps: TutorialStep[] = [
@@ -120,6 +121,33 @@ export default {
         output &&
         Array.isArray(output.doubled) &&
         output.doubled.join(',') === '2,4,6,8,10'
+      );
+    },
+  },
+  {
+    id: 'jsx',
+    title: 'JSX: Declarative Config',
+    description:
+      'conf-ts supports JSX as a declarative syntax for nested structured data. Each element compiles to a plain `{ type, props }` object — no DOM or React involved.',
+    goal: 'Add a <button type="submit" label="Send" /> inside the <form>.',
+    fileExtension: 'tsx',
+    initialCode: `/** @jsxImportSource @conf-ts/macro */
+
+// JSX elements compile to { type, props } objects — no DOM needed.
+// Use it to declare UI schemas, API configs, or any nested structure.
+
+export default (
+  <form action="/submit" method="POST">
+    <input name="email" type="email" required />
+    {/* TODO: Add a <button type="submit" label="Send" /> here */}
+  </form>
+);
+`,
+    check: (output: any) => {
+      const children = output?.props?.children;
+      if (!Array.isArray(children)) return false;
+      return children.some(
+        (c: any) => c?.type === 'button' && c?.props?.label === 'Send',
       );
     },
   },
