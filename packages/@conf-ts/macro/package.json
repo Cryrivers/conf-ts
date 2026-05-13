@@ -7,6 +7,14 @@
     ".": {
       "types": "./dist/cjs/index.d.ts",
       "require": "./dist/cjs/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/cjs/jsx-runtime.d.ts",
+      "require": "./dist/cjs/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/cjs/jsx-dev-runtime.d.ts",
+      "require": "./dist/cjs/jsx-dev-runtime.js"
     }
   },
   "types": "dist/cjs/index.d.ts",

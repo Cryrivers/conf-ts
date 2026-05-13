@@ -1,0 +1,24 @@
+{
+  "spreadOnly": {
+    "type": "input",
+    "props": {
+      "type": "text",
+      "name": "field"
+    }
+  },
+  "spreadWithOverride": {
+    "type": "input",
+    "props": {
+      "type": "text",
+      "name": "override"
+    }
+  },
+  "spreadWithKey": {
+    "type": "div",
+    "props": {
+      "type": "text",
+      "name": "field",
+      "key": "k1"
+    }
+  }
+}

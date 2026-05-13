@@ -30,3 +30,17 @@ export function env(key: string, defaultValue: string): string;
 export function env(key: string, defaultValue?: string): string | undefined {
   return process.env[key] ?? defaultValue;
 }
+
+export function createElement(
+  type: string,
+  props: Record<string, any> | null,
+  ...children: any[]
+): { type: string; props: Record<string, any> } {
+  const p = props ? { ...props } : {};
+  if (children.length === 1) {
+    p.children = children[0];
+  } else if (children.length > 1) {
+    p.children = children;
+  }
+  return { type, props: p };
+}

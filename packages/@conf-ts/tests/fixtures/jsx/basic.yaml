@@ -1,0 +1,75 @@
+intrinsic:
+  type: page
+  props: {}
+withStringAttr:
+  type: button
+  props:
+    id: submit
+withBoolAttr:
+  type: input
+  props:
+    disabled: true
+withExprAttr:
+  type: div
+  props:
+    count: 42
+withTextChild:
+  type: p
+  props:
+    children: hello
+singleChild:
+  type: div
+  props:
+    children:
+      type: span
+      props: {}
+multiChild:
+  type: ul
+  props:
+    children:
+    - type: li
+      props:
+        children: a
+    - type: li
+      props:
+        children: b
+fragment:
+  type: Fragment
+  props:
+    children:
+    - type: span
+      props: {}
+    - type: span
+      props: {}
+emptyFragment:
+  type: Fragment
+  props: {}
+singleFragment:
+  type: Fragment
+  props:
+    children:
+      type: p
+      props: {}
+customTag:
+  type: Button
+  props:
+    variant: primary
+nested:
+  type: div
+  props:
+    children:
+      type: section
+      props:
+        children:
+          type: p
+          props:
+            children: deep
+mixed:
+  type: div
+  props:
+    id: root
+    children:
+    - type: h1
+      props:
+        children: title
+    - 42

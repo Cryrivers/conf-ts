@@ -8,13 +8,15 @@ const FIXTURES_DIR = path.resolve(__dirname, 'fixtures');
 const SPEC_DIR = path.join(FIXTURES_DIR, 'specs');
 const MACRO_DIR = path.join(FIXTURES_DIR, 'macros');
 const EDGE_CASES_DIR = path.join(FIXTURES_DIR, 'edge-cases');
+const JSX_DIR = path.join(FIXTURES_DIR, 'jsx');
 
 function assertOutput(
   inputFolder: string,
   testName: string,
   options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+  suffix: string = '.conf.ts',
 ) {
-  const inputFilePath = path.join(inputFolder, `${testName}.conf.ts`);
+  const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
   const expectedOutputFilePath = path.join(inputFolder, `${testName}.json`);
 
   const expectedOutput = fs.readFileSync(expectedOutputFilePath, 'utf-8');
@@ -47,8 +49,9 @@ function assertError(
   testName: string,
   expectedError: string,
   options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+  suffix: string = '.conf.ts',
 ) {
-  const inputFilePath = path.join(inputFolder, `${testName}.conf.ts`);
+  const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
   expect(() => compileJs(inputFilePath, 'json', options)).toThrow(
     expectedError,
   );
@@ -101,4 +104,19 @@ export function assertMacroError(
     ...options,
     macroMode: true,
   });
+}
+
+export function assertJsxOutput(
+  testName: string,
+  options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+) {
+  assertOutput(JSX_DIR, testName, { ...options }, '.json.tsx');
+}
+
+export function assertJsxError(
+  testName: string,
+  expectedError: string,
+  options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+) {
+  assertError(JSX_DIR, testName, expectedError, { ...options }, '.json.tsx');
 }

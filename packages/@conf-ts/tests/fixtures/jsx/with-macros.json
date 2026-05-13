@@ -1,0 +1,15 @@
+{
+  "config": {
+    "type": "service",
+    "props": {
+      "name": "42",
+      "env": "default"
+    }
+  },
+  "simple": {
+    "type": "item",
+    "props": {
+      "label": "key-secret-123"
+    }
+  }
+}

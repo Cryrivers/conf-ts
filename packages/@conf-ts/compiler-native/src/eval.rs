@@ -419,6 +419,40 @@ pub fn evaluate(
       ))
     }
 
+    // JSX element
+    Expr::JSXElement(jsx_element) => {
+      evaluate_jsx_element(jsx_element, file_ctx, ctx, local_context, options)
+    }
+
+    // JSX fragment
+    Expr::JSXFragment(jsx_fragment) => {
+      let children = evaluate_jsx_children(&jsx_fragment.children, file_ctx, ctx, local_context, options)?;
+      let mut props: Vec<(String, Value)> = Vec::new();
+      match children.len() {
+        1 => set_object_prop(&mut props, "children".to_string(), children.into_iter().next().unwrap()),
+        n if n > 1 => set_object_prop(&mut props, "children".to_string(), Value::Array(children)),
+        _ => {}
+      }
+      Ok(Value::Object(vec![
+        ("type".to_string(), Value::String("Fragment".to_string())),
+        ("props".to_string(), Value::Object(props)),
+      ]))
+    }
+
+    // JSX empty expression
+    Expr::JSXEmpty(_) => Ok(Value::Undefined),
+
+    // JSX member expression (unsupported in v1)
+    Expr::JSXMember(_) | Expr::JSXNamespacedName(_) => {
+      let (line, character) = get_location(&file_ctx.source_map, expr.span().lo);
+      Err(ConfTSError::new(
+        "Unsupported JSX tag: member expressions and namespaced names are not supported",
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+
     // Sequence expression
     Expr::Seq(seq) => {
       let mut result = Value::Undefined;
@@ -1551,6 +1585,182 @@ fn is_nullish_type(t: &TsType) -> bool {
     TsType::TsParenthesizedType(pt) => is_nullish_type(&pt.type_ann),
     _ => false,
   }
+}
+
+fn clean_jsx_text(raw: &str) -> Option<String> {
+  let lines: Vec<&str> = raw.split('\n').collect();
+  let mut last_non_empty: i32 = -1;
+  for (i, line) in lines.iter().enumerate() {
+    if line.chars().any(|c| c != ' ' && c != '\t' && c != '\r') {
+      last_non_empty = i as i32;
+    }
+  }
+  if last_non_empty < 0 {
+    return None;
+  }
+  let last_non_empty = last_non_empty as usize;
+  let mut result = String::new();
+  for (i, line) in lines.iter().enumerate() {
+    let mut processed = line.replace('\t', " ").replace('\r', "");
+    if i > 0 {
+      processed = processed.trim_start().to_string();
+    }
+    if i < lines.len() - 1 {
+      processed = processed.trim_end().to_string();
+    }
+    if !processed.is_empty() {
+      if !result.is_empty() && i <= last_non_empty {
+        result.push(' ');
+      }
+      result.push_str(&processed);
+    }
+  }
+  if result.is_empty() { None } else { Some(result) }
+}
+
+fn evaluate_jsx_element(
+  element: &JSXElement,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  let type_name = match &element.opening.name {
+    JSXElementName::Ident(ident) => ident.sym.as_str().to_string(),
+    _ => {
+      let (line, character) = get_location(&file_ctx.source_map, element.opening.span.lo);
+      return Err(ConfTSError::new(
+        "Unsupported JSX tag: member expressions and namespaced names are not supported",
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  let mut props = evaluate_jsx_attributes(&element.opening.attrs, file_ctx, ctx, local_context, options)?;
+
+  let children = evaluate_jsx_children(&element.children, file_ctx, ctx, local_context, options)?;
+  match children.len() {
+    1 => set_object_prop(&mut props, "children".to_string(), children.into_iter().next().unwrap()),
+    n if n > 1 => set_object_prop(&mut props, "children".to_string(), Value::Array(children)),
+    _ => {}
+  }
+
+  Ok(Value::Object(vec![
+    ("type".to_string(), Value::String(type_name)),
+    ("props".to_string(), Value::Object(props)),
+  ]))
+}
+
+fn evaluate_jsx_attributes(
+  attrs: &[JSXAttrOrSpread],
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Vec<(String, Value)>, ConfTSError> {
+  let mut props: Vec<(String, Value)> = Vec::new();
+  for attr in attrs {
+    match attr {
+      JSXAttrOrSpread::JSXAttr(jsx_attr) => {
+        let name = match &jsx_attr.name {
+          JSXAttrName::Ident(ident) => ident.sym.as_str().to_string(),
+          JSXAttrName::JSXNamespacedName(ns) => {
+            format!("{}:{}", ns.ns.sym.as_str(), ns.name.sym.as_str())
+          }
+        };
+        let value = match &jsx_attr.value {
+          None => Value::Bool(true),
+          Some(JSXAttrValue::Str(s)) => {
+            Value::String(s.value.as_str().unwrap_or("").to_string())
+          }
+          Some(JSXAttrValue::JSXExprContainer(expr_container)) => {
+            match &expr_container.expr {
+              JSXExpr::Expr(expr) => evaluate(expr, file_ctx, ctx, local_context, options)?,
+              JSXExpr::JSXEmptyExpr(_) => Value::Undefined,
+            }
+          }
+          Some(JSXAttrValue::JSXElement(el)) => {
+            evaluate_jsx_element(el, file_ctx, ctx, local_context, options)?
+          }
+          Some(JSXAttrValue::JSXFragment(frag)) => {
+            let children = evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
+            let mut frag_props: Vec<(String, Value)> = Vec::new();
+            match children.len() {
+              1 => set_object_prop(&mut frag_props, "children".to_string(), children.into_iter().next().unwrap()),
+              n if n > 1 => set_object_prop(&mut frag_props, "children".to_string(), Value::Array(children)),
+              _ => {}
+            }
+            Value::Object(vec![
+              ("type".to_string(), Value::String("Fragment".to_string())),
+              ("props".to_string(), Value::Object(frag_props)),
+            ])
+          }
+        };
+        set_object_prop(&mut props, name, value);
+      }
+      JSXAttrOrSpread::SpreadElement(spread) => {
+        let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
+        if let Value::Object(spread_map) = val {
+          for (k, v) in spread_map {
+            set_object_prop(&mut props, k, v);
+          }
+        }
+      }
+    }
+  }
+  Ok(props)
+}
+
+fn evaluate_jsx_children(
+  children: &[JSXElementChild],
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Vec<Value>, ConfTSError> {
+  let mut result = Vec::new();
+  for child in children {
+    match child {
+      JSXElementChild::JSXText(text) => {
+        if let Some(cleaned) = clean_jsx_text(text.value.as_str()) {
+          result.push(Value::String(cleaned));
+        }
+      }
+      JSXElementChild::JSXExprContainer(expr_container) => {
+        match &expr_container.expr {
+          JSXExpr::Expr(expr) => {
+            result.push(evaluate(expr, file_ctx, ctx, local_context, options)?);
+          }
+          JSXExpr::JSXEmptyExpr(_) => {}
+        }
+      }
+      JSXElementChild::JSXElement(el) => {
+        result.push(evaluate_jsx_element(el, file_ctx, ctx, local_context, options)?);
+      }
+      JSXElementChild::JSXFragment(frag) => {
+        let children = evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
+        let mut frag_props: Vec<(String, Value)> = Vec::new();
+        match children.len() {
+          1 => set_object_prop(&mut frag_props, "children".to_string(), children.into_iter().next().unwrap()),
+          n if n > 1 => set_object_prop(&mut frag_props, "children".to_string(), Value::Array(children)),
+          _ => {}
+        }
+        result.push(Value::Object(vec![
+          ("type".to_string(), Value::String("Fragment".to_string())),
+          ("props".to_string(), Value::Object(frag_props)),
+        ]));
+      }
+      JSXElementChild::JSXSpreadChild(spread) => {
+        let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
+        if let Value::Array(items) = val {
+          result.extend(items);
+        }
+      }
+    }
+  }
+  Ok(result)
 }
 
 impl EvalContext {

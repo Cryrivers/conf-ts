@@ -5,6 +5,143 @@ import { ConfTSError } from './error';
 import { evaluateMacro } from './macro';
 import { FormattedNumber } from './shared';
 
+function cleanJsxText(raw: string): string | null {
+  const lines = raw.split(/\r?\n/);
+  let lastNonEmptyLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/[^ \t]/.test(lines[i])) {
+      lastNonEmptyLine = i;
+    }
+  }
+  if (lastNonEmptyLine === -1) return null;
+  let str = '';
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].replace(/\t/g, ' ');
+    if (i > 0) line = line.replace(/^ +/, '');
+    if (i < lines.length - 1) line = line.replace(/ +$/, '');
+    if (line) {
+      if (str && i <= lastNonEmptyLine) str += ' ';
+      str += line;
+    }
+  }
+  return str || null;
+}
+
+function evaluateJsxChildren(
+  children: ts.NodeArray<ts.JsxChild>,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): any[] {
+  const result: any[] = [];
+  for (const child of children) {
+    if (ts.isJsxText(child)) {
+      if (!child.containsOnlyTriviaWhiteSpaces) {
+        const text = cleanJsxText(child.text);
+        if (text !== null) {
+          result.push(text);
+        }
+      }
+    } else if (ts.isJsxExpression(child)) {
+      if (child.expression) {
+        result.push(
+          evaluate(
+            child.expression,
+            sourceFile,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            context,
+            options,
+          ),
+        );
+      }
+    } else if (
+      ts.isJsxElement(child) ||
+      ts.isJsxSelfClosingElement(child) ||
+      ts.isJsxFragment(child)
+    ) {
+      result.push(
+        evaluate(
+          child as unknown as ts.Expression,
+          sourceFile,
+          typeChecker,
+          enumMap,
+          macroImportsMap,
+          macro,
+          evaluatedFiles,
+          context,
+          options,
+        ),
+      );
+    }
+  }
+  return result;
+}
+
+function evaluateJsxAttributes(
+  attributes: ts.JsxAttributes,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  macro: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): { [key: string]: any } {
+  const props: { [key: string]: any } = {};
+  for (const attr of attributes.properties) {
+    if (ts.isJsxAttribute(attr)) {
+      const name = ts.isIdentifier(attr.name)
+        ? attr.name.text
+        : `${attr.name.namespace.text}:${attr.name.name.text}`;
+      if (!attr.initializer) {
+        props[name] = true;
+      } else if (ts.isStringLiteral(attr.initializer)) {
+        props[name] = attr.initializer.text;
+      } else if (ts.isJsxExpression(attr.initializer)) {
+        if (attr.initializer.expression) {
+          props[name] = evaluate(
+            attr.initializer.expression,
+            sourceFile,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            macro,
+            evaluatedFiles,
+            context,
+            options,
+          );
+        }
+      }
+    } else if (ts.isJsxSpreadAttribute(attr)) {
+      const spreadObj = evaluate(
+        attr.expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+      if (spreadObj && typeof spreadObj === 'object') {
+        Object.assign(props, spreadObj);
+      }
+    }
+  }
+  return props;
+}
+
 const macroModuleSpecifiers = ["'@conf-ts/macro'", '"@conf-ts/macro"'];
 
 function resolveArrayPatternElement(
@@ -1271,6 +1408,89 @@ export function evaluate(
           context,
           options,
         );
+  } else if (ts.isJsxElement(expression)) {
+    const tagName = expression.openingElement.tagName;
+    if (!ts.isIdentifier(tagName)) {
+      throw new ConfTSError(
+        `Unsupported JSX tag: member expressions and namespaced names are not supported`,
+        {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(sourceFile, tagName.getStart()),
+        },
+      );
+    }
+    const type = tagName.text;
+    const props = evaluateJsxAttributes(
+      expression.openingElement.attributes,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    const children = evaluateJsxChildren(
+      expression.children,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    if (children.length === 1) {
+      props.children = children[0];
+    } else if (children.length > 1) {
+      props.children = children;
+    }
+    return { type, props };
+  } else if (ts.isJsxSelfClosingElement(expression)) {
+    const tagName = expression.tagName;
+    if (!ts.isIdentifier(tagName)) {
+      throw new ConfTSError(
+        `Unsupported JSX tag: member expressions and namespaced names are not supported`,
+        {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(sourceFile, tagName.getStart()),
+        },
+      );
+    }
+    const type = tagName.text;
+    const props = evaluateJsxAttributes(
+      expression.attributes,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    return { type, props };
+  } else if (ts.isJsxFragment(expression)) {
+    const props: { [key: string]: any } = {};
+    const children = evaluateJsxChildren(
+      expression.children,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    if (children.length === 1) {
+      props.children = children[0];
+    } else if (children.length > 1) {
+      props.children = children;
+    }
+    return { type: 'Fragment', props };
   } else if (ts.isNonNullExpression(expression)) {
     const value = evaluate(
       expression.expression,
