@@ -1,9 +1,14 @@
 'use client';
 
+import type { Monaco } from '@monaco-editor/react';
+import { shikiToMonaco, textmateThemeToMonacoTheme } from '@shikijs/monaco';
 import { Loader2 } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { createHighlighter } from 'shiki';
+import type { LanguageRegistration } from 'shiki';
+import tsxLang from 'shiki/langs/tsx.mjs';
 
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), {
+const MonacoEditor = dynamic(async () => import('@monaco-editor/react'), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full text-neutral-800">
@@ -11,6 +16,108 @@ const MonacoEditor = dynamic(() => import('@monaco-editor/react'), {
     </div>
   ),
 });
+
+const SHIKI_THEME = 'github-dark';
+const SHIKI_MONACO_SETUP_PROPERTY = '__confTsShikiMonacoSetup';
+const MONACO_CANCEL_HANDLER_PROPERTY = '__confTsMonacoCancelHandlerInstalled';
+
+type MonacoThemeData = Parameters<Monaco['editor']['defineTheme']>[1];
+type MonacoWithShikiSetup = Monaco & {
+  [SHIKI_MONACO_SETUP_PROPERTY]?: Promise<void>;
+};
+
+const typescriptWithTsxSyntax = tsxLang.map(
+  (lang): LanguageRegistration => ({
+    ...lang,
+    name: 'typescript',
+    aliases: ['ts', 'tsx'],
+  }),
+);
+
+function isMonacoCancellation(value: unknown) {
+  const error = value as {
+    message?: unknown;
+    name?: unknown;
+    stack?: unknown;
+    type?: unknown;
+  };
+
+  if (error?.type === 'cancelation') {
+    return true;
+  }
+
+  const stack = typeof error?.stack === 'string' ? error.stack : '';
+  return (
+    error?.name === 'Canceled' &&
+    error?.message === 'Canceled' &&
+    (stack.includes('monaco-editor') ||
+      stack.includes('/vs/editor') ||
+      stack.includes('editor.api-'))
+  );
+}
+
+function installMonacoCancellationHandler() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const browserWindow = window as Window & {
+    [MONACO_CANCEL_HANDLER_PROPERTY]?: true;
+  };
+
+  if (browserWindow[MONACO_CANCEL_HANDLER_PROPERTY]) {
+    return;
+  }
+
+  browserWindow[MONACO_CANCEL_HANDLER_PROPERTY] = true;
+
+  window.addEventListener('unhandledrejection', event => {
+    if (isMonacoCancellation(event.reason)) {
+      event.preventDefault();
+    }
+  });
+
+  window.addEventListener('error', event => {
+    if (isMonacoCancellation(event.error)) {
+      event.preventDefault();
+    }
+  });
+}
+
+function setupShikiMonaco(monaco: Monaco) {
+  const monacoWithSetup = monaco as MonacoWithShikiSetup;
+
+  installMonacoCancellationHandler();
+
+  monacoWithSetup[SHIKI_MONACO_SETUP_PROPERTY] ??= createHighlighter({
+    themes: [SHIKI_THEME],
+    langs: typescriptWithTsxSyntax,
+  })
+    .then(highlighter => {
+      shikiToMonaco(highlighter, monaco);
+
+      const theme = textmateThemeToMonacoTheme(
+        highlighter.getTheme(SHIKI_THEME),
+      ) as MonacoThemeData;
+      monaco.editor.defineTheme(SHIKI_THEME, {
+        ...theme,
+        colors: {
+          ...theme.colors,
+          'editor.background': '#050505',
+          'editor.lineHighlightBackground': '#ffffff05',
+          'editorLineNumber.foreground': '#333333',
+          'editorLineNumber.activeForeground': '#666666',
+        },
+      });
+      monaco.editor.setTheme(SHIKI_THEME);
+    })
+    .catch(error => {
+      monacoWithSetup[SHIKI_MONACO_SETUP_PROPERTY] = undefined;
+      console.error('Shiki Monaco setup failed:', error);
+    });
+
+  return monacoWithSetup[SHIKI_MONACO_SETUP_PROPERTY];
+}
 
 interface EditorProps {
   value: string;
@@ -25,7 +132,7 @@ export function Editor({
   readOnly = false,
   path = '/index.conf.ts',
 }: EditorProps) {
-  const language = path.endsWith('.tsx') ? 'typescriptreact' : 'typescript';
+  const language = 'typescript';
 
   return (
     <div className="h-full w-full relative group">
@@ -77,6 +184,8 @@ export function Editor({
             },
           });
           monaco.editor.setTheme('vs-dark');
+
+          void setupShikiMonaco(monaco);
 
           // Configure compiler options
           monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
