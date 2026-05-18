@@ -112,6 +112,23 @@ export default {
 }
 ```
 
+### Arrays: `arrayFlatMap(array, item => expr)`
+
+Constraints:
+- Callback must be an arrow function with exactly one parameter
+- Body must be a single return expression (or expression body)
+- The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
+- Array results are flattened by one level; non-array results are kept as single items
+
+```ts
+import { arrayFlatMap } from '@conf-ts/macro';
+
+const nums = [1, 2, 3];
+export default {
+  expanded: arrayFlatMap(nums, x => [x, x * 10]),
+}
+```
+
 ### Environment: `env(key)`
 
 ```ts
@@ -128,7 +145,7 @@ export default {
 Macros can be nested inside other macros and within array callbacks. Context (the callback parameter) is correctly scoped during nested evaluation.
 
 ```ts
-import { arrayMap, arrayFilter, String, Number, Boolean } from '@conf-ts/macro';
+import { arrayMap, arrayFilter, arrayFlatMap, String, Number, Boolean } from '@conf-ts/macro';
 
 const users = [{ id: 1 }, { id: 2 }, { id: 3 }];
 const nums = [0, 1, 2];
@@ -148,6 +165,9 @@ export default {
     arrayFilter(nums, n => Boolean(n)),
     m => String(m)
   ), // ["1","2"]
+
+  // Flat-map arrays by one level
+  expanded: arrayFlatMap(users, u => [u.id, String(u.id)]), // [1,"1",2,"2",3,"3"]
 }
 ```
 
@@ -156,6 +176,7 @@ Constraints remain the same for array callbacks:
 - Body must be a single expression
 - Only the callback parameter and literals are allowed (property access and computed keys with the parameter are fine)
 - Nested macros are allowed both in the array argument and inside the callback body
+- `arrayFlatMap` flattens only one level, matching JavaScript `Array.prototype.flatMap`
 
 ## JSX support
 

@@ -13,6 +13,7 @@ const MACRO_FUNCTIONS: &[&str] = &[
   "Boolean",
   "arrayMap",
   "arrayFilter",
+  "arrayFlatMap",
   "env",
 ];
 

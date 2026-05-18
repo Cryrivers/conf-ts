@@ -1,0 +1,40 @@
+{
+  "duplicateNumbers": [
+    1,
+    10,
+    2,
+    20,
+    3,
+    30
+  ],
+  "objectRows": [
+    {
+      "id": 1,
+      "label": "Alice:primary"
+    },
+    {
+      "id": 1,
+      "label": "Alice:secondary"
+    },
+    {
+      "id": 2,
+      "label": "Bob:primary"
+    },
+    {
+      "id": 2,
+      "label": "Bob:secondary"
+    }
+  ],
+  "mixedResults": [
+    1,
+    101,
+    2,
+    102,
+    3
+  ],
+  "nestedStringIds": [
+    "1",
+    "2"
+  ],
+  "nonArrayInput": []
+}

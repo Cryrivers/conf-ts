@@ -18,6 +18,10 @@ describe('Macro Test', () => {
     assertMacroOutput('array-filter');
   });
 
+  it('should handle arrayFlatMap macro for flattening mapped arrays', () => {
+    assertMacroOutput('array-flat-map');
+  });
+
   it('should throw error when arrayMap callback is a function expression', () => {
     assertMacroError(
       'invalid-array-map-callback',
@@ -29,6 +33,13 @@ describe('Macro Test', () => {
     assertMacroError(
       'invalid-array-filter-callback',
       'arrayFilter: callback must be an arrow function',
+    );
+  });
+
+  it('should throw error when arrayFlatMap callback is a function expression', () => {
+    assertMacroError(
+      'invalid-array-flat-map-callback',
+      'arrayFlatMap: callback must be an arrow function',
     );
   });
 

@@ -18,6 +18,13 @@ export function arrayMap<T, U>(array: T[], callback: (item: T) => U): U[] {
   return array.map(callback);
 }
 
+export function arrayFlatMap<T, U>(
+  array: T[],
+  callback: (item: T) => U | U[],
+): U[] {
+  return array.flatMap(callback);
+}
+
 export function arrayFilter<T>(
   array: T[],
   predicate: (item: T) => boolean,

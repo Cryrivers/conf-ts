@@ -23,6 +23,7 @@ const TYPE_CASTING_FUNCTIONS = [
 const ARRAY_MACRO_FUNCTIONS = [
   { name: 'arrayMap', argLength: 2 },
   { name: 'arrayFilter', argLength: 2 },
+  { name: 'arrayFlatMap', argLength: 2 },
 ] satisfies MacroFunction[];
 
 const ENV_MACRO_FUNCTIONS = [
@@ -531,6 +532,74 @@ function evaluateArrayMap(
 }
 
 /**
+ * Evaluate arrayFlatMap macro.
+ * - Allows nested macros both in the array argument and within the callback body.
+ * - Flattens callback array results by one level, matching Array.prototype.flatMap.
+ */
+function evaluateArrayFlatMap(
+  expression: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: MacroOptions,
+): any {
+  const callee = getCalleeName(expression, sourceFile);
+  if (callee !== 'arrayFlatMap' || expression.arguments.length !== 2) {
+    return undefined;
+  }
+  assertMacroImported(
+    callee,
+    sourceFile,
+    macroImportsMap,
+    expression,
+    `Macro function '${callee}' must be imported from '@conf-ts/macro' to use in macro mode`,
+  );
+  const arr = evaluate(
+    expression.arguments[0],
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    true, // Allow nested macros inside the array argument
+    evaluatedFiles,
+    context,
+    options,
+  );
+  const { paramName, bodyExpression } = getArrayCallbackDetails({
+    callbackExpression: expression.arguments[1],
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    arrowErrorMessage: 'arrayFlatMap: callback must be an arrow function',
+    paramErrorMessage: 'arrayFlatMap: callback must have exactly one parameter',
+    bodyErrorMessage:
+      'arrayFlatMap: callback body must be a single return statement',
+    identifierErrorMessage:
+      'arrayFlatMap: callback can only use its parameter and literals',
+  });
+  if (!Array.isArray(arr)) {
+    return [];
+  }
+  return arr.flatMap((item: any) => {
+    return evaluate(
+      bodyExpression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      true,
+      evaluatedFiles,
+      { [paramName]: item },
+      options,
+    );
+  });
+}
+
+/**
  * Evaluate arrayFilter macro.
  * - Allows nested macros both in the array argument and within the predicate body.
  * - Propagates context for correct identifier resolution in nested calls.
@@ -624,6 +693,19 @@ export function evaluateMacro(
     return result;
   }
   result = evaluateArrayMap(
+    expression,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    context,
+    options,
+  );
+  if (result !== undefined) {
+    return result;
+  }
+  result = evaluateArrayFlatMap(
     expression,
     sourceFile,
     typeChecker,

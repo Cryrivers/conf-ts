@@ -208,6 +208,10 @@ export function Editor({
               export function Number(value: any): number;
               export function Boolean(value: any): boolean;
               export function arrayMap<T, U>(array: T[], callback: (item: T) => U): U[];
+              export function arrayFlatMap<T, U>(
+                array: T[],
+                callback: (item: T) => U | U[],
+              ): U[];
               export function arrayFilter<T>(
                 array: T[],
                 predicate: (item: T) => boolean,

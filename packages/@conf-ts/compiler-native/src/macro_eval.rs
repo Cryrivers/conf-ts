@@ -23,6 +23,10 @@ pub fn evaluate_macro(
   if let Some(val) = evaluate_array_map(&callee, call, file_ctx, ctx, local_context, options)? {
     return Ok(val);
   }
+  if let Some(val) = evaluate_array_flat_map(&callee, call, file_ctx, ctx, local_context, options)?
+  {
+    return Ok(val);
+  }
   if let Some(val) = evaluate_array_filter(&callee, call, file_ctx, ctx, local_context, options)? {
     return Ok(val);
   }
@@ -235,6 +239,91 @@ fn evaluate_array_map(
     local.insert(param_name.clone(), item);
     let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
     result.push(val);
+  }
+
+  Ok(Some(Value::Array(result)))
+}
+
+fn evaluate_array_flat_map(
+  callee: &str,
+  call: &CallExpr,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  if callee != "arrayFlatMap" || call.args.len() != 2 {
+    return Ok(None);
+  }
+
+  if !check_macro_import(callee, ctx, &file_ctx.file_path) {
+    let (line, character) = get_location(&file_ctx.source_map, call.span.lo);
+    return Err(ConfTSError::new(
+      format!(
+        "Macro function '{}' must be imported from '@conf-ts/macro' to use in macro mode",
+        callee
+      ),
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+
+  let arr = evaluate(&call.args[0].expr, file_ctx, ctx, local_context, options)?;
+  let callback = &call.args[1].expr;
+  let arrow = match callback.as_ref() {
+    Expr::Arrow(arrow) => arrow,
+    _ => {
+      let (line, character) = get_location(&file_ctx.source_map, callback.span().lo);
+      return Err(ConfTSError::new(
+        "arrayFlatMap: callback must be an arrow function",
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  if arrow.params.len() != 1 {
+    let (line, character) = get_location(&file_ctx.source_map, callback.span().lo);
+    return Err(ConfTSError::new(
+      "arrayFlatMap: callback must have exactly one parameter",
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+
+  let param_name = match &arrow.params[0] {
+    Pat::Ident(ident) => ident.id.sym.as_str().to_string(),
+    _ => {
+      let (line, character) = get_location(&file_ctx.source_map, callback.span().lo);
+      return Err(ConfTSError::new(
+        "arrayFlatMap: callback parameter must be an identifier",
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  let body_expr = get_arrow_body_expr(arrow, file_ctx, "arrayFlatMap")?;
+  validate_callback_body(body_expr, &param_name, file_ctx, ctx, "arrayFlatMap")?;
+
+  let items = match arr {
+    Value::Array(items) => items,
+    _ => return Ok(Some(Value::Array(Vec::new()))),
+  };
+
+  let mut result = Vec::new();
+  for item in items {
+    let mut local = HashMap::new();
+    local.insert(param_name.clone(), item);
+    let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
+    match val {
+      Value::Array(items) => result.extend(items),
+      value => result.push(value),
+    }
   }
 
   Ok(Some(Value::Array(result)))
