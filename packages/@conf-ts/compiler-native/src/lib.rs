@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::types::CompileOptions;
+use crate::types::{CompileOptions, JsxOutputField, JsxOutputOptions as NativeJsxOutputOptions};
 
 #[napi(object)]
 pub struct CompileResult {
@@ -20,10 +20,40 @@ pub struct CompileResult {
 }
 
 #[napi(object)]
+pub struct JsxOutputOptions {
+  #[napi(js_name = "type")]
+  pub type_name: Option<String>,
+  pub props: Option<Either<String, bool>>,
+  pub children: Option<Either<String, bool>>,
+  pub key: Option<String>,
+  pub fragment: Option<String>,
+}
+
+#[napi(object)]
 pub struct JsCompileOptions {
   pub preserve_key_order: Option<bool>,
   pub macro_mode: Option<bool>,
   pub env: Option<HashMap<String, String>>,
+  pub jsx_output: Option<JsxOutputOptions>,
+}
+
+fn convert_jsx_field(value: Option<Either<String, bool>>) -> Option<JsxOutputField> {
+  match value {
+    Some(Either::A(name)) => Some(JsxOutputField::Name(name)),
+    Some(Either::B(false)) => Some(JsxOutputField::Disabled),
+    Some(Either::B(true)) => Some(JsxOutputField::InvalidBool),
+    None => None,
+  }
+}
+
+fn convert_jsx_output(value: Option<JsxOutputOptions>) -> Option<NativeJsxOutputOptions> {
+  value.map(|o| NativeJsxOutputOptions {
+    type_name: o.type_name,
+    props: convert_jsx_field(o.props),
+    children: convert_jsx_field(o.children),
+    key: o.key,
+    fragment: o.fragment,
+  })
 }
 
 /// Compile a TypeScript config file to JSON or YAML.
@@ -38,6 +68,7 @@ pub fn compile(
       preserve_key_order: o.preserve_key_order.unwrap_or(false),
       macro_mode: o.macro_mode.unwrap_or(false),
       env: o.env,
+      jsx_output: convert_jsx_output(o.jsx_output),
     })
     .unwrap_or_default();
 
@@ -64,6 +95,7 @@ pub fn compile_in_memory(
       preserve_key_order: o.preserve_key_order.unwrap_or(false),
       macro_mode: o.macro_mode.unwrap_or(false) || macro_mode,
       env: o.env,
+      jsx_output: convert_jsx_output(o.jsx_output),
     })
     .unwrap_or(CompileOptions {
       macro_mode,

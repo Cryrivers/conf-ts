@@ -3,7 +3,119 @@ import ts from 'typescript';
 import { MACRO_FUNCTIONS } from './constants';
 import { ConfTSError } from './error';
 import { evaluateMacro } from './macro';
-import { FormattedNumber } from './shared';
+import { CompileOptions, FormattedNumber } from './shared';
+
+type NormalizedJsxOutputOptions = {
+  type: string;
+  props: string | false;
+  children: string | false;
+  key: string;
+  fragment: string;
+};
+
+type EvaluatedJsxAttributes = {
+  props: { [key: string]: any };
+  key?: any;
+  hasKey: boolean;
+};
+
+function getNodeLocation(sourceFile: ts.SourceFile, node: ts.Node) {
+  return {
+    file: sourceFile.fileName,
+    ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)),
+  };
+}
+
+function validateJsxName(
+  value: unknown,
+  field: string,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new ConfTSError(
+      `Invalid option: jsxOutput.${field} must be a non-empty string`,
+      getNodeLocation(sourceFile, node),
+    );
+  }
+  return value;
+}
+
+function validateJsxField(
+  value: unknown,
+  field: string,
+  defaultValue: string,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): string | false {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (value === false) {
+    return false;
+  }
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new ConfTSError(
+      `Invalid option: jsxOutput.${field} must be a non-empty string or false`,
+      getNodeLocation(sourceFile, node),
+    );
+  }
+  return value;
+}
+
+function normalizeJsxOutputOptions(
+  options: CompileOptions | undefined,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): NormalizedJsxOutputOptions {
+  const raw = options?.jsxOutput ?? {};
+  const normalized: NormalizedJsxOutputOptions = {
+    type:
+      raw.type === undefined
+        ? 'type'
+        : validateJsxName(raw.type, 'type', sourceFile, node),
+    props: validateJsxField(raw.props, 'props', 'props', sourceFile, node),
+    children: validateJsxField(
+      raw.children,
+      'children',
+      'children',
+      sourceFile,
+      node,
+    ),
+    key:
+      raw.key === undefined
+        ? 'key'
+        : validateJsxName(raw.key, 'key', sourceFile, node),
+    fragment:
+      raw.fragment === undefined
+        ? 'Fragment'
+        : validateJsxName(raw.fragment, 'fragment', sourceFile, node),
+  };
+
+  const enabledFields = [
+    ['type', normalized.type],
+    ['key', normalized.key],
+    ...(normalized.props === false
+      ? []
+      : ([['props', normalized.props]] as [string, string][])),
+    ...(normalized.children === false
+      ? []
+      : ([['children', normalized.children]] as [string, string][])),
+  ] as [string, string][];
+  const seen = new Map<string, string>();
+  for (const [field, value] of enabledFields) {
+    const existing = seen.get(value);
+    if (existing) {
+      throw new ConfTSError(
+        `Invalid option: jsxOutput.${field} conflicts with jsxOutput.${existing} field "${value}"`,
+        getNodeLocation(sourceFile, node),
+      );
+    }
+    seen.set(value, field);
+  }
+
+  return normalized;
+}
 
 function cleanJsxText(raw: string): string | null {
   const lines = raw.split(/\r?\n/);
@@ -27,6 +139,29 @@ function cleanJsxText(raw: string): string | null {
   return str || null;
 }
 
+function findMeaningfulJsxChild(
+  children: ts.NodeArray<ts.JsxChild>,
+): ts.Node | undefined {
+  for (const child of children) {
+    if (ts.isJsxText(child)) {
+      if (cleanJsxText(child.text) !== null) {
+        return child;
+      }
+    } else if (ts.isJsxExpression(child)) {
+      if (child.expression) {
+        return child;
+      }
+    } else if (ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child)) {
+      return child;
+    } else if (ts.isJsxFragment(child)) {
+      if (findMeaningfulJsxChild(child.children)) {
+        return child;
+      }
+    }
+  }
+  return undefined;
+}
+
 function evaluateJsxChildren(
   children: ts.NodeArray<ts.JsxChild>,
   sourceFile: ts.SourceFile,
@@ -36,8 +171,20 @@ function evaluateJsxChildren(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): any[] {
+  const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, sourceFile);
+  if (jsxOutput.children === false) {
+    const child = findMeaningfulJsxChild(children);
+    if (child) {
+      throw new ConfTSError(
+        'JSX children are disabled by jsxOutput.children: false',
+        getNodeLocation(sourceFile, child),
+      );
+    }
+    return [];
+  }
+
   const result: any[] = [];
   for (const child of children) {
     if (ts.isJsxText(child)) {
@@ -95,30 +242,43 @@ function evaluateJsxAttributes(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
-): { [key: string]: any } {
+  options?: CompileOptions,
+): EvaluatedJsxAttributes {
+  const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, attributes);
   const props: { [key: string]: any } = {};
+  let key: any;
+  let hasKey = false;
   for (const attr of attributes.properties) {
     if (ts.isJsxAttribute(attr)) {
       const name = ts.isIdentifier(attr.name)
         ? attr.name.text
         : `${attr.name.namespace.text}:${attr.name.name.text}`;
+      const setValue = (value: any) => {
+        if (name === 'key') {
+          key = value;
+          hasKey = true;
+        } else {
+          props[name] = value;
+        }
+      };
       if (!attr.initializer) {
-        props[name] = true;
+        setValue(true);
       } else if (ts.isStringLiteral(attr.initializer)) {
-        props[name] = attr.initializer.text;
+        setValue(attr.initializer.text);
       } else if (ts.isJsxExpression(attr.initializer)) {
         if (attr.initializer.expression) {
-          props[name] = evaluate(
-            attr.initializer.expression,
-            sourceFile,
-            typeChecker,
-            enumMap,
-            macroImportsMap,
-            macro,
-            evaluatedFiles,
-            context,
-            options,
+          setValue(
+            evaluate(
+              attr.initializer.expression,
+              sourceFile,
+              typeChecker,
+              enumMap,
+              macroImportsMap,
+              macro,
+              evaluatedFiles,
+              context,
+              options,
+            ),
           );
         }
       }
@@ -139,7 +299,73 @@ function evaluateJsxAttributes(
       }
     }
   }
-  return props;
+  if (hasKey && jsxOutput.props !== false) {
+    props[jsxOutput.key] = key;
+    return { props, hasKey: false };
+  }
+  return { props, key, hasKey };
+}
+
+function jsxChildValue(children: any[]): any {
+  return children.length === 1 ? children[0] : children;
+}
+
+function assertNoFlatJsxPropCollision(
+  props: { [key: string]: any },
+  jsxOutput: NormalizedJsxOutputOptions,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+) {
+  const protectedFields = new Set([jsxOutput.type, jsxOutput.key]);
+  if (jsxOutput.children !== false) {
+    protectedFields.add(jsxOutput.children);
+  }
+
+  for (const key of Object.keys(props)) {
+    if (protectedFields.has(key)) {
+      throw new ConfTSError(
+        `JSX prop "${key}" conflicts with JSX output field "${key}"`,
+        getNodeLocation(sourceFile, node),
+      );
+    }
+  }
+}
+
+function createJsxNode(
+  type: string,
+  attrs: EvaluatedJsxAttributes,
+  children: any[],
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+  options?: CompileOptions,
+) {
+  const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, node);
+
+  if (jsxOutput.props === false) {
+    assertNoFlatJsxPropCollision(attrs.props, jsxOutput, sourceFile, node);
+    const output: { [key: string]: any } = { [jsxOutput.type]: type };
+    Object.assign(output, attrs.props);
+    if (attrs.hasKey) {
+      output[jsxOutput.key] = attrs.key;
+    }
+    if (children.length > 0 && jsxOutput.children !== false) {
+      output[jsxOutput.children] = jsxChildValue(children);
+    }
+    return output;
+  }
+
+  const props = { ...attrs.props };
+  if (attrs.hasKey) {
+    props[jsxOutput.key] = attrs.key;
+  }
+  if (children.length > 0 && jsxOutput.children !== false) {
+    props[jsxOutput.children] = jsxChildValue(children);
+  }
+
+  return {
+    [jsxOutput.type]: type,
+    [jsxOutput.props]: props,
+  };
 }
 
 const macroModuleSpecifiers = ["'@conf-ts/macro'", '"@conf-ts/macro"'];
@@ -426,7 +652,7 @@ function resolveBindingElementValue(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): any {
   let root: ts.Node = binding.parent;
   while (ts.isBindingElement(root.parent)) {
@@ -1420,7 +1646,7 @@ export function evaluate(
       );
     }
     const type = tagName.text;
-    const props = evaluateJsxAttributes(
+    const attrs = evaluateJsxAttributes(
       expression.openingElement.attributes,
       sourceFile,
       typeChecker,
@@ -1442,12 +1668,14 @@ export function evaluate(
       context,
       options,
     );
-    if (children.length === 1) {
-      props.children = children[0];
-    } else if (children.length > 1) {
-      props.children = children;
-    }
-    return { type, props };
+    return createJsxNode(
+      type,
+      attrs,
+      children,
+      sourceFile,
+      expression,
+      options,
+    );
   } else if (ts.isJsxSelfClosingElement(expression)) {
     const tagName = expression.tagName;
     if (!ts.isIdentifier(tagName)) {
@@ -1460,7 +1688,7 @@ export function evaluate(
       );
     }
     const type = tagName.text;
-    const props = evaluateJsxAttributes(
+    const attrs = evaluateJsxAttributes(
       expression.attributes,
       sourceFile,
       typeChecker,
@@ -1471,9 +1699,8 @@ export function evaluate(
       context,
       options,
     );
-    return { type, props };
+    return createJsxNode(type, attrs, [], sourceFile, expression, options);
   } else if (ts.isJsxFragment(expression)) {
-    const props: { [key: string]: any } = {};
     const children = evaluateJsxChildren(
       expression.children,
       sourceFile,
@@ -1485,12 +1712,19 @@ export function evaluate(
       context,
       options,
     );
-    if (children.length === 1) {
-      props.children = children[0];
-    } else if (children.length > 1) {
-      props.children = children;
-    }
-    return { type: 'Fragment', props };
+    const jsxOutput = normalizeJsxOutputOptions(
+      options,
+      sourceFile,
+      expression,
+    );
+    return createJsxNode(
+      jsxOutput.fragment,
+      { props: {}, hasKey: false },
+      children,
+      sourceFile,
+      expression,
+      options,
+    );
   } else if (ts.isNonNullExpression(expression)) {
     const value = evaluate(
       expression.expression,

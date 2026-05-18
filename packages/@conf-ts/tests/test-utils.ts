@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { compile as compileJs } from '@conf-ts/compiler';
+import { compile as compileJs, type CompileOptions } from '@conf-ts/compiler';
 import { compile as compileNative } from '@conf-ts/compiler-native';
 import { expect } from 'vitest';
 
@@ -13,7 +13,7 @@ const JSX_DIR = path.join(FIXTURES_DIR, 'jsx');
 function assertOutput(
   inputFolder: string,
   testName: string,
-  options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+  options?: CompileOptions,
   suffix: string = '.conf.ts',
 ) {
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
@@ -48,7 +48,7 @@ function assertError(
   inputFolder: string,
   testName: string,
   expectedError: string,
-  options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+  options?: CompileOptions,
   suffix: string = '.conf.ts',
 ) {
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
@@ -60,17 +60,14 @@ function assertError(
   );
 }
 
-export function assertSpecOutput(
-  testName: string,
-  options?: { preserveKeyOrder?: boolean },
-) {
+export function assertSpecOutput(testName: string, options?: CompileOptions) {
   assertOutput(SPEC_DIR, testName, { ...options, macroMode: false });
 }
 
 export function assertSpecError(
   testName: string,
   expectedError: string,
-  options?: { preserveKeyOrder?: boolean },
+  options?: CompileOptions,
 ) {
   assertError(SPEC_DIR, testName, expectedError, {
     ...options,
@@ -78,10 +75,7 @@ export function assertSpecError(
   });
 }
 
-export function assertMacroOutput(
-  testName: string,
-  options?: { preserveKeyOrder?: boolean },
-) {
+export function assertMacroOutput(testName: string, options?: CompileOptions) {
   assertOutput(MACRO_DIR, testName, {
     ...options,
     macroMode: true,
@@ -90,7 +84,7 @@ export function assertMacroOutput(
 
 export function assertEdgeCaseOutput(
   testName: string,
-  options?: { preserveKeyOrder?: boolean },
+  options?: CompileOptions,
 ) {
   assertOutput(EDGE_CASES_DIR, testName, { ...options, macroMode: true });
 }
@@ -98,7 +92,7 @@ export function assertEdgeCaseOutput(
 export function assertMacroError(
   testName: string,
   expectedError: string,
-  options?: { preserveKeyOrder?: boolean },
+  options?: CompileOptions,
 ) {
   assertError(MACRO_DIR, testName, expectedError, {
     ...options,
@@ -106,17 +100,14 @@ export function assertMacroError(
   });
 }
 
-export function assertJsxOutput(
-  testName: string,
-  options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
-) {
+export function assertJsxOutput(testName: string, options?: CompileOptions) {
   assertOutput(JSX_DIR, testName, { ...options }, '.json.tsx');
 }
 
 export function assertJsxError(
   testName: string,
   expectedError: string,
-  options?: { preserveKeyOrder?: boolean; macroMode?: boolean },
+  options?: CompileOptions,
 ) {
   assertError(JSX_DIR, testName, expectedError, { ...options }, '.json.tsx');
 }

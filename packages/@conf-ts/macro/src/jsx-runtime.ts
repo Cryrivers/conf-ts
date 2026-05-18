@@ -4,7 +4,7 @@ export function jsx(
   type: string,
   props: Record<string, any>,
   key?: string,
-): { type: string; props: Record<string, any> } {
+): Record<string, any> {
   if (key !== undefined) {
     props = { ...props, key };
   }
@@ -14,10 +14,7 @@ export function jsx(
 export const jsxs = jsx;
 
 export namespace JSX {
-  export interface Element {
-    type: string;
-    props: Record<string, any>;
-  }
+  export type Element = Record<string, any>;
   export interface IntrinsicElements {
     [elemName: string]: Record<string, any>;
   }

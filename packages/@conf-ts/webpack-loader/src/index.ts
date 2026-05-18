@@ -1,15 +1,14 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { type compile } from '@conf-ts/compiler';
+import { type compile, type CompileOptions } from '@conf-ts/compiler';
 import Piscina from 'piscina';
 import { LoaderContext } from 'webpack';
 
-interface LoaderOptions {
+interface LoaderOptions extends CompileOptions {
   name?: string;
   format?: 'json' | 'yaml';
   extensionToRemove?: string;
   macro?: boolean;
-  preserveKeyOrder?: boolean;
   check?: boolean;
 }
 
@@ -51,6 +50,7 @@ export default async function (
     const compileOptions = {
       macroMode: options.macro || false,
       preserveKeyOrder: options.preserveKeyOrder || false,
+      jsxOutput: options.jsxOutput,
     };
     const { output, dependencies } = await runCompile(
       this.resourcePath,

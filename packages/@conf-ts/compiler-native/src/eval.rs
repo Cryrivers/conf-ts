@@ -5,7 +5,7 @@ use swc_ecma_ast::*;
 
 use crate::error::ConfTSError;
 use crate::macro_eval::evaluate_macro;
-use crate::types::{CompileOptions, FileContext, Value, normalize_number_raw};
+use crate::types::{CompileOptions, FileContext, JsxOutputField, Value, normalize_number_raw};
 
 const MACRO_FUNCTIONS: &[&str] = &[
   "String",
@@ -37,6 +37,134 @@ fn module_export_name_to_string(name: &ModuleExportName) -> String {
 fn set_object_prop(map: &mut Vec<(String, Value)>, key: String, value: Value) {
   map.retain(|(k, _)| k != &key);
   map.push((key, value));
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedJsxOutputOptions {
+  type_name: String,
+  props: Option<String>,
+  children: Option<String>,
+  key: String,
+  fragment: String,
+}
+
+struct EvaluatedJsxAttributes {
+  props: Vec<(String, Value)>,
+  key: Option<Value>,
+}
+
+fn validate_jsx_name(
+  value: &str,
+  field: &str,
+  file_ctx: &FileContext,
+  pos: BytePos,
+) -> Result<String, ConfTSError> {
+  if value.is_empty() {
+    let (line, character) = get_location(&file_ctx.source_map, pos);
+    return Err(ConfTSError::new(
+      format!(
+        "Invalid option: jsxOutput.{} must be a non-empty string",
+        field
+      ),
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+  Ok(value.to_string())
+}
+
+fn validate_jsx_field(
+  value: Option<&JsxOutputField>,
+  field: &str,
+  default_value: &str,
+  file_ctx: &FileContext,
+  pos: BytePos,
+) -> Result<Option<String>, ConfTSError> {
+  match value {
+    None => Ok(Some(default_value.to_string())),
+    Some(JsxOutputField::Name(name)) if !name.is_empty() => Ok(Some(name.clone())),
+    Some(JsxOutputField::Disabled) => Ok(None),
+    Some(JsxOutputField::Name(_)) | Some(JsxOutputField::InvalidBool) => {
+      let (line, character) = get_location(&file_ctx.source_map, pos);
+      Err(ConfTSError::new(
+        format!(
+          "Invalid option: jsxOutput.{} must be a non-empty string or false",
+          field
+        ),
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+  }
+}
+
+fn normalize_jsx_output_options(
+  options: &CompileOptions,
+  file_ctx: &FileContext,
+  pos: BytePos,
+) -> Result<NormalizedJsxOutputOptions, ConfTSError> {
+  let raw = options.jsx_output.as_ref();
+  let type_name = match raw.and_then(|o| o.type_name.as_ref()) {
+    Some(value) => validate_jsx_name(value, "type", file_ctx, pos)?,
+    None => "type".to_string(),
+  };
+  let props = validate_jsx_field(
+    raw.and_then(|o| o.props.as_ref()),
+    "props",
+    "props",
+    file_ctx,
+    pos,
+  )?;
+  let children = validate_jsx_field(
+    raw.and_then(|o| o.children.as_ref()),
+    "children",
+    "children",
+    file_ctx,
+    pos,
+  )?;
+  let key = match raw.and_then(|o| o.key.as_ref()) {
+    Some(value) => validate_jsx_name(value, "key", file_ctx, pos)?,
+    None => "key".to_string(),
+  };
+  let fragment = match raw.and_then(|o| o.fragment.as_ref()) {
+    Some(value) => validate_jsx_name(value, "fragment", file_ctx, pos)?,
+    None => "Fragment".to_string(),
+  };
+
+  let mut enabled_fields: Vec<(&str, &str)> = vec![("type", &type_name), ("key", &key)];
+  if let Some(props_name) = &props {
+    enabled_fields.push(("props", props_name));
+  }
+  if let Some(children_name) = &children {
+    enabled_fields.push(("children", children_name));
+  }
+
+  let mut seen: HashMap<String, String> = HashMap::new();
+  for (field, value) in enabled_fields {
+    if let Some(existing) = seen.get(value) {
+      let (line, character) = get_location(&file_ctx.source_map, pos);
+      return Err(ConfTSError::new(
+        format!(
+          "Invalid option: jsxOutput.{} conflicts with jsxOutput.{} field \"{}\"",
+          field, existing, value
+        ),
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+    seen.insert(value.to_string(), field.to_string());
+  }
+
+  Ok(NormalizedJsxOutputOptions {
+    type_name,
+    props,
+    children,
+    key,
+    fragment,
+  })
 }
 
 fn get_object_prop(map: &[(String, Value)], key: &str) -> Value {
@@ -433,20 +561,18 @@ pub fn evaluate(
         local_context,
         options,
       )?;
-      let mut props: Vec<(String, Value)> = Vec::new();
-      match children.len() {
-        1 => set_object_prop(
-          &mut props,
-          "children".to_string(),
-          children.into_iter().next().unwrap(),
-        ),
-        n if n > 1 => set_object_prop(&mut props, "children".to_string(), Value::Array(children)),
-        _ => {}
-      }
-      Ok(Value::Object(vec![
-        ("type".to_string(), Value::String("Fragment".to_string())),
-        ("props".to_string(), Value::Object(props)),
-      ]))
+      let jsx_output = normalize_jsx_output_options(options, file_ctx, jsx_fragment.span.lo)?;
+      create_jsx_node(
+        jsx_output.fragment,
+        EvaluatedJsxAttributes {
+          props: Vec::new(),
+          key: None,
+        },
+        children,
+        file_ctx,
+        jsx_fragment.span.lo,
+        options,
+      )
     }
 
     // JSX empty expression
@@ -1632,6 +1758,110 @@ fn clean_jsx_text(raw: &str) -> Option<String> {
   }
 }
 
+fn jsx_child_value(children: Vec<Value>) -> Value {
+  if children.len() == 1 {
+    children.into_iter().next().unwrap()
+  } else {
+    Value::Array(children)
+  }
+}
+
+fn assert_no_flat_jsx_prop_collision(
+  props: &[(String, Value)],
+  jsx_output: &NormalizedJsxOutputOptions,
+  file_ctx: &FileContext,
+  pos: BytePos,
+) -> Result<(), ConfTSError> {
+  let mut protected_fields: HashSet<String> = HashSet::new();
+  protected_fields.insert(jsx_output.type_name.clone());
+  protected_fields.insert(jsx_output.key.clone());
+  if let Some(children_name) = &jsx_output.children {
+    protected_fields.insert(children_name.clone());
+  }
+
+  for (key, _) in props {
+    if protected_fields.contains(key) {
+      let (line, character) = get_location(&file_ctx.source_map, pos);
+      return Err(ConfTSError::new(
+        format!(
+          "JSX prop \"{}\" conflicts with JSX output field \"{}\"",
+          key, key
+        ),
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  }
+  Ok(())
+}
+
+fn create_jsx_node(
+  type_name: String,
+  attrs: EvaluatedJsxAttributes,
+  children: Vec<Value>,
+  file_ctx: &FileContext,
+  pos: BytePos,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  let jsx_output = normalize_jsx_output_options(options, file_ctx, pos)?;
+
+  if jsx_output.props.is_none() {
+    assert_no_flat_jsx_prop_collision(&attrs.props, &jsx_output, file_ctx, pos)?;
+    let mut output = vec![(jsx_output.type_name, Value::String(type_name))];
+    for (key, value) in attrs.props {
+      set_object_prop(&mut output, key, value);
+    }
+    if let Some(key_value) = attrs.key {
+      set_object_prop(&mut output, jsx_output.key, key_value);
+    }
+    if !children.is_empty() {
+      if let Some(children_name) = jsx_output.children {
+        set_object_prop(&mut output, children_name, jsx_child_value(children));
+      }
+    }
+    return Ok(Value::Object(output));
+  }
+
+  let mut props = attrs.props;
+  if let Some(key_value) = attrs.key {
+    set_object_prop(&mut props, jsx_output.key, key_value);
+  }
+  if !children.is_empty() {
+    if let Some(children_name) = &jsx_output.children {
+      set_object_prop(&mut props, children_name.clone(), jsx_child_value(children));
+    }
+  }
+
+  Ok(Value::Object(vec![
+    (jsx_output.type_name, Value::String(type_name)),
+    (jsx_output.props.unwrap(), Value::Object(props)),
+  ]))
+}
+
+fn meaningful_jsx_child_pos(child: &JSXElementChild) -> Option<BytePos> {
+  match child {
+    JSXElementChild::JSXText(text) => clean_jsx_text(text.value.as_str()).map(|_| text.span.lo),
+    JSXElementChild::JSXExprContainer(expr_container) => match &expr_container.expr {
+      JSXExpr::Expr(_) => Some(expr_container.span.lo),
+      JSXExpr::JSXEmptyExpr(_) => None,
+    },
+    JSXElementChild::JSXElement(el) => Some(el.opening.span.lo),
+    JSXElementChild::JSXFragment(frag) => {
+      if frag
+        .children
+        .iter()
+        .any(|child| meaningful_jsx_child_pos(child).is_some())
+      {
+        Some(frag.span.lo)
+      } else {
+        None
+      }
+    }
+    JSXElementChild::JSXSpreadChild(spread) => Some(spread.span.lo),
+  }
+}
+
 fn evaluate_jsx_element(
   element: &JSXElement,
   file_ctx: &FileContext,
@@ -1652,29 +1882,24 @@ fn evaluate_jsx_element(
     }
   };
 
-  let mut props = evaluate_jsx_attributes(
+  let props = evaluate_jsx_attributes(
     &element.opening.attrs,
     file_ctx,
     ctx,
     local_context,
     options,
+    element.opening.span.lo,
   )?;
 
   let children = evaluate_jsx_children(&element.children, file_ctx, ctx, local_context, options)?;
-  match children.len() {
-    1 => set_object_prop(
-      &mut props,
-      "children".to_string(),
-      children.into_iter().next().unwrap(),
-    ),
-    n if n > 1 => set_object_prop(&mut props, "children".to_string(), Value::Array(children)),
-    _ => {}
-  }
-
-  Ok(Value::Object(vec![
-    ("type".to_string(), Value::String(type_name)),
-    ("props".to_string(), Value::Object(props)),
-  ]))
+  create_jsx_node(
+    type_name,
+    props,
+    children,
+    file_ctx,
+    element.opening.span.lo,
+    options,
+  )
 }
 
 fn evaluate_jsx_attributes(
@@ -1683,8 +1908,11 @@ fn evaluate_jsx_attributes(
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
-) -> Result<Vec<(String, Value)>, ConfTSError> {
+  pos: BytePos,
+) -> Result<EvaluatedJsxAttributes, ConfTSError> {
+  let jsx_output = normalize_jsx_output_options(options, file_ctx, pos)?;
   let mut props: Vec<(String, Value)> = Vec::new();
+  let mut key: Option<Value> = None;
   for attr in attrs {
     match attr {
       JSXAttrOrSpread::JSXAttr(jsx_attr) => {
@@ -1707,27 +1935,25 @@ fn evaluate_jsx_attributes(
           Some(JSXAttrValue::JSXFragment(frag)) => {
             let children =
               evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
-            let mut frag_props: Vec<(String, Value)> = Vec::new();
-            match children.len() {
-              1 => set_object_prop(
-                &mut frag_props,
-                "children".to_string(),
-                children.into_iter().next().unwrap(),
-              ),
-              n if n > 1 => set_object_prop(
-                &mut frag_props,
-                "children".to_string(),
-                Value::Array(children),
-              ),
-              _ => {}
-            }
-            Value::Object(vec![
-              ("type".to_string(), Value::String("Fragment".to_string())),
-              ("props".to_string(), Value::Object(frag_props)),
-            ])
+            let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.lo)?;
+            create_jsx_node(
+              jsx_output.fragment,
+              EvaluatedJsxAttributes {
+                props: Vec::new(),
+                key: None,
+              },
+              children,
+              file_ctx,
+              frag.span.lo,
+              options,
+            )?
           }
         };
-        set_object_prop(&mut props, name, value);
+        if name == "key" {
+          key = Some(value);
+        } else {
+          set_object_prop(&mut props, name, value);
+        }
       }
       JSXAttrOrSpread::SpreadElement(spread) => {
         let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
@@ -1739,7 +1965,14 @@ fn evaluate_jsx_attributes(
       }
     }
   }
-  Ok(props)
+  if let Some(value) = key.take() {
+    if jsx_output.props.is_some() {
+      set_object_prop(&mut props, jsx_output.key, value);
+      return Ok(EvaluatedJsxAttributes { props, key: None });
+    }
+    key = Some(value);
+  }
+  Ok(EvaluatedJsxAttributes { props, key })
 }
 
 fn evaluate_jsx_children(
@@ -1749,6 +1982,20 @@ fn evaluate_jsx_children(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Vec<Value>, ConfTSError> {
+  let jsx_output = normalize_jsx_output_options(options, file_ctx, BytePos(0))?;
+  if jsx_output.children.is_none() {
+    if let Some(pos) = children.iter().find_map(meaningful_jsx_child_pos) {
+      let (line, character) = get_location(&file_ctx.source_map, pos);
+      return Err(ConfTSError::new(
+        "JSX children are disabled by jsxOutput.children: false",
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+    return Ok(Vec::new());
+  }
+
   let mut result = Vec::new();
   for child in children {
     match child {
@@ -1775,24 +2022,18 @@ fn evaluate_jsx_children(
       JSXElementChild::JSXFragment(frag) => {
         let children =
           evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
-        let mut frag_props: Vec<(String, Value)> = Vec::new();
-        match children.len() {
-          1 => set_object_prop(
-            &mut frag_props,
-            "children".to_string(),
-            children.into_iter().next().unwrap(),
-          ),
-          n if n > 1 => set_object_prop(
-            &mut frag_props,
-            "children".to_string(),
-            Value::Array(children),
-          ),
-          _ => {}
-        }
-        result.push(Value::Object(vec![
-          ("type".to_string(), Value::String("Fragment".to_string())),
-          ("props".to_string(), Value::Object(frag_props)),
-        ]));
+        let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.lo)?;
+        result.push(create_jsx_node(
+          jsx_output.fragment,
+          EvaluatedJsxAttributes {
+            props: Vec::new(),
+            key: None,
+          },
+          children,
+          file_ctx,
+          frag.span.lo,
+          options,
+        )?);
       }
       JSXElementChild::JSXSpreadChild(spread) => {
         let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;

@@ -21,6 +21,7 @@ import { Tutorial } from '../components/Tutorial';
 import { tutorialSteps } from '../lib/tutorial-steps';
 
 type CompileResult = { output: string; dependencies: string[] };
+type JsxOutputMode = 'default' | 'flat' | 'no-children';
 
 // Custom parser that clamps step index to valid range
 const parseAsStepIndex = createParser({
@@ -42,6 +43,7 @@ function PageContent() {
   );
   const [format, setFormat] = useState<'json' | 'yaml'>('json');
   const [macro, setMacro] = useState(true);
+  const [jsxOutputMode, setJsxOutputMode] = useState<JsxOutputMode>('default');
   const [result, setResult] = useState<CompileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isStepComplete, setIsStepComplete] = useState(false);
@@ -80,6 +82,16 @@ function PageContent() {
     } as Record<string, string>;
   }, [input, filePath]);
 
+  const jsxOutput = useMemo(() => {
+    if (jsxOutputMode === 'flat') {
+      return { type: '$type', props: false } as const;
+    }
+    if (jsxOutputMode === 'no-children') {
+      return { children: false } as const;
+    }
+    return undefined;
+  }, [jsxOutputMode]);
+
   const compile = useCallback(async () => {
     setError(null);
     try {
@@ -90,7 +102,7 @@ function PageContent() {
         format,
         macro,
         undefined,
-        { env: { NODE_ENV: 'production' } },
+        { env: { NODE_ENV: 'production' }, jsxOutput },
       );
 
       let parsedOutput = null;
@@ -105,7 +117,7 @@ function PageContent() {
             'json',
             macro,
             undefined,
-            { env: { NODE_ENV: 'production' } },
+            { env: { NODE_ENV: 'production' }, jsxOutput },
           );
           parsedOutput = JSON.parse(jsonCompiled.output);
         }
@@ -125,7 +137,7 @@ function PageContent() {
       setError(e?.toString?.() ?? String(e));
       setIsStepComplete(false);
     }
-  }, [files, format, macro, currentStep, input]);
+  }, [files, format, macro, jsxOutput, currentStep, input]);
 
   useEffect(() => {
     void compile();
@@ -223,6 +235,29 @@ function PageContent() {
                     )}
                   >
                     {f.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+
+              <div className="h-4 w-px bg-white/5" />
+
+              <div className="flex items-center gap-1">
+                {[
+                  ['default', 'JSX'],
+                  ['flat', 'Flat'],
+                  ['no-children', 'No child'],
+                ].map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setJsxOutputMode(mode as JsxOutputMode)}
+                    className={clsx(
+                      'px-2.5 py-1.5 text-xs font-medium rounded transition-all duration-200',
+                      jsxOutputMode === mode
+                        ? 'text-white bg-white/10'
+                        : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/5',
+                    )}
+                  >
+                    {label}
                   </button>
                 ))}
               </div>

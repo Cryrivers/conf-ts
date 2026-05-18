@@ -227,10 +227,10 @@ export function Editor({
                 type: string,
                 props: Record<string, any>,
                 key?: string,
-              ): { type: string; props: Record<string, any> };
+              ): Record<string, any>;
               export const jsxs: typeof jsx;
               export namespace JSX {
-                interface Element { type: string; props: Record<string, any>; }
+                type Element = Record<string, any>;
                 interface IntrinsicElements { [elemName: string]: Record<string, any>; }
                 interface ElementChildrenAttribute { children: {}; }
               }

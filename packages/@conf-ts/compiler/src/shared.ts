@@ -9,6 +9,15 @@ export interface CompileOptions {
   preserveKeyOrder?: boolean;
   macroMode?: boolean;
   env?: Record<string, string>;
+  jsxOutput?: JsxOutputOptions;
+}
+
+export interface JsxOutputOptions {
+  type?: string;
+  props?: string | false;
+  children?: string | false;
+  key?: string;
+  fragment?: string;
 }
 
 /**

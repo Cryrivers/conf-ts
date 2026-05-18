@@ -59,6 +59,9 @@ conf-ts -f yaml src/config.conf.ts
 
 # Macro mode
 conf-ts --macro src/config.conf.ts
+
+# JSX output fields
+conf-ts --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
 ```
 
 The compiled output is printed to stdout.
@@ -200,7 +203,30 @@ export default {
 };
 ```
 
-Each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
+By default, each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
+
+The JSX output shape can be configured with `jsxOutput`:
+
+```ts
+compile('path/to/index.conf.tsx', 'json', {
+  jsxOutput: {
+    type: '$type',
+    props: false,
+    children: 'children',
+    key: 'key',
+    fragment: 'Fragment',
+  },
+});
+```
+
+With `props: false`, JSX attributes are written at the node root next to the type field:
+
+```tsx
+<input type="text" name="email" />
+// compiles to: { $type: "input", type: "text", name: "email" }
+```
+
+In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `children: false` to reject JSX children entirely; whitespace-only children are ignored.
 
 TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
 
@@ -211,7 +237,7 @@ TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` 
 ```ts
 import { compile } from '@conf-ts/compiler';
 
-const { output, dependencies } = compile('path/to/index.conf.ts', 'json', false);
+const { output, dependencies } = compile('path/to/index.conf.ts', 'json');
 // output: string (JSON or YAML)
 // dependencies: string[] of files that were evaluated
 ```
@@ -237,8 +263,11 @@ const { output, dependencies } = compileInMemory(files, '/index.conf.ts', 'json'
 ```ts
 import { compile, compileInMemory } from '@conf-ts/compiler';
 
-compile('path/to/index.conf.ts', 'json', false, { preserveKeyOrder: true });
-compile('path/to/index.conf.ts', 'json', false, { macroMode: true });
+compile('path/to/index.conf.ts', 'json', { preserveKeyOrder: true });
+compile('path/to/index.conf.ts', 'json', { macroMode: true });
+compile('path/to/index.conf.tsx', 'json', {
+  jsxOutput: { type: '$type', props: false },
+});
 
 compileInMemory(
   { '/index.conf.ts': "export default { a: 1, b: 2, c: 3 }" },
@@ -276,7 +305,8 @@ module.exports = {
             options: {
               format: 'json',
               extensionToRemove: '.conf.ts',
-              name: '[name].generated.json'
+              name: '[name].generated.json',
+              jsxOutput: { type: '$type', props: false },
             },
           },
         ],
