@@ -20,8 +20,8 @@ export interface JsCompileOptions {
 
 export interface JsxOutputOptions {
   type?: string
-  props?: string | false
-  children?: string | false
+  props?: string | boolean
+  children?: string | boolean
   key?: string
   fragment?: string
 }
