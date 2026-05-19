@@ -253,6 +253,23 @@ pub struct CompileOptions {
   pub preserve_key_order: bool,
   pub macro_mode: bool,
   pub env: Option<HashMap<String, String>>,
+  pub jsx_output: Option<JsxOutputOptions>,
+}
+
+#[derive(Debug, Clone)]
+pub enum JsxOutputField {
+  Name(String),
+  Disabled,
+  InvalidBool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct JsxOutputOptions {
+  pub type_name: Option<String>,
+  pub props: Option<JsxOutputField>,
+  pub children: Option<JsxOutputField>,
+  pub key: Option<String>,
+  pub fragment: Option<String>,
 }
 
 /// Per-file context containing parsed AST and metadata.

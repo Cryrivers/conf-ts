@@ -1,12 +1,9 @@
-import { compile } from '@conf-ts/compiler';
+import { compile, type CompileOptions } from '@conf-ts/compiler';
 
 interface WorkerInput {
   resourcePath: string;
   format: 'json' | 'yaml';
-  options: {
-    macro?: boolean;
-    preserveKeyOrder?: boolean;
-  };
+  options: CompileOptions;
 }
 
 export default function (message: WorkerInput) {

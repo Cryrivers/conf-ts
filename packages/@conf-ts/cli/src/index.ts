@@ -19,8 +19,12 @@ program
     false,
   )
   .option('-p, --preserve-order', 'Preserve object key order in output.', false)
+  .option(
+    '--jsx-output <json>',
+    'Configure JSX output fields as a JSON object.',
+  )
   .action((fileEntry, options) => {
-    const { format, macro, preserveOrder } = options;
+    const { format, macro, preserveOrder, jsxOutput } = options;
 
     if (format !== 'json' && format !== 'yaml') {
       console.error(
@@ -30,9 +34,20 @@ program
     }
 
     try {
+      const parsedJsxOutput =
+        jsxOutput === undefined ? undefined : JSON.parse(jsxOutput);
+      if (
+        parsedJsxOutput !== undefined &&
+        (parsedJsxOutput === null ||
+          typeof parsedJsxOutput !== 'object' ||
+          Array.isArray(parsedJsxOutput))
+      ) {
+        throw new Error('jsx-output must be a JSON object.');
+      }
       const { output: result } = compile(fileEntry, format, {
         macroMode: macro,
         preserveKeyOrder: preserveOrder,
+        jsxOutput: parsedJsxOutput,
       });
       console.log(result);
     } catch (error: any) {

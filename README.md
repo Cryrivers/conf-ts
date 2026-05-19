@@ -59,6 +59,9 @@ conf-ts -f yaml src/config.conf.ts
 
 # Macro mode
 conf-ts --macro src/config.conf.ts
+
+# JSX output fields
+conf-ts --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
 ```
 
 The compiled output is printed to stdout.
@@ -221,9 +224,41 @@ export default {
 };
 ```
 
-Each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
+By default, each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
 
-TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
+The JSX output shape can be configured with `jsxOutput`:
+
+```ts
+compile('path/to/index.conf.tsx', 'json', {
+  jsxOutput: {
+    type: '$type',
+    props: false,
+    children: 'children',
+    key: 'key',
+    fragment: 'Fragment',
+  },
+});
+```
+
+With `props: false`, JSX attributes are written at the node root next to the type field:
+
+```tsx
+<input type="text" name="email" />
+// compiles to: { $type: "input", type: "text", name: "email" }
+```
+
+In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `children: false` to reject JSX children entirely; whitespace-only children are ignored.
+
+The runtime in `@conf-ts/macro/jsx-runtime` reads the same option shape from `globalThis.__CONF_TS_JSX_OUTPUT__` when JSX is executed as JavaScript:
+
+```ts
+globalThis.__CONF_TS_JSX_OUTPUT__ = {
+  type: '$type',
+  props: false,
+};
+```
+
+When using the automatic JSX transform, TypeScript emits JSX children as `props.children`; the runtime treats that field as JSX children and applies the configured `children` name or `children: false` behavior. TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
 
 ## Programmatic API
 
@@ -232,7 +267,7 @@ TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` 
 ```ts
 import { compile } from '@conf-ts/compiler';
 
-const { output, dependencies } = compile('path/to/index.conf.ts', 'json', false);
+const { output, dependencies } = compile('path/to/index.conf.ts', 'json');
 // output: string (JSON or YAML)
 // dependencies: string[] of files that were evaluated
 ```
@@ -258,8 +293,11 @@ const { output, dependencies } = compileInMemory(files, '/index.conf.ts', 'json'
 ```ts
 import { compile, compileInMemory } from '@conf-ts/compiler';
 
-compile('path/to/index.conf.ts', 'json', false, { preserveKeyOrder: true });
-compile('path/to/index.conf.ts', 'json', false, { macroMode: true });
+compile('path/to/index.conf.ts', 'json', { preserveKeyOrder: true });
+compile('path/to/index.conf.ts', 'json', { macroMode: true });
+compile('path/to/index.conf.tsx', 'json', {
+  jsxOutput: { type: '$type', props: false },
+});
 
 compileInMemory(
   { '/index.conf.ts': "export default { a: 1, b: 2, c: 3 }" },
@@ -283,9 +321,14 @@ compileInMemory(
 ## Webpack loader
 
 The loader compiles a `.conf.ts` (or any TS entry) and writes a generated file next to it.
+Use `ConfTsJsxOutputPlugin` when runtime JSX code should see the same `jsxOutput` at startup.
 
 ```js
 // webpack.config.js
+const { ConfTsJsxOutputPlugin } = require('@conf-ts/webpack-loader');
+
+const jsxOutput = { type: '$type', props: false };
+
 module.exports = {
   module: {
     rules: [
@@ -297,13 +340,15 @@ module.exports = {
             options: {
               format: 'json',
               extensionToRemove: '.conf.ts',
-              name: '[name].generated.json'
+              name: '[name].generated.json',
+              jsxOutput,
             },
           },
         ],
       },
     ],
   },
+  plugins: [new ConfTsJsxOutputPlugin({ jsxOutput })],
 }
 ```
 
