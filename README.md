@@ -228,7 +228,16 @@ With `props: false`, JSX attributes are written at the node root next to the typ
 
 In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `children: false` to reject JSX children entirely; whitespace-only children are ignored.
 
-TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
+The runtime in `@conf-ts/macro/jsx-runtime` reads the same option shape from `globalThis.__CONF_TS_JSX_OUTPUT__` when JSX is executed as JavaScript:
+
+```ts
+globalThis.__CONF_TS_JSX_OUTPUT__ = {
+  type: '$type',
+  props: false,
+};
+```
+
+When using the automatic JSX transform, TypeScript emits JSX children as `props.children`; the runtime treats that field as JSX children and applies the configured `children` name or `children: false` behavior. TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
 
 ## Programmatic API
 
@@ -291,9 +300,14 @@ compileInMemory(
 ## Webpack loader
 
 The loader compiles a `.conf.ts` (or any TS entry) and writes a generated file next to it.
+Use `ConfTsJsxOutputPlugin` when runtime JSX code should see the same `jsxOutput` at startup.
 
 ```js
 // webpack.config.js
+const { ConfTsJsxOutputPlugin } = require('@conf-ts/webpack-loader');
+
+const jsxOutput = { type: '$type', props: false };
+
 module.exports = {
   module: {
     rules: [
@@ -306,13 +320,14 @@ module.exports = {
               format: 'json',
               extensionToRemove: '.conf.ts',
               name: '[name].generated.json',
-              jsxOutput: { type: '$type', props: false },
+              jsxOutput,
             },
           },
         ],
       },
     ],
   },
+  plugins: [new ConfTsJsxOutputPlugin({ jsxOutput })],
 }
 ```
 

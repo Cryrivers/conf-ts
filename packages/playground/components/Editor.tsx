@@ -222,10 +222,17 @@ export function Editor({
           monaco.languages.typescript.typescriptDefaults.addExtraLib(
             `
             declare module '@conf-ts/macro/jsx-runtime' {
+              export interface JsxOutputOptions {
+                type?: string;
+                props?: string | false;
+                children?: string | false;
+                key?: string;
+                fragment?: string;
+              }
               export const Fragment: string;
               export function jsx(
                 type: string,
-                props: Record<string, any>,
+                props: Record<string, any> | null | undefined,
                 key?: string,
               ): Record<string, any>;
               export const jsxs: typeof jsx;
@@ -235,6 +242,7 @@ export function Editor({
                 interface ElementChildrenAttribute { children: {}; }
               }
             }
+            declare var __CONF_TS_JSX_OUTPUT__: import('@conf-ts/macro/jsx-runtime').JsxOutputOptions | undefined;
             `,
             'file:///node_modules/@conf-ts/macro/jsx-runtime.d.ts',
           );

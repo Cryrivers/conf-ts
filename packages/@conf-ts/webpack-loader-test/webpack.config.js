@@ -1,4 +1,7 @@
 const path = require('path');
+const { ConfTsJsxOutputPlugin } = require('@conf-ts/webpack-loader');
+
+const jsxOutput = { type: '$type', props: false };
 
 module.exports = {
   mode: 'development',
@@ -19,11 +22,13 @@ module.exports = {
           {
             loader: '@conf-ts/webpack-loader',
             options: {
-              extensionToRemove: '.conf.ts'
+              extensionToRemove: '.conf.ts',
+              jsxOutput,
             },
           },
         ],
       },
     ],
   },
+  plugins: [new ConfTsJsxOutputPlugin({ jsxOutput })],
 };

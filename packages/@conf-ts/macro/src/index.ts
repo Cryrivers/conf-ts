@@ -2,6 +2,8 @@ console.warn(
   '@conf-ts/macro has been imported. This package is intended for compile-time macro expansion and should not be directly imported into runtime code.',
 );
 
+export { createElement, type JsxOutputOptions } from './jsx-runtime';
+
 export function String(value: any): string {
   return String(value);
 }
@@ -29,18 +31,4 @@ export function env(key: string): string | undefined;
 export function env(key: string, defaultValue: string): string;
 export function env(key: string, defaultValue?: string): string | undefined {
   return process.env[key] ?? defaultValue;
-}
-
-export function createElement(
-  type: string,
-  props: Record<string, any> | null,
-  ...children: any[]
-): { type: string; props: Record<string, any> } {
-  const p = props ? { ...props } : {};
-  if (children.length === 1) {
-    p.children = children[0];
-  } else if (children.length > 1) {
-    p.children = children;
-  }
-  return { type, props: p };
 }

@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { type compile, type CompileOptions } from '@conf-ts/compiler';
 import Piscina from 'piscina';
-import { LoaderContext } from 'webpack';
+import type { Compiler, LoaderContext } from 'webpack';
 
 interface LoaderOptions extends CompileOptions {
   name?: string;
@@ -10,6 +10,30 @@ interface LoaderOptions extends CompileOptions {
   extensionToRemove?: string;
   macro?: boolean;
   check?: boolean;
+}
+
+export interface ConfTsJsxOutputPluginOptions {
+  jsxOutput?: CompileOptions['jsxOutput'];
+}
+
+export class ConfTsJsxOutputPlugin {
+  private readonly jsxOutput: CompileOptions['jsxOutput'];
+
+  constructor(options: ConfTsJsxOutputPluginOptions = {}) {
+    this.jsxOutput = options.jsxOutput;
+  }
+
+  apply(compiler: Compiler) {
+    const banner = `globalThis.__CONF_TS_JSX_OUTPUT__ = ${JSON.stringify(
+      this.jsxOutput ?? {},
+    )};`;
+
+    new compiler.webpack.BannerPlugin({
+      banner,
+      raw: true,
+      entryOnly: true,
+    }).apply(compiler);
+  }
 }
 
 let piscina: Piscina | null = null;

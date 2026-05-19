@@ -1,0 +1,49 @@
+{
+  "basic": {
+    "$type": "button",
+    "id": "submit",
+    "disabled": true
+  },
+  "withTypeAttr": {
+    "$type": "input",
+    "type": "text",
+    "name": "email"
+  },
+  "spreadAndKey": {
+    "$type": "div",
+    "role": "button",
+    "dataId": "shared",
+    "key": "root"
+  },
+  "singleChild": {
+    "$type": "section",
+    "children": {
+      "$type": "span"
+    }
+  },
+  "multiChild": {
+    "$type": "ul",
+    "children": [
+      {
+        "$type": "li",
+        "children": "a"
+      },
+      {
+        "$type": "li",
+        "children": "b"
+      }
+    ]
+  },
+  "fragment": {
+    "$type": "Fragment",
+    "children": [
+      {
+        "$type": "span"
+      },
+      {
+        "$type": "span",
+        "label": "x"
+      }
+    ]
+  }
+}
