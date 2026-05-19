@@ -334,6 +334,12 @@ jobs:
         shell: bash
         working-directory: packages/@conf-ts/compiler-native
 
+      - name: Build compiler and macro
+        run: |
+          pnpm --filter @conf-ts/macro build
+          pnpm --filter @conf-ts/compiler build
+          pnpm --filter @conf-ts/webpack-loader build
+
       - name: Configure npm registry
         run: |
           echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
@@ -356,11 +362,14 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish native-bindings and compiler-native
+      - name: Publish packages
         if: steps.tag.outputs.tag != 'skip'
         run: |
           pnpm config set provenance true
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/compiler" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/macro" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/webpack-loader" --access public ${{ steps.tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
