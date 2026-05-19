@@ -338,7 +338,7 @@ jobs:
         run: |
           pnpm --filter @conf-ts/macro build
           pnpm --filter @conf-ts/compiler build
-          pnpm --filter @conf-ts/webpack-loader build
+          pnpm --filter @conf-ts/webpack-plugin build
 
       - name: Configure npm registry
         run: |
@@ -366,10 +366,14 @@ jobs:
         if: steps.tag.outputs.tag != 'skip'
         run: |
           pnpm config set provenance true
+          git status
+          git diff
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
+          git status
+          git diff
           pnpm publish -r --filter "@conf-ts/compiler" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro" --access public ${{ steps.tag.outputs.tag }}
-          pnpm publish -r --filter "@conf-ts/webpack-loader" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/webpack-plugin" --access public ${{ steps.tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

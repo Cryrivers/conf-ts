@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/cli",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "CLI for conf-ts.",
   "repository": {
     "type": "git",
