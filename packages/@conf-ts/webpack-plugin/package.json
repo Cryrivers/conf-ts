@@ -1,7 +1,7 @@
 {
-  "name": "@conf-ts/webpack-loader",
+  "name": "@conf-ts/webpack-plugin",
   "version": "0.0.4",
-  "description": "Webpack loader for conf-ts",
+  "description": "Webpack plugin for conf-ts",
   "repository": {
     "type": "git",
     "url": "https://github.com/Cryrivers/conf-ts"
@@ -16,6 +16,9 @@
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
     "piscina": "^5.1.4"
+  },
+  "optionalDependencies": {
+    "@conf-ts/compiler-native": "workspace:*"
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",

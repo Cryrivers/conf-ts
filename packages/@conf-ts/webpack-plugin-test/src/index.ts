@@ -6,7 +6,7 @@ if (
   runtimeJsxOutput.type !== '$type' ||
   runtimeJsxOutput.props !== false
 ) {
-  throw new Error('ConfTsJsxOutputPlugin did not inject jsxOutput');
+  throw new Error('ConfTsWebpackPlugin did not inject jsxOutput');
 }
 
 console.log(JSON.stringify({ config, runtimeJsxOutput }, null, 2));

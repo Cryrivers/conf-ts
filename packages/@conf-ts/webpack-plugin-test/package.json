@@ -1,8 +1,8 @@
 {
-  "name": "@conf-ts/webpack-loader-test",
+  "name": "@conf-ts/webpack-plugin-test",
   "version": "1.0.0",
   "private": true,
-  "description": "A mini webpack project to test @conf-ts/webpack-loader",
+  "description": "A mini webpack project to test @conf-ts/webpack-plugin",
   "main": "dist/index.js",
   "scripts": {
     "build": "webpack --config webpack.config.js"
@@ -17,6 +17,6 @@
     "webpack-cli": "^7.0.2"
   },
   "dependencies": {
-    "@conf-ts/webpack-loader": "workspace:^"
+    "@conf-ts/webpack-plugin": "workspace:^"
   }
 }

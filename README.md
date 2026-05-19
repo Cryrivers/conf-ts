@@ -19,7 +19,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
 - `@conf-ts/macro`: Macro functions and JSX runtime available in macro mode
-- `@conf-ts/webpack-loader`: Webpack loader that emits generated JSON/YAML files
+- `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
 
 ### Performance: JS vs compiler-native
 
@@ -318,39 +318,36 @@ compileInMemory(
 );
 ```
 
-## Webpack loader
+## Webpack plugin
 
-The loader compiles a `.conf.ts` (or any TS entry) and writes a generated file next to it.
-Use `ConfTsJsxOutputPlugin` when runtime JSX code should see the same `jsxOutput` at startup.
+`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file, emits the generated JSON/YAML as a webpack asset (under `output.path`), and injects `globalThis.__CONF_TS_JSX_OUTPUT__` so any runtime JSX in the same bundle sees the same `jsxOutput`. Add the plugin once — no separate `module.rules` entry is needed.
 
 ```js
 // webpack.config.js
-const { ConfTsJsxOutputPlugin } = require('@conf-ts/webpack-loader');
-
-const jsxOutput = { type: '$type', props: false };
+const { ConfTsWebpackPlugin } = require('@conf-ts/webpack-plugin');
 
 module.exports = {
-  module: {
-    rules: [
-      {
-        test: /\.conf\.ts$/,
-        use: [
-          {
-            loader: '@conf-ts/webpack-loader',
-            options: {
-              format: 'json',
-              extensionToRemove: '.conf.ts',
-              name: '[name].generated.json',
-              jsxOutput,
-            },
-          },
-        ],
-      },
-    ],
-  },
-  plugins: [new ConfTsJsxOutputPlugin({ jsxOutput })],
-}
+  plugins: [
+    new ConfTsWebpackPlugin({
+      // All options are optional.
+      test: /\.conf\.ts$/,            // default
+      extensionToRemove: '.conf.ts',  // default
+      format: 'json',                 // 'json' | 'yaml'
+      name: '[name].generated.json',  // see template tokens below
+      jsxOutput: { type: '$type', props: false },
+      macro: false,
+      preserveKeyOrder: false,
+      check: false,                   // verify-only mode for CI; reads sidecar file next to source
+      useWorkers: true,               // off-thread compile via piscina; set false for small builds
+      compiler: 'auto',               // 'auto' | 'native' | 'js' — 'auto' prefers @conf-ts/compiler-native if available
+    }),
+  ],
+};
 ```
+
+`name` supports the following tokens: `[name]` (source basename without `extensionToRemove`), `[ext]` (source extension), and `[path]` (directory relative to webpack `context`). In `check` mode, `[path]` resolves to an empty string — the file is always looked up next to its source.
+
+With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
 
 ## Supported TypeScript
 
