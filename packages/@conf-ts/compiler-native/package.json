@@ -1,7 +1,11 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Native Rust compiler for conf-ts.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cryrivers/conf-ts"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
