@@ -35,9 +35,22 @@ fn module_export_name_to_string(name: &ModuleExportName) -> String {
   }
 }
 
-fn set_object_prop(map: &mut Vec<(String, Value)>, key: String, value: Value) {
-  map.retain(|(k, _)| k != &key);
-  map.push((key, value));
+fn set_object_prop(
+  map: &mut Vec<(String, Value)>,
+  key: String,
+  value: Value,
+  preserve_key_order: bool,
+) {
+  if preserve_key_order {
+    if let Some(entry) = map.iter_mut().find(|(k, _)| k == &key) {
+      entry.1 = value;
+      return;
+    }
+    map.push((key, value));
+  } else {
+    map.retain(|(k, _)| k != &key);
+    map.push((key, value));
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -188,12 +201,13 @@ fn enum_object_from_decl(enum_decl: &TsEnumDecl, file_path: &str, ctx: &mut Eval
       };
       let full_name = format!("{}.{}", enum_name, member_name);
       if let Some(value) = file_enums.get(&full_name) {
-        set_object_prop(&mut forward, member_name.clone(), value.clone());
+        set_object_prop(&mut forward, member_name.clone(), value.clone(), false);
         if let Value::Number(n) = value {
           set_object_prop(
             &mut reverse,
             Value::number(n.value).to_display_string(),
             Value::String(member_name),
+            false,
           );
         }
       }
@@ -271,13 +285,13 @@ pub fn evaluate(
             Prop::KeyValue(kv) => {
               let key = eval_prop_name(&kv.key, file_ctx, ctx, local_context, options)?;
               let val = evaluate(&kv.value, file_ctx, ctx, local_context, options)?;
-              set_object_prop(&mut map, key, val);
+              set_object_prop(&mut map, key, val, options.preserve_key_order);
             }
             Prop::Shorthand(ident) => {
               let name = ident_name(ident).to_string();
               if let Some(lc) = local_context {
                 if let Some(val) = lc.get(&name) {
-                  set_object_prop(&mut map, name, val.clone());
+                  set_object_prop(&mut map, name, val.clone(), options.preserve_key_order);
                   continue;
                 }
               }
@@ -291,7 +305,7 @@ pub fn evaluate(
                 line,
                 character,
               )?;
-              set_object_prop(&mut map, name, val);
+              set_object_prop(&mut map, name, val, options.preserve_key_order);
             }
             _ => {}
           },
@@ -299,7 +313,7 @@ pub fn evaluate(
             let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
             if let Value::Object(spread_map) = val {
               for (k, v) in spread_map {
-                set_object_prop(&mut map, k, v);
+                set_object_prop(&mut map, k, v, options.preserve_key_order);
               }
             }
           }
@@ -1180,7 +1194,12 @@ fn exported_values(
     match item {
       ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) => {
         let val = evaluate(&export.expr, file_ctx, ctx, None, options)?;
-        set_object_prop(&mut exports, "default".to_string(), val);
+        set_object_prop(
+          &mut exports,
+          "default".to_string(),
+          val,
+          options.preserve_key_order,
+        );
       }
       ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => match &export_decl.decl {
         Decl::Var(var_decl) => {
@@ -1188,7 +1207,7 @@ fn exported_values(
             if let Pat::Ident(ident) = &decl.name {
               let name = ident_name(&ident.id).to_string();
               if let Some(val) = resolve_declared_in_file(&name, file_ctx, ctx, None, options)? {
-                set_object_prop(&mut exports, name, val);
+                set_object_prop(&mut exports, name, val, options.preserve_key_order);
               }
             }
           }
@@ -1196,7 +1215,7 @@ fn exported_values(
         Decl::TsEnum(enum_decl) => {
           let name = enum_decl.id.sym.as_str().to_string();
           let val = enum_object_from_decl(enum_decl.as_ref(), &file_ctx.file_path, ctx);
-          set_object_prop(&mut exports, name, val);
+          set_object_prop(&mut exports, name, val, options.preserve_key_order);
         }
         _ => {}
       },
@@ -1220,7 +1239,7 @@ fn exported_values(
               resolve_declared_in_file(&original_name, file_ctx, ctx, None, options)?
             };
             if let Some(val) = val {
-              set_object_prop(&mut exports, exported_name, val);
+              set_object_prop(&mut exports, exported_name, val, options.preserve_key_order);
             }
           }
         }
@@ -1231,7 +1250,7 @@ fn exported_values(
         {
           for (key, val) in exported_values(&imported_ctx, ctx, options)? {
             if key != "default" {
-              set_object_prop(&mut exports, key, val);
+              set_object_prop(&mut exports, key, val, options.preserve_key_order);
             }
           }
         }
@@ -1811,14 +1830,24 @@ fn create_jsx_node(
     assert_no_flat_jsx_prop_collision(&attrs.props, &jsx_output, file_ctx, pos)?;
     let mut output = vec![(jsx_output.type_name, Value::String(type_name))];
     for (key, value) in attrs.props {
-      set_object_prop(&mut output, key, value);
+      set_object_prop(&mut output, key, value, options.preserve_key_order);
     }
     if let Some(key_value) = attrs.key {
-      set_object_prop(&mut output, jsx_output.key, key_value);
+      set_object_prop(
+        &mut output,
+        jsx_output.key,
+        key_value,
+        options.preserve_key_order,
+      );
     }
     if !children.is_empty() {
       if let Some(children_name) = jsx_output.children {
-        set_object_prop(&mut output, children_name, jsx_child_value(children));
+        set_object_prop(
+          &mut output,
+          children_name,
+          jsx_child_value(children),
+          options.preserve_key_order,
+        );
       }
     }
     return Ok(Value::Object(output));
@@ -1826,11 +1855,21 @@ fn create_jsx_node(
 
   let mut props = attrs.props;
   if let Some(key_value) = attrs.key {
-    set_object_prop(&mut props, jsx_output.key, key_value);
+    set_object_prop(
+      &mut props,
+      jsx_output.key,
+      key_value,
+      options.preserve_key_order,
+    );
   }
   if !children.is_empty() {
     if let Some(children_name) = &jsx_output.children {
-      set_object_prop(&mut props, children_name.clone(), jsx_child_value(children));
+      set_object_prop(
+        &mut props,
+        children_name.clone(),
+        jsx_child_value(children),
+        options.preserve_key_order,
+      );
     }
   }
 
@@ -1953,14 +1992,14 @@ fn evaluate_jsx_attributes(
         if name == "key" {
           key = Some(value);
         } else {
-          set_object_prop(&mut props, name, value);
+          set_object_prop(&mut props, name, value, options.preserve_key_order);
         }
       }
       JSXAttrOrSpread::SpreadElement(spread) => {
         let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
         if let Value::Object(spread_map) = val {
           for (k, v) in spread_map {
-            set_object_prop(&mut props, k, v);
+            set_object_prop(&mut props, k, v, options.preserve_key_order);
           }
         }
       }
@@ -1968,7 +2007,7 @@ fn evaluate_jsx_attributes(
   }
   if let Some(value) = key.take() {
     if jsx_output.props.is_some() {
-      set_object_prop(&mut props, jsx_output.key, value);
+      set_object_prop(&mut props, jsx_output.key, value, options.preserve_key_order);
       return Ok(EvaluatedJsxAttributes { props, key: None });
     }
     key = Some(value);

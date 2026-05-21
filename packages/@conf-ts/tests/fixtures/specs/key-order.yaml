@@ -15,3 +15,12 @@ override:
   c: 41
   d: 51
   e: 61
+partial:
+  a: 1
+  b: new
+  c: 3
+nested:
+  outer:
+    x: 1
+    y: new
+    z: 3

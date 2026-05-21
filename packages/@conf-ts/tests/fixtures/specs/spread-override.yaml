@@ -1,0 +1,9 @@
+partial:
+  a: 1
+  c: 3
+  b: new
+nested:
+  outer:
+    x: 1
+    z: 3
+    y: new

@@ -26,6 +26,22 @@ function getNodeLocation(sourceFile: ts.SourceFile, node: ts.Node) {
   };
 }
 
+function setObjectProp(
+  obj: { [key: string]: any },
+  key: string,
+  value: any,
+  preserveKeyOrder: boolean | undefined,
+) {
+  if (preserveKeyOrder) {
+    obj[key] = value;
+  } else {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      delete obj[key];
+    }
+    obj[key] = value;
+  }
+}
+
 function validateJsxName(
   value: unknown,
   field: string,
@@ -245,6 +261,7 @@ function evaluateJsxAttributes(
   options?: CompileOptions,
 ): EvaluatedJsxAttributes {
   const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, attributes);
+  const preserveKeyOrder = options?.preserveKeyOrder;
   const props: { [key: string]: any } = {};
   let key: any;
   let hasKey = false;
@@ -258,7 +275,7 @@ function evaluateJsxAttributes(
           key = value;
           hasKey = true;
         } else {
-          props[name] = value;
+          setObjectProp(props, name, value, preserveKeyOrder);
         }
       };
       if (!attr.initializer) {
@@ -295,12 +312,14 @@ function evaluateJsxAttributes(
         options,
       );
       if (spreadObj && typeof spreadObj === 'object') {
-        Object.assign(props, spreadObj);
+        for (const k of Object.keys(spreadObj)) {
+          setObjectProp(props, k, spreadObj[k], preserveKeyOrder);
+        }
       }
     }
   }
   if (hasKey && jsxOutput.props !== false) {
-    props[jsxOutput.key] = key;
+    setObjectProp(props, jsxOutput.key, key, preserveKeyOrder);
     return { props, hasKey: false };
   }
   return { props, key, hasKey };
@@ -340,26 +359,39 @@ function createJsxNode(
   options?: CompileOptions,
 ) {
   const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, node);
+  const preserveKeyOrder = options?.preserveKeyOrder;
 
   if (jsxOutput.props === false) {
     assertNoFlatJsxPropCollision(attrs.props, jsxOutput, sourceFile, node);
     const output: { [key: string]: any } = { [jsxOutput.type]: type };
-    Object.assign(output, attrs.props);
+    for (const k of Object.keys(attrs.props)) {
+      setObjectProp(output, k, attrs.props[k], preserveKeyOrder);
+    }
     if (attrs.hasKey) {
-      output[jsxOutput.key] = attrs.key;
+      setObjectProp(output, jsxOutput.key, attrs.key, preserveKeyOrder);
     }
     if (children.length > 0 && jsxOutput.children !== false) {
-      output[jsxOutput.children] = jsxChildValue(children);
+      setObjectProp(
+        output,
+        jsxOutput.children,
+        jsxChildValue(children),
+        preserveKeyOrder,
+      );
     }
     return output;
   }
 
   const props = { ...attrs.props };
   if (attrs.hasKey) {
-    props[jsxOutput.key] = attrs.key;
+    setObjectProp(props, jsxOutput.key, attrs.key, preserveKeyOrder);
   }
   if (children.length > 0 && jsxOutput.children !== false) {
-    props[jsxOutput.children] = jsxChildValue(children);
+    setObjectProp(
+      props,
+      jsxOutput.children,
+      jsxChildValue(children),
+      preserveKeyOrder,
+    );
   }
 
   return {
@@ -847,6 +879,7 @@ export function evaluate(
     return null;
   } else if (ts.isObjectLiteralExpression(expression)) {
     const obj: { [key: string]: any } = {};
+    const preserveKeyOrder = options?.preserveKeyOrder;
     expression.properties.forEach(prop => {
       if (ts.isPropertyAssignment(prop)) {
         const name = getPropertyNameText(
@@ -860,7 +893,7 @@ export function evaluate(
           context,
           options,
         );
-        obj[name] = evaluate(
+        const value = evaluate(
           prop.initializer,
           sourceFile,
           typeChecker,
@@ -871,6 +904,7 @@ export function evaluate(
           context,
           options,
         );
+        setObjectProp(obj, name, value, preserveKeyOrder);
       } else if (ts.isShorthandPropertyAssignment(prop)) {
         const name = prop.name.getText(sourceFile);
         const shorthandSymbol =
@@ -886,7 +920,7 @@ export function evaluate(
             ts.isVariableDeclaration(resolvedSymbol.valueDeclaration) &&
             resolvedSymbol.valueDeclaration.initializer
           ) {
-            obj[name] = evaluate(
+            const value = evaluate(
               resolvedSymbol.valueDeclaration.initializer,
               resolvedSymbol.valueDeclaration.getSourceFile(),
               typeChecker,
@@ -897,11 +931,12 @@ export function evaluate(
               context,
               options,
             );
+            setObjectProp(obj, name, value, preserveKeyOrder);
           } else if (
             resolvedSymbol.valueDeclaration &&
             ts.isBindingElement(resolvedSymbol.valueDeclaration)
           ) {
-            obj[name] = resolveBindingElementValue(
+            const value = resolveBindingElementValue(
               name,
               resolvedSymbol.valueDeclaration,
               sourceFile,
@@ -913,11 +948,12 @@ export function evaluate(
               context,
               options,
             );
+            setObjectProp(obj, name, value, preserveKeyOrder);
           } else if (
             resolvedSymbol.valueDeclaration &&
             ts.isEnumDeclaration(resolvedSymbol.valueDeclaration)
           ) {
-            obj[name] = evaluateEnumDeclaration(
+            const value = evaluateEnumDeclaration(
               resolvedSymbol.valueDeclaration,
               typeChecker,
               enumMap,
@@ -926,6 +962,7 @@ export function evaluate(
               evaluatedFiles,
               options,
             );
+            setObjectProp(obj, name, value, preserveKeyOrder);
           } else {
             throw new ConfTSError(
               `Could not resolve shorthand property '${name}' because its declaration is not a variable or has no initializer.`,
@@ -959,12 +996,10 @@ export function evaluate(
           context,
           options,
         );
-        if (options?.preserveKeyOrder) {
-          for (const k of Object.keys(spreadObj || {})) {
-            obj[k] = spreadObj[k];
+        if (spreadObj && typeof spreadObj === 'object') {
+          for (const k of Object.keys(spreadObj)) {
+            setObjectProp(obj, k, spreadObj[k], preserveKeyOrder);
           }
-        } else {
-          Object.assign(obj, spreadObj);
         }
       }
     });

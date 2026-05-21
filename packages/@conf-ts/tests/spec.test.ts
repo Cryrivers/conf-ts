@@ -102,6 +102,10 @@ describe('Spec Test', () => {
     assertSpecOutput('key-order', { preserveKeyOrder: true });
   });
 
+  it('should move overridden keys to the end by default (no preserveKeyOrder)', () => {
+    assertSpecOutput('spread-override');
+  });
+
   it('should handle element access on arrays and objects', () => {
     assertSpecOutput('element-access');
   });
