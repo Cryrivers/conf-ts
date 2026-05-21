@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/tests",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "private": true,
   "description": "Shared tests and fixtures for conf-ts compilers",
   "scripts": {
@@ -15,11 +15,11 @@
   "devDependencies": {
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@vitest/ui": "4.1.6",
+    "@vitest/ui": "4.1.7",
     "prettier": "^3.8.3",
-    "tinybench": "^6.0.1",
-    "tsx": "^4.21.0",
-    "vitest": "^4.1.6",
+    "tinybench": "^6.0.2",
+    "tsx": "^4.22.3",
+    "vitest": "^4.1.7",
     "yaml": "^2.9.0"
   }
 }

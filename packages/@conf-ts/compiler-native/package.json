@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Native Rust compiler for conf-ts.",
   "repository": {
     "type": "git",
@@ -47,9 +47,9 @@
     "@types/node": "^25.7.0",
     "oxlint": "^1.64.0",
     "prettier": "^3.8.3",
-    "tinybench": "^6.0.1",
-    "tsx": "^4.21.0",
-    "vitest": "^4.1.6",
+    "tinybench": "^6.0.2",
+    "tsx": "^4.22.3",
+    "vitest": "^4.1.7",
     "yaml": "^2.9.0"
   },
   "optionalDependencies": {

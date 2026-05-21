@@ -2007,7 +2007,12 @@ fn evaluate_jsx_attributes(
   }
   if let Some(value) = key.take() {
     if jsx_output.props.is_some() {
-      set_object_prop(&mut props, jsx_output.key, value, options.preserve_key_order);
+      set_object_prop(
+        &mut props,
+        jsx_output.key,
+        value,
+        options.preserve_key_order,
+      );
       return Ok(EvaluatedJsxAttributes { props, key: None });
     }
     key = Some(value);

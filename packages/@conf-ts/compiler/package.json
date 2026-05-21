@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Compiler for conf-ts.",
   "repository": {
     "type": "git",
@@ -34,6 +34,6 @@
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/node": "^25.7.0",
     "prettier": "^3.8.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.7"
   }
 }
