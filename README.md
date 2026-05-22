@@ -320,7 +320,7 @@ compileInMemory(
 
 ## Webpack plugin
 
-`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file, emits the generated JSON/YAML as a webpack asset (under `output.path`), and injects `globalThis.__CONF_TS_JSX_OUTPUT__` so any runtime JSX in the same bundle sees the same `jsxOutput`. Add the plugin once — no separate `module.rules` entry is needed.
+`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file, writes the generated JSON/YAML next to the source file by default, and injects `globalThis.__CONF_TS_JSX_OUTPUT__` so any runtime JSX in the same bundle sees the same `jsxOutput`. Add the plugin once — no separate `module.rules` entry is needed.
 
 ```js
 // webpack.config.js
@@ -330,10 +330,10 @@ module.exports = {
   plugins: [
     new ConfTsWebpackPlugin({
       // All options are optional.
-      test: /\.conf\.ts$/,            // default
-      extensionToRemove: '.conf.ts',  // default
+      test: /\.conf\.ts$/,            // default; use /\.conf\.tsx?$/ for TS + TSX
+      extensionToRemove: '.conf.ts',  // default; can also be ['.conf.ts', '.conf.tsx']
       format: 'json',                 // 'json' | 'yaml'
-      name: '[name].generated.json',  // see template tokens below
+      name: '[path][name].generated.json',  // default; see template tokens below
       jsxOutput: { type: '$type', props: false },
       macro: false,
       preserveKeyOrder: false,
@@ -345,7 +345,16 @@ module.exports = {
 };
 ```
 
-`name` supports the following tokens: `[name]` (source basename without `extensionToRemove`), `[ext]` (source extension), and `[path]` (directory relative to webpack `context`). In `check` mode, `[path]` resolves to an empty string — the file is always looked up next to its source.
+`extensionToRemove` accepts either a string or an array of strings. When you broaden `test`, pass every suffix that should be stripped:
+
+```js
+new ConfTsWebpackPlugin({
+  test: /\.conf\.tsx?$/,
+  extensionToRemove: ['.conf.ts', '.conf.tsx'],
+});
+```
+
+`name` supports the following tokens: `[name]` (source basename without the longest matching `extensionToRemove` value), `[ext]` (source extension), and `[path]` (directory relative to webpack/rspack `context`). The default is `[path][name].generated.${format}` so generated files are written beside their source files, not under `output.path`. `check` mode resolves the same path and verifies the generated file without writing it.
 
 With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
 

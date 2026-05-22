@@ -11,6 +11,7 @@
   "scripts": {
     "build": "pnpm run build:cjs",
     "build:cjs": "tsc -p tsconfig.cjs.json",
+    "test": "vitest run",
     "format": "prettier --write ."
   },
   "dependencies": {

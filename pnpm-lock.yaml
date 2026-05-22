@@ -112,16 +112,6 @@ importers:
         specifier: workspace:*
         version: link:npm/win32-x64-msvc
 
-  packages/@conf-ts/compiler-native/npm/darwin-arm64: {}
-
-  packages/@conf-ts/compiler-native/npm/darwin-x64: {}
-
-  packages/@conf-ts/compiler-native/npm/linux-x64-gnu: {}
-
-  packages/@conf-ts/compiler-native/npm/linux-x64-musl: {}
-
-  packages/@conf-ts/compiler-native/npm/win32-x64-msvc: {}
-
   packages/@conf-ts/macro:
     devDependencies:
       '@ianvs/prettier-plugin-sort-imports':

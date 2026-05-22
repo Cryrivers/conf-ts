@@ -9,7 +9,7 @@ import { resolveCompile, type CompilerPreference } from './worker';
 export interface LoaderOptions extends CompileOptions {
   name?: string;
   format?: 'json' | 'yaml';
-  extensionToRemove?: string;
+  extensionToRemove?: string | string[];
   macro?: boolean;
   check?: boolean;
   useWorkers?: boolean;
@@ -23,20 +23,61 @@ interface CompileResult {
   dependencies: string[];
 }
 
-function interpolate(
+export function normalizeExtensionToRemove(
+  extensionToRemove: string | string[],
+): string[] {
+  return Array.isArray(extensionToRemove)
+    ? extensionToRemove
+    : [extensionToRemove];
+}
+
+function toPosixPath(value: string): string {
+  return value.split(path.sep).join(path.posix.sep);
+}
+
+function stripMatchingExtension(
+  resourcePath: string,
+  extensionsToRemove: string[],
+): string {
+  const matchedExtension = extensionsToRemove
+    .filter(extension => extension && resourcePath.endsWith(extension))
+    .sort((a, b) => b.length - a.length)[0];
+
+  if (!matchedExtension) {
+    return path.basename(resourcePath);
+  }
+
+  return path.basename(resourcePath.slice(0, -matchedExtension.length));
+}
+
+export function interpolate(
   template: string,
   resourcePath: string,
   rootDir: string,
-  extToRemove: string,
+  extensionsToRemove: string[],
 ): string {
-  const baseName = path.basename(resourcePath, extToRemove);
+  const baseName = stripMatchingExtension(resourcePath, extensionsToRemove);
   const ext = path.extname(resourcePath).replace(/^\./, '');
-  const relDir = path.relative(rootDir, path.dirname(resourcePath));
+  const relDir = toPosixPath(
+    path.relative(rootDir, path.dirname(resourcePath)),
+  );
 
   return template
     .replace(/\[name\]/g, baseName)
     .replace(/\[ext\]/g, ext)
-    .replace(/\[path\]/g, relDir ? relDir + path.sep : '');
+    .replace(/\[path\]/g, relDir ? relDir + path.posix.sep : '');
+}
+
+export function resolveGeneratedPath(
+  template: string,
+  resourcePath: string,
+  rootDir: string,
+  extensionsToRemove: string[],
+): string {
+  return path.join(
+    rootDir,
+    interpolate(template, resourcePath, rootDir, extensionsToRemove),
+  );
 }
 
 function toWebpackError(err: unknown): Error {
@@ -72,7 +113,9 @@ export default async function (
   const callback = this.async();
   const options = this.getOptions();
   const format = options.format ?? 'json';
-  const extToRemove = options.extensionToRemove ?? '';
+  const extensionsToRemove = normalizeExtensionToRemove(
+    options.extensionToRemove ?? '.conf.ts',
+  );
   const useWorkers = options.useWorkers !== false;
   const compilerPref: CompilerPreference = options.compiler ?? 'auto';
 
@@ -111,20 +154,19 @@ export default async function (
       this.addDependency(dep);
     }
 
-    const template = options.name ?? `[name].generated.${format}`;
+    const template = options.name ?? `[path][name].generated.${format}`;
+    const generatedPath = resolveGeneratedPath(
+      template,
+      this.resourcePath,
+      this.rootContext,
+      extensionsToRemove,
+    );
 
     if (options.check) {
-      const sidecarName = interpolate(
-        template,
-        this.resourcePath,
-        path.dirname(this.resourcePath),
-        extToRemove,
-      );
-      const checkPath = path.join(path.dirname(this.resourcePath), sidecarName);
       try {
-        const existing = await fs.readFile(checkPath, 'utf8');
+        const existing = await fs.readFile(generatedPath, 'utf8');
         if (existing !== result.output) {
-          throw new Error(`Generated output mismatch: ${checkPath}`);
+          throw new Error(`Generated output mismatch: ${generatedPath}`);
         }
       } catch (err: unknown) {
         if (
@@ -132,18 +174,13 @@ export default async function (
           typeof err === 'object' &&
           (err as NodeJS.ErrnoException).code === 'ENOENT'
         ) {
-          throw new Error(`Generated file not found: ${checkPath}`);
+          throw new Error(`Generated file not found: ${generatedPath}`);
         }
         throw err;
       }
     } else {
-      const emittedName = interpolate(
-        template,
-        this.resourcePath,
-        this.rootContext,
-        extToRemove,
-      );
-      this.emitFile(emittedName, result.output);
+      await fs.mkdir(path.dirname(generatedPath), { recursive: true });
+      await fs.writeFile(generatedPath, result.output);
     }
 
     callback(null, source);

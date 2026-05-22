@@ -12,7 +12,7 @@ export interface ConfTsWebpackPluginOptions {
   exclude?: RuleSetCondition;
   format?: 'json' | 'yaml';
   name?: string;
-  extensionToRemove?: string;
+  extensionToRemove?: string | string[];
   macro?: boolean;
   preserveKeyOrder?: boolean;
   jsxOutput?: CompileOptions['jsxOutput'];
@@ -53,11 +53,18 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   }
   if (
     options.extensionToRemove !== undefined &&
-    typeof options.extensionToRemove !== 'string'
+    typeof options.extensionToRemove !== 'string' &&
+    !Array.isArray(options.extensionToRemove)
   ) {
     reject(
-      `extensionToRemove must be a string, got ${typeof options.extensionToRemove}`,
+      `extensionToRemove must be a string or an array of strings, got ${typeof options.extensionToRemove}`,
     );
+  }
+  if (
+    Array.isArray(options.extensionToRemove) &&
+    options.extensionToRemove.some(value => typeof value !== 'string')
+  ) {
+    reject('extensionToRemove must be a string or an array of strings');
   }
   if (
     options.jsxOutput !== undefined &&
