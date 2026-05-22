@@ -2,36 +2,56 @@
   "name": "@conf-ts/macro",
   "version": "0.0.6",
   "description": "Macros for conf-ts.",
+  "type": "commonjs",
   "repository": {
     "type": "git",
     "url": "https://github.com/Cryrivers/conf-ts"
   },
-  "main": "dist/cjs/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/cjs/index.d.ts",
-      "require": "./dist/cjs/index.js"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./jsx-runtime": {
-      "types": "./dist/cjs/jsx-runtime.d.ts",
-      "require": "./dist/cjs/jsx-runtime.js"
+      "import": {
+        "types": "./dist/jsx-runtime.d.mts",
+        "default": "./dist/jsx-runtime.mjs"
+      },
+      "require": {
+        "types": "./dist/jsx-runtime.d.cts",
+        "default": "./dist/jsx-runtime.cjs"
+      }
     },
     "./jsx-dev-runtime": {
-      "types": "./dist/cjs/jsx-dev-runtime.d.ts",
-      "require": "./dist/cjs/jsx-dev-runtime.js"
+      "import": {
+        "types": "./dist/jsx-dev-runtime.d.mts",
+        "default": "./dist/jsx-dev-runtime.mjs"
+      },
+      "require": {
+        "types": "./dist/jsx-dev-runtime.d.cts",
+        "default": "./dist/jsx-dev-runtime.cjs"
+      }
     }
   },
-  "types": "dist/cjs/index.d.ts",
   "scripts": {
-    "build": "pnpm run build:cjs",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build": "tsdown",
     "format": "prettier --write ."
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.1",
     "@types/webpack-env": "^1.18.8",
     "prettier": "^3.8.3",
+    "tsdown": "^0.22.0",
     "typescript": "^6.0.3"
   }
 }

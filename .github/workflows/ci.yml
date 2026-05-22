@@ -370,6 +370,7 @@ jobs:
         if: steps.tag.outputs.tag != 'skip'
         run: |
           pnpm config set provenance true
+          pnpm config set git-checks false
           git status
           git diff
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}

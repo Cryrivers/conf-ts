@@ -32,7 +32,7 @@
   "devDependencies": {
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.1",
     "prettier": "^3.8.3",
     "vitest": "^4.1.7"
   }

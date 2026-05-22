@@ -7,6 +7,9 @@ allowBuilds:
   esbuild: true
   sharp: true
 
+minimumReleaseAgeExclude:
+  - webpack@5.107.1
+
 onlyBuiltDependencies:
   - esbuild
   - sharp
