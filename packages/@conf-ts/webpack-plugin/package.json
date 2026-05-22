@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/webpack-plugin",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Webpack plugin for conf-ts",
   "repository": {
     "type": "git",
