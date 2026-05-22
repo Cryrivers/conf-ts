@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Native Rust compiler for conf-ts.",
   "repository": {
     "type": "git",
