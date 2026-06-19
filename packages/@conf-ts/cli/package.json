@@ -2,22 +2,22 @@
   "name": "@conf-ts/cli",
   "version": "0.0.8",
   "description": "CLI for conf-ts.",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/Cryrivers/conf-ts"
   },
-  "main": "dist/cjs/index.js",
+  "main": "dist/index.js",
   "exports": {
     ".": {
-      "types": "./dist/cjs/index.d.ts",
-      "require": "./dist/cjs/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
-  "types": "dist/cjs/index.d.ts",
+  "types": "dist/index.d.ts",
   "scripts": {
-    "build": "pnpm run build:cjs",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
-    "start": "node dist/cjs/index.js",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "start": "node dist/index.js",
     "format": "prettier --write ."
   },
   "dependencies": {

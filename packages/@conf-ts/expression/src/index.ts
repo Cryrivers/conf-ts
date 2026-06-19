@@ -91,5 +91,6 @@ function expression<
 
 export default expression;
 export { parse, tokenize };
+export { rewriteContextExpression } from './rewrite';
 export type * from './ast/types';
 export type { Expr, RuntimeEnv };

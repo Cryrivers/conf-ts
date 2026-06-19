@@ -6,5 +6,6 @@ export const MACRO_FUNCTIONS = [
   'arrayFilter',
   'arrayFlatMap',
   'env',
+  'expr',
 ] as const;
 export const MACRO_PACKAGE = '@conf-ts/macro';
