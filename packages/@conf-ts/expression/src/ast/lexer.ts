@@ -2,8 +2,15 @@ import { formatInvalid, raiseInvalid } from '../errors';
 import type { Token } from './types';
 
 const isDigit = (ch: string) => ch >= '0' && ch <= '9';
-const isHex = (ch: string) => (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
-const isIdentStart = (ch: string) => ch === '_' || ch === '$' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+const isHex = (ch: string) =>
+  (ch >= '0' && ch <= '9') ||
+  (ch >= 'a' && ch <= 'f') ||
+  (ch >= 'A' && ch <= 'F');
+const isIdentStart = (ch: string) =>
+  ch === '_' ||
+  ch === '$' ||
+  (ch >= 'a' && ch <= 'z') ||
+  (ch >= 'A' && ch <= 'Z');
 const isIdentPart = (ch: string) => isIdentStart(ch) || isDigit(ch);
 
 const punctuators = new Set(['(', ')', '[', ']', '{', '}', ',', ':', '.', '?']);
@@ -25,7 +32,14 @@ const eof = (st: LexerState) => st.pos >= st.input.length;
 const skipWhitespace = (st: LexerState) => {
   while (!eof(st)) {
     const ch = peek(st);
-    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\v' || ch === '\f') {
+    if (
+      ch === ' ' ||
+      ch === '\t' ||
+      ch === '\n' ||
+      ch === '\r' ||
+      ch === '\v' ||
+      ch === '\f'
+    ) {
       st.pos++;
     } else {
       break;
@@ -150,7 +164,11 @@ const readTemplate = (st: LexerState): Token => {
         kind: 'template',
         value: '',
         pos: startPos,
-        template: { quasis: cookedChunks, rawQuasis: rawChunks, expressionsSrc: exprSrcs },
+        template: {
+          quasis: cookedChunks,
+          rawQuasis: rawChunks,
+          expressionsSrc: exprSrcs,
+        },
       };
     }
     if (ch === '\\') {
@@ -273,7 +291,9 @@ const readTemplate = (st: LexerState): Token => {
       }
       // if loop ended without closing '}', it's malformed
       if (depth !== 0) {
-        throw new Error(formatInvalid(st.input, 'unterminated template expression'));
+        throw new Error(
+          formatInvalid(st.input, 'unterminated template expression'),
+        );
       }
       continue;
     }

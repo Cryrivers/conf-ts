@@ -5,7 +5,9 @@ import expression from '../src';
 describe('performance benchmarks', () => {
   test('micro benchmark: compile and evaluate', () => {
     const startCompile = performance.now();
-    const fns = Array.from({ length: 100 }, (_, i) => expression(`a + ${i} * 2 - (c / 3)`));
+    const fns = Array.from({ length: 100 }, (_, i) =>
+      expression(`a + ${i} * 2 - (c / 3)`),
+    );
     const compileMs = performance.now() - startCompile;
 
     const startEval = performance.now();
@@ -27,7 +29,14 @@ describe('performance benchmarks', () => {
       (_, i) => `
 ${i}`,
     );
-    const tpl = '`' + ['start', ...parts.map((p, i) => `${p}${i % 2 === 0 ? '${a}' : '${b}'}`), 'end'].join('') + '`';
+    const tpl =
+      '`' +
+      [
+        'start',
+        ...parts.map((p, i) => `${p}${i % 2 === 0 ? '${a}' : '${b}'}`),
+        'end',
+      ].join('') +
+      '`';
     const startCompile = performance.now();
     const fn = expression(tpl);
     const compileMs = performance.now() - startCompile;

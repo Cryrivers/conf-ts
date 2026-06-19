@@ -118,9 +118,7 @@ describe('@conf-ts/macro JSX runtime', () => {
   });
 
   it('rejects runtime component values without a serializable name', () => {
-    expect(() => jsx(Object.create(null), {})).toThrow(
-      'displayName or name',
-    );
+    expect(() => jsx(Object.create(null), {})).toThrow('displayName or name');
   });
 
   it('distinguishes the Fragment sentinel from a string named Fragment', () => {

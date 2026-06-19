@@ -198,7 +198,10 @@ function createJsxNode(
   const hasChildren = Object.prototype.hasOwnProperty.call(props, 'children');
   const children = props.children;
   delete props.children;
-  const outputType = formatJsxType(getRuntimeJsxType(type, jsxOutput), jsxOutput);
+  const outputType = formatJsxType(
+    getRuntimeJsxType(type, jsxOutput),
+    jsxOutput,
+  );
 
   if (jsxOutput.children === false && hasChildren) {
     assertChildrenAllowed(children);

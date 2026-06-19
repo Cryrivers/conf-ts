@@ -1,6 +1,14 @@
 import { raiseParseError } from '../errors';
 import { tokenize } from './lexer';
-import type { ASTNode, BinaryNode, LogicalNode, ObjectProperty, SpreadElement, Token, UnaryNode } from './types';
+import type {
+  ASTNode,
+  BinaryNode,
+  LogicalNode,
+  ObjectProperty,
+  SpreadElement,
+  Token,
+  UnaryNode,
+} from './types';
 
 export interface ParserState {
   tokens: Token[];
@@ -8,13 +16,18 @@ export interface ParserState {
   src: string;
 }
 
-const createParser = (tokens: Token[], src: string): ParserState => ({ tokens, pos: 0, src });
+const createParser = (tokens: Token[], src: string): ParserState => ({
+  tokens,
+  pos: 0,
+  src,
+});
 
 const peek = (ps: ParserState) => ps.tokens[ps.pos];
 const next = (ps: ParserState) => ps.tokens[ps.pos++];
 const eof = (ps: ParserState) => peek(ps)?.kind === 'eof';
 
-const isPunct = (ps: ParserState, value: string) => peek(ps)?.kind === 'punct' && peek(ps)?.value === value;
+const isPunct = (ps: ParserState, value: string) =>
+  peek(ps)?.kind === 'punct' && peek(ps)?.value === value;
 const isOp = (ps: ParserState, value?: string) =>
   peek(ps)?.kind === 'operator' && (value ? peek(ps)?.value === value : true);
 
@@ -64,7 +77,7 @@ const parsePrimary = (ps: ParserState): ASTNode | null => {
   if (tk.kind === 'template') {
     next(ps);
     const t = tk.template!;
-    const exprAsts = t.expressionsSrc.map((src) => {
+    const exprAsts = t.expressionsSrc.map(src => {
       const subTokens = tokenize(src);
       const subAst = parse(subTokens, src);
       if (!subAst) {
@@ -72,7 +85,12 @@ const parsePrimary = (ps: ParserState): ASTNode | null => {
       }
       return subAst as ASTNode;
     });
-    return { type: 'TemplateLiteral', quasis: t.quasis, rawQuasis: t.rawQuasis, expressions: exprAsts };
+    return {
+      type: 'TemplateLiteral',
+      quasis: t.quasis,
+      rawQuasis: t.rawQuasis,
+      expressions: exprAsts,
+    };
   }
   if (isPunct(ps, '(')) {
     next(ps);
@@ -148,14 +166,17 @@ const parseObject = (ps: ParserState): ASTNode => {
   return { type: 'ObjectExpression', properties };
 };
 
-const parsePostfix = (ps: ParserState, base: ASTNode | null): ASTNode | null => {
+const parsePostfix = (
+  ps: ParserState,
+  base: ASTNode | null,
+): ASTNode | null => {
   let expr = base;
   while (expr) {
     // Tagged template: Identifier/MemberExpression immediately followed by template token
     if (peek(ps)?.kind === 'template') {
       const tk = next(ps);
       const t = tk.template!;
-      const exprAsts = t.expressionsSrc.map((src) => {
+      const exprAsts = t.expressionsSrc.map(src => {
         const subTokens = tokenize(src);
         const subAst = parse(subTokens, src);
         if (!subAst) {
@@ -195,7 +216,13 @@ const parsePostfix = (ps: ParserState, base: ASTNode | null): ASTNode | null => 
             raiseParseError(ps.src);
           }
           next(ps);
-          expr = { type: 'MemberExpression', object: expr, property: propExpr, computed: true, optional: true };
+          expr = {
+            type: 'MemberExpression',
+            object: expr,
+            property: propExpr,
+            computed: true,
+            optional: true,
+          };
           continue;
         }
         // Otherwise, expect identifier for '?.prop'
@@ -220,7 +247,13 @@ const parsePostfix = (ps: ParserState, base: ASTNode | null): ASTNode | null => 
           raiseParseError(ps.src);
         }
         next(ps);
-        expr = { type: 'MemberExpression', object: expr, property: propExpr, computed: true, optional: true };
+        expr = {
+          type: 'MemberExpression',
+          object: expr,
+          property: propExpr,
+          computed: true,
+          optional: true,
+        };
         continue;
       }
       if (isPunct(ps, '(')) {
@@ -267,7 +300,12 @@ const parsePostfix = (ps: ParserState, base: ASTNode | null): ASTNode | null => 
         raiseParseError(ps.src);
       }
       next(ps);
-      expr = { type: 'MemberExpression', object: expr, property: propExpr, computed: true };
+      expr = {
+        type: 'MemberExpression',
+        object: expr,
+        property: propExpr,
+        computed: true,
+      };
       continue;
     }
     if (isPunct(ps, '(')) {
@@ -305,7 +343,11 @@ const parseUnary = (ps: ParserState): ASTNode | null => {
   if (tk.kind === 'operator' && prefixOps.has(tk.value)) {
     next(ps);
     const arg = mustNode(ps, parseUnary(ps));
-    return { type: 'UnaryExpression', operator: tk.value as UnaryNode['operator'], argument: arg };
+    return {
+      type: 'UnaryExpression',
+      operator: tk.value as UnaryNode['operator'],
+      argument: arg,
+    };
   }
   const primary = parsePrimary(ps);
   return parsePostfix(ps, primary);
@@ -330,7 +372,11 @@ const precedence: Record<string, number> = {
   '??': 2,
 };
 
-const parseBinaryRHS = (ps: ParserState, minPrec: number, left: ASTNode): ASTNode => {
+const parseBinaryRHS = (
+  ps: ParserState,
+  minPrec: number,
+  left: ASTNode,
+): ASTNode => {
   let lhs = left;
   while (!eof(ps) && peek(ps).kind === 'operator') {
     const opTk = peek(ps);

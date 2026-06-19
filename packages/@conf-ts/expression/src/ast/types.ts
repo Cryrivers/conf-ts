@@ -55,7 +55,20 @@ export interface UnaryNode {
 
 export interface BinaryNode {
   type: 'BinaryExpression';
-  operator: '+' | '-' | '*' | '/' | '%' | '>' | '<' | '>=' | '<=' | '==' | '!=' | '===' | '!==';
+  operator:
+    | '+'
+    | '-'
+    | '*'
+    | '/'
+    | '%'
+    | '>'
+    | '<'
+    | '>='
+    | '<='
+    | '=='
+    | '!='
+    | '==='
+    | '!==';
   left: ASTNode;
   right: ASTNode;
 }
@@ -123,3 +136,5 @@ export interface TaggedTemplateNode {
   tag: ASTNode; // Identifier or MemberExpression
   quasi: TemplateLiteralNode;
 }
+
+export type Env = Record<string, unknown>;

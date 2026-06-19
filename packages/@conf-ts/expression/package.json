@@ -13,22 +13,29 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./dist/index.d.mts",
-      "default": "./dist/index.mjs"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "scripts": {
     "test": "vitest run --typecheck",
-    "format": "oxfmt --write",
+    "format": "prettier --write .",
     "lint:fix": "oxlint --fix",
     "type-check": "tsc --noEmit",
     "build": "tsdown --minify",
     "dev": "tsdown --watch"
   },
   "devDependencies": {
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@vitest/coverage-v8": "4.1.9",
-    "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
+    "prettier": "^3.8.4",
     "tsdown": "^0.22.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"

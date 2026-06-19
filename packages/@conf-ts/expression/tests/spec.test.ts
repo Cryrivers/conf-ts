@@ -202,7 +202,9 @@ describe('Operators and Precedence', () => {
     // Engine returns booleans for && and || rather than short-circuit values
     let expr = expression('a && b || c && ( d || e )');
     expect(expr({ a: true, b: false, c: true, d: false, e: true })).toBe(true);
-    expect(expr({ a: false, b: true, c: false, d: true, e: false })).toBe(false);
+    expect(expr({ a: false, b: true, c: false, d: true, e: false })).toBe(
+      false,
+    );
 
     expr = expression('!a');
     expect(expr({ a: 1 })).toBe(false);
@@ -248,14 +250,18 @@ describe('Modern JS Features (ES6+) Support', () => {
   test('Async calls: functions returning Promise', async () => {
     // Engine preserves return value; test via await
     const expr = expression('asyncAdd(1, 2)');
-    const res = await expr({ asyncAdd: (a: number, b: number) => Promise.resolve(a + b) });
+    const res = await expr({
+      asyncAdd: (a: number, b: number) => Promise.resolve(a + b),
+    });
     expect(res).toBe(3);
   });
 
   test('Dynamic import simulation via identifier', async () => {
     // Simulate import() using env.import and verify Promise result
     const expr = expression('import("./mod")');
-    const mod = await expr({ import: (p: string) => Promise.resolve({ default: p }) });
+    const mod = await expr({
+      import: (p: string) => Promise.resolve({ default: p }),
+    });
     expect(mod).toEqual({ default: './mod' });
   });
 
@@ -298,17 +304,25 @@ describe('Template Literals', () => {
 
   test('Nested template in expression and various types', () => {
     const expr = expression('`outer: ${`inner ${x}`}, bool=${b}, null=${n}`');
-    expect(expr({ x: 1, b: false, n: null })).toBe('outer: inner 1, bool=false, null=null');
+    expect(expr({ x: 1, b: false, n: null })).toBe(
+      'outer: inner 1, bool=false, null=null',
+    );
   });
 
   test.skip('Undefined variables should throw error', () => {
     const expr = expression('`value=${missing}`');
-    expect(() => expr({})).toThrow('invalid expression: `value=${missing}`, undefined variable "missing"');
+    expect(() => expr({})).toThrow(
+      'invalid expression: `value=${missing}`, undefined variable "missing"',
+    );
   });
 
   test('Error: unterminated template or expression', () => {
-    expect(() => expression('`abc')).toThrow('invalid expression: `abc, unterminated template literal');
-    expect(() => expression('`${a + 1`')).toThrow('invalid expression: `${a + 1`, unterminated template expression');
+    expect(() => expression('`abc')).toThrow(
+      'invalid expression: `abc, unterminated template literal',
+    );
+    expect(() => expression('`${a + 1`')).toThrow(
+      'invalid expression: `${a + 1`, unterminated template expression',
+    );
   });
 
   test('Tagged template literals', () => {
@@ -343,7 +357,9 @@ describe('Error Handling and Edge Cases', () => {
     expect(() => expression(undefined)).toThrow('invalid expression');
 
     // Invalid object key and structure
-    expect(() => expression('{ ;a: 123 }')).toThrow('parse expression error: { ;a: 123 }');
+    expect(() => expression('{ ;a: 123 }')).toThrow(
+      'parse expression error: { ;a: 123 }',
+    );
 
     // Illegal semicolon
     expect(() => expression(';')).toThrow('parse expression error: ;');
@@ -363,10 +379,14 @@ describe('Error Handling and Edge Cases', () => {
     expect(() => expression('2e-a')).toThrow('invalid expression: 2e-a');
 
     // Ternary missing colon
-    expect(() => expression('1 === 1 ? true')).toThrow('parse expression error: 1 === 1 ? true');
+    expect(() => expression('1 === 1 ? true')).toThrow(
+      'parse expression error: 1 === 1 ? true',
+    );
 
     // Illegal trailing semicolon
-    expect(() => expression('1 === 1 ? true ;')).toThrow('parse expression error: 1 === 1 ? true ;');
+    expect(() => expression('1 === 1 ? true ;')).toThrow(
+      'parse expression error: 1 === 1 ? true ;',
+    );
   });
 });
 

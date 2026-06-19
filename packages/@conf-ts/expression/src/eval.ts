@@ -13,7 +13,8 @@ import type {
 } from './ast/types';
 
 const toBool = (v: unknown): boolean => !!v;
-const toKey = (k: unknown): PropertyKey => (typeof k === 'symbol' ? k : String(k));
+const toKey = (k: unknown): PropertyKey =>
+  typeof k === 'symbol' ? k : String(k);
 
 const getProp = (obj: unknown, key: PropertyKey): unknown => {
   if (obj === null || obj === undefined) {
@@ -67,7 +68,7 @@ const evalCall = (node: CallNode, env: Env): unknown => {
     }
     return null;
   }
-  const args = node.args.map((a) => evaluate(a, env));
+  const args = node.args.map(a => evaluate(a, env));
   try {
     return fn.apply(thisArg, args);
   } catch {
@@ -79,7 +80,9 @@ const evalIdentifier = (node: IdentifierNode, env: Env): unknown => {
   if (!env) {
     return null;
   }
-  return Object.prototype.hasOwnProperty.call(env, node.name) ? env[node.name] : null;
+  return Object.prototype.hasOwnProperty.call(env, node.name)
+    ? env[node.name]
+    : null;
 };
 
 const evalUnary = (node: UnaryNode, env: Env): unknown => {
@@ -157,14 +160,16 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
     case 'ConditionalExpression': {
       const n = node;
       const test = evaluate(n.test, env);
-      return toBool(test) ? evaluate(n.consequent, env) : evaluate(n.alternate, env);
+      return toBool(test)
+        ? evaluate(n.consequent, env)
+        : evaluate(n.alternate, env);
     }
     case 'MemberExpression':
       return evalMember(node, env);
     case 'CallExpression':
       return evalCall(node, env);
     case 'ArrayExpression':
-      return node.elements.map((el) => evaluate(el, env));
+      return node.elements.map(el => evaluate(el, env));
     case 'ObjectExpression': {
       const obj: Record<string, unknown> = {};
       for (const p of node.properties) {
@@ -188,7 +193,7 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
     }
     case 'TemplateLiteral': {
       const cooked = node.quasis;
-      const exprs = node.expressions.map((e) => evaluate(e, env));
+      const exprs = node.expressions.map(e => evaluate(e, env));
       let out = cooked[0] ?? '';
       for (let i = 0; i < exprs.length; i++) {
         out += String(exprs[i]) + (cooked[i + 1] ?? '');
@@ -218,7 +223,7 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
       const strings = [...node.quasi.quasis];
       // attach raw per JS semantics
       (strings as any).raw = [...node.quasi.rawQuasis];
-      const values = node.quasi.expressions.map((e) => evaluate(e, env));
+      const values = node.quasi.expressions.map(e => evaluate(e, env));
       try {
         return fn.apply(thisArg, [strings, ...values]);
       } catch {
