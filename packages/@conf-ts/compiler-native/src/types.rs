@@ -1,12 +1,67 @@
 use std::collections::HashMap;
-use swc_common::SourceMap;
-use swc_common::sync::Lrc;
-use swc_ecma_ast::Module;
+use std::rc::Rc;
 
+use oxc_allocator::Allocator;
+use oxc_ast::ast::Program;
+
+use crate::error::ConfTSError;
 use crate::eval::ImportInfo;
 
 const RAW_NUMBER_PREFIX: &str = "__CONF_TS_NUMBER__";
 const RAW_NUMBER_SUFFIX: &str = "__CONF_TS_NUMBER_END__";
+
+pub struct FileOwner {
+  pub allocator: Allocator,
+  pub source: String,
+}
+
+pub struct ParsedProgram<'a> {
+  pub program: Program<'a>,
+}
+
+self_cell::self_cell! {
+  pub struct ParsedFile {
+    owner: FileOwner,
+    #[covariant]
+    dependent: ParsedProgram,
+  }
+}
+
+impl ParsedFile {
+  pub fn program(&self) -> &Program<'_> {
+    &self.borrow_dependent().program
+  }
+
+  pub fn source(&self) -> &str {
+    &self.borrow_owner().source
+  }
+}
+
+#[derive(Clone)]
+pub struct LineIndex {
+  line_starts: Vec<u32>,
+}
+
+impl LineIndex {
+  pub fn new(source: &str) -> Self {
+    let mut line_starts = vec![0u32];
+    for (i, byte) in source.bytes().enumerate() {
+      if byte == b'\n' {
+        line_starts.push((i + 1) as u32);
+      }
+    }
+    LineIndex { line_starts }
+  }
+
+  pub fn get_location(&self, offset: u32) -> (usize, usize) {
+    let line = match self.line_starts.binary_search(&offset) {
+      Ok(idx) => idx,
+      Err(idx) => idx.saturating_sub(1),
+    };
+    let col = offset.saturating_sub(self.line_starts[line]);
+    (line + 1, col as usize + 1)
+  }
+}
 
 #[derive(Debug, Clone)]
 pub struct NumberValue {
@@ -237,6 +292,55 @@ pub fn replace_raw_number_markers(input: &str) -> String {
   output
 }
 
+pub fn serialize_output(output: &Value, format: &str) -> Result<String, ConfTSError> {
+  match format {
+    "json" => {
+      let json_value = output.to_json();
+      let json_str = serde_json::to_string_pretty(&json_value).map_err(|e| {
+        ConfTSError::new(format!("Failed to serialize JSON: {}", e), "unknown", 1, 1)
+      })?;
+      Ok(replace_raw_number_markers(&json_str))
+    }
+    "yaml" => {
+      let yaml_value = output.to_yaml();
+      let yaml_str = serde_yaml::to_string(&yaml_value).map_err(|e| {
+        ConfTSError::new(format!("Failed to serialize YAML: {}", e), "unknown", 1, 1)
+      })?;
+
+      let processed = yaml_str
+        .strip_prefix("---\n")
+        .unwrap_or(&yaml_str)
+        .to_string();
+
+      let mut processed_lines = String::new();
+      for line in processed.lines() {
+        let mut new_line = line.to_string();
+        let indent_len = new_line.len() - new_line.trim_start().len();
+        if new_line[indent_len..].starts_with('\'') {
+          if let Some(rel_key_end) = new_line[indent_len + 1..].find("':") {
+            let key_end = indent_len + 1 + rel_key_end;
+            new_line.replace_range(key_end..key_end + 1, "\"");
+            new_line.replace_range(indent_len..indent_len + 1, "\"");
+          }
+        }
+        if (new_line.contains(": '") || new_line.contains("- '")) && new_line.ends_with('\'') {
+          new_line = new_line.replace('\'', "\"");
+        }
+        processed_lines.push_str(&new_line);
+        processed_lines.push_str("\n");
+      }
+
+      Ok(replace_raw_number_markers(&processed_lines))
+    }
+    _ => Err(ConfTSError::new(
+      format!("Unsupported format: {}", format),
+      "unknown",
+      1,
+      1,
+    )),
+  }
+}
+
 impl Value {
   pub fn number(value: f64) -> Self {
     Value::Number(NumberValue { value, raw: None })
@@ -277,7 +381,13 @@ pub struct JsxOutputOptions {
 #[derive(Clone)]
 pub struct FileContext {
   pub file_path: String,
-  pub module: Module,
-  pub source_map: Lrc<SourceMap>,
+  pub parsed: Rc<ParsedFile>,
+  pub line_index: LineIndex,
   pub imports: HashMap<String, ImportInfo>,
+}
+
+impl FileContext {
+  pub fn program(&self) -> &Program<'_> {
+    self.parsed.program()
+  }
 }
