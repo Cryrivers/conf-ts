@@ -1,3 +1,4 @@
+import { rewriteContextExpression } from '@conf-ts/expression';
 import ts from 'typescript';
 
 import { MACRO_FUNCTIONS } from './constants';
@@ -29,6 +30,9 @@ const ARRAY_MACRO_FUNCTIONS = [
 const ENV_MACRO_FUNCTIONS = [
   { name: 'env', argLength: 1 },
 ] satisfies MacroFunction[];
+
+const EXPR_CALLBACK_ERROR =
+  'expr callback must be an arrow function with a single identifier parameter and expression body';
 
 function getCalleeName(
   expression: ts.CallExpression,
@@ -321,6 +325,118 @@ function getArrayCallbackDetails(params: {
     bodyErrorMessage,
   );
   return { paramName, bodyExpression };
+}
+
+function isAsyncArrowFunction(callback: ts.ArrowFunction): boolean {
+  return (
+    callback.modifiers?.some(
+      modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword,
+    ) ?? false
+  );
+}
+
+function getExprCallbackDetails(
+  callbackExpression: ts.Expression,
+  sourceFile: ts.SourceFile,
+): { paramName: string; bodyExpression: ts.Expression } {
+  if (
+    !ts.isArrowFunction(callbackExpression) ||
+    isAsyncArrowFunction(callbackExpression)
+  ) {
+    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(
+        sourceFile,
+        callbackExpression.getStart(),
+      ),
+    });
+  }
+
+  if (callbackExpression.parameters.length !== 1) {
+    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(
+        sourceFile,
+        callbackExpression.getStart(),
+      ),
+    });
+  }
+
+  const param = callbackExpression.parameters[0];
+  if (
+    !ts.isIdentifier(param.name) ||
+    !!param.dotDotDotToken ||
+    !!param.initializer
+  ) {
+    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, param.getStart()),
+    });
+  }
+
+  if (ts.isBlock(callbackExpression.body)) {
+    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(
+        sourceFile,
+        callbackExpression.body.getStart(),
+      ),
+    });
+  }
+
+  return {
+    paramName: param.name.text,
+    bodyExpression: callbackExpression.body,
+  };
+}
+
+function evaluateExpr(
+  expression: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  macroImportsMap: { [filePath: string]: Set<string> },
+): string | undefined {
+  const callee = getCalleeName(expression, sourceFile);
+  if (callee !== 'expr') {
+    return undefined;
+  }
+
+  assertMacroImported(
+    callee,
+    sourceFile,
+    macroImportsMap,
+    expression,
+    `Macro function '${callee}' must be imported from '@conf-ts/macro' to use in macro mode`,
+  );
+
+  if (expression.arguments.length !== 1) {
+    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
+    });
+  }
+
+  const { paramName, bodyExpression } = getExprCallbackDetails(
+    expression.arguments[0],
+    sourceFile,
+  );
+
+  try {
+    return rewriteContextExpression(
+      bodyExpression.getText(sourceFile),
+      paramName,
+    );
+  } catch (error) {
+    throw new ConfTSError(
+      error instanceof Error ? error.message : String(error),
+      {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(
+          sourceFile,
+          bodyExpression.getStart(),
+        ),
+      },
+    );
+  }
 }
 /**
  * Evaluate env macro. Supports nested macros in the argument by evaluating in macro mode
@@ -679,7 +795,11 @@ export function evaluateMacro(
   context?: { [name: string]: any },
   options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ): any {
-  let result = evaluateTypeCasting(
+  let result: any = evaluateExpr(expression, sourceFile, macroImportsMap);
+  if (result !== undefined) {
+    return result;
+  }
+  result = evaluateTypeCasting(
     expression,
     sourceFile,
     typeChecker,

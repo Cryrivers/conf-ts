@@ -13,9 +13,9 @@ export const tutorialSteps: TutorialStep[] = [
     id: 'intro',
     title: 'What is conf-ts?',
     description:
-      'conf-ts is a configuration language built on TypeScript. It allows you to write type-safe, dynamic configurations using the full power of TypeScript and compile them to static JSON or YAML.',
+      'conf-ts is a configuration language built on TypeScript. It allows you to write type-safe, dynamic configurations and expression strings using the full power of TypeScript and compile them to static JSON or YAML.',
     goal: 'Explore the example code to see how types, macros, and logic come together.',
-    initialCode: `import { env, arrayMap } from '@conf-ts/macro';
+    initialCode: `import { env, arrayMap, expr, type Expr } from '@conf-ts/macro';
 
 // 1. Define strict types for your configuration
 interface ServerConfig {
@@ -23,6 +23,7 @@ interface ServerConfig {
   port: number;
   debug: boolean;
   services: string[];
+  quotaRule: Expr<{ requestCount: number; quota: number }, boolean>;
 }
 
 // 2. Use logic and macros to generate values
@@ -31,6 +32,9 @@ const isDev = env('NODE_ENV') === 'development';
 const basePort = 3000;
 
 const services = ['api', 'auth', 'payment'];
+const quotaRule = expr<{ requestCount: number; quota: number }, boolean>(
+  ctx => ctx.requestCount < ctx.quota,
+);
 
 // 3. Export the final configuration object
 export default {
@@ -39,6 +43,8 @@ export default {
   debug: isDev,
   // Use macros to transform data at compile time
   services: arrayMap(services, (s) => \`svc-\${s}\`),
+  // Build a type-safe expression string
+  quotaRule,
 } satisfies ServerConfig;
 `,
     check: () => true,
@@ -122,6 +128,31 @@ export default {
         Array.isArray(output.doubled) &&
         output.doubled.join(',') === '2,4,6,8,10'
       );
+    },
+  },
+  {
+    id: 'expr',
+    title: 'Macros: Expressions',
+    description:
+      '`expr` turns a typed callback into an expression string, so `ctx => ctx.requestCount < ctx.quota` compiles to `"requestCount < quota"`.',
+    goal: 'Use `expr` to create an `allowRequest` rule for `requestCount < quota`.',
+    initialCode: `import { expr, type Expr } from '@conf-ts/macro';
+
+type RequestContext = {
+  requestCount: number;
+  quota: number;
+};
+
+type LimitsConfig = {
+  allowRequest: Expr<RequestContext, boolean>;
+};
+
+export default {
+  allowRequest: 'TODO',
+} satisfies LimitsConfig;
+`,
+    check: (output: any) => {
+      return output && output.allowRequest === 'requestCount < quota';
     },
   },
   {

@@ -2,7 +2,9 @@ export const formatInvalid = (expr?: string, detail?: string): string => {
   if (!expr) {
     return 'invalid expression';
   }
-  return detail ? `invalid expression: ${expr}, ${detail}` : `invalid expression: ${expr}`;
+  return detail
+    ? `invalid expression: ${expr}, ${detail}`
+    : `invalid expression: ${expr}`;
 };
 
 export const formatParseError = (expr: string): string => {

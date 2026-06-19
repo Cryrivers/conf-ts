@@ -1,11 +1,13 @@
-import { formatInvalid, formatParseError } from './errors';
-import { evaluate } from './eval';
 import { tokenize } from './ast/lexer';
 import { parse } from './ast/parser';
 import type { ASTNode } from './ast/types';
+import { formatInvalid, formatParseError } from './errors';
+import { evaluate } from './eval';
 import type { Expr, RuntimeEnv } from './types';
 
-type Compiled<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown> = (env: Context) => ReturnType;
+type Compiled<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown> = (
+  env: Context,
+) => ReturnType;
 
 /**
  * LRU Cache for compiled expressions.
@@ -35,11 +37,15 @@ function cacheGet(key: string): Compiled | undefined {
   return value;
 }
 
-
 function expression(expr: string): Compiled;
-function expression<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown>(expr: Expr<Context, ReturnType>): Compiled<Context, ReturnType>;
-function expression <Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown>(expr: Expr<Context, ReturnType> | string): Compiled<Context, ReturnType> {
-  
+function expression<
+  Context extends RuntimeEnv = RuntimeEnv,
+  ReturnType = unknown,
+>(expr: Expr<Context, ReturnType>): Compiled<Context, ReturnType>;
+function expression<
+  Context extends RuntimeEnv = RuntimeEnv,
+  ReturnType = unknown,
+>(expr: Expr<Context, ReturnType> | string): Compiled<Context, ReturnType> {
   const cacheKey = expr ?? '';
   const cached = cacheGet(cacheKey);
   if (cached) {
@@ -55,7 +61,11 @@ function expression <Context extends RuntimeEnv = RuntimeEnv, ReturnType = unkno
   try {
     const tokens = tokenize(expr);
     // special case: leading ']'
-    if (tokens.length > 0 && tokens[0].kind === 'punct' && tokens[0].value === ']') {
+    if (
+      tokens.length > 0 &&
+      tokens[0].kind === 'punct' &&
+      tokens[0].value === ']'
+    ) {
       const fn: Compiled<Context, ReturnType> = () => undefined as ReturnType;
       cacheSet(expr, fn);
       return fn;
@@ -73,9 +83,14 @@ function expression <Context extends RuntimeEnv = RuntimeEnv, ReturnType = unkno
     throw new Error(formatParseError(expr));
   }
 
-  const fn: Compiled<Context, ReturnType> = (env: Context) => evaluate(ast, env ?? {}) as ReturnType;
+  const fn: Compiled<Context, ReturnType> = (env: Context) =>
+    evaluate(ast, env ?? {}) as ReturnType;
   cacheSet(expr, fn);
   return fn;
-};
+}
 
 export default expression;
+export { parse, tokenize };
+export { rewriteContextExpression } from './rewrite';
+export type * from './ast/types';
+export type { Expr, RuntimeEnv };

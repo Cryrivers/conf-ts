@@ -204,6 +204,16 @@ export function Editor({
           monaco.languages.typescript.typescriptDefaults.addExtraLib(
             `
             declare module '@conf-ts/macro' {
+              export type RuntimeEnv = Record<string, unknown>;
+              export type Expr<Context extends RuntimeEnv, ReturnType> = string & {
+                __brand: 'ExpressionString';
+                __context: Context;
+                __returnType: ReturnType;
+              };
+              export function expr<
+                Context extends RuntimeEnv = RuntimeEnv,
+                ReturnType = unknown,
+              >(callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType>;
               export function String(value: any): string;
               export function Number(value: any): number;
               export function Boolean(value: any): boolean;
