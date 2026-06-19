@@ -16,18 +16,18 @@
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
-    "piscina": "^5.1.4"
+    "piscina": "^5.2.0"
   },
   "optionalDependencies": {
     "@conf-ts/compiler-native": "workspace:*"
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.0.0",
     "@types/webpack": "^5.28.5",
-    "prettier": "^3.8.3",
+    "prettier": "^3.8.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.7",
-    "webpack": "^5.107.1"
+    "vitest": "^4.1.9",
+    "webpack": "^5.107.2"
   }
 }

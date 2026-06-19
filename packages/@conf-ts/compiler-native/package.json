@@ -38,18 +38,18 @@
     "version": "napi version"
   },
   "dependencies": {
-    "@napi-rs/cli": "^3.6.2"
+    "@napi-rs/cli": "^3.7.2"
   },
   "devDependencies": {
     "@conf-ts/compiler": "workspace:*",
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@types/node": "^25.9.1",
-    "oxlint": "^1.66.0",
-    "prettier": "^3.8.3",
+    "@types/node": "^26.0.0",
+    "oxlint": "^1.70.0",
+    "prettier": "^3.8.4",
     "tinybench": "^6.0.2",
-    "tsx": "^4.22.3",
-    "vitest": "^4.1.7",
+    "tsx": "^4.22.4",
+    "vitest": "^4.1.9",
     "yaml": "^2.9.0"
   },
   "optionalDependencies": {

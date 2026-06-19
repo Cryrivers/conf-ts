@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "env": {
+    "builtin": true
+  },
+  "overrides": [
+    {
+      "files": ["**/*.ts"],
+      "rules": {
+        "curly": ["error", "all"],
+        "unicorn/switch-case-braces": ["error", "always"],
+        "@typescript-eslint/ban-ts-comment": [
+          "error",
+          {
+            "ts-check": false,
+            "ts-expect-error": false,
+            "ts-ignore": true,
+            "ts-nocheck": true
+          }
+        ],
+        "@typescript-eslint/consistent-type-imports": [
+          "warn",
+          {
+            "prefer": "type-imports",
+            "fixStyle": "inline-type-imports"
+          }
+        ],
+        "@typescript-eslint/no-inferrable-types": "error",
+        "@typescript-eslint/no-unnecessary-type-constraint": "error",
+        "@typescript-eslint/no-unnecessary-type-assertion": "error"
+      },
+      "globals": {
+        "process": "readonly"
+      },
+      "env": {
+        "es2018": true
+      },
+      "plugins": ["typescript"]
+    }
+  ]
+}

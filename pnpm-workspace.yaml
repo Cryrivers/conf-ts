@@ -9,6 +9,7 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - webpack@5.107.1
+  - '@types/node@26.0.0'
 
 onlyBuiltDependencies:
   - esbuild
