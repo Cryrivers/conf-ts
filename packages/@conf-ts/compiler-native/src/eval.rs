@@ -54,12 +54,42 @@ fn set_object_prop(
 }
 
 #[derive(Debug, Clone)]
+enum JsxTypeFormat {
+  String,
+  Descriptor,
+}
+
+#[derive(Debug, Clone)]
 struct NormalizedJsxOutputOptions {
   type_name: String,
   props: Option<String>,
   children: Option<String>,
   key: String,
   fragment: String,
+  type_format: JsxTypeFormat,
+}
+
+#[derive(Debug, Clone)]
+enum JsxTypeKind {
+  Intrinsic,
+  Component,
+  Fragment,
+}
+
+impl JsxTypeKind {
+  fn as_str(&self) -> &'static str {
+    match self {
+      JsxTypeKind::Intrinsic => "intrinsic",
+      JsxTypeKind::Component => "component",
+      JsxTypeKind::Fragment => "fragment",
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+struct JsxTypeInfo {
+  kind: JsxTypeKind,
+  name: String,
 }
 
 struct EvaluatedJsxAttributes {
@@ -114,6 +144,26 @@ fn validate_jsx_field(
   }
 }
 
+fn validate_jsx_type_format(
+  value: Option<&String>,
+  file_ctx: &FileContext,
+  pos: BytePos,
+) -> Result<JsxTypeFormat, ConfTSError> {
+  match value.map(|v| v.as_str()) {
+    None | Some("string") => Ok(JsxTypeFormat::String),
+    Some("descriptor") => Ok(JsxTypeFormat::Descriptor),
+    Some(_) => {
+      let (line, character) = get_location(&file_ctx.source_map, pos);
+      Err(ConfTSError::new(
+        "Invalid option: jsxOutput.typeFormat must be \"string\" or \"descriptor\"",
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+  }
+}
+
 fn normalize_jsx_output_options(
   options: &CompileOptions,
   file_ctx: &FileContext,
@@ -146,6 +196,8 @@ fn normalize_jsx_output_options(
     Some(value) => validate_jsx_name(value, "fragment", file_ctx, pos)?,
     None => "Fragment".to_string(),
   };
+  let type_format =
+    validate_jsx_type_format(raw.and_then(|o| o.type_format.as_ref()), file_ctx, pos)?;
 
   let mut enabled_fields: Vec<(&str, &str)> = vec![("type", &type_name), ("key", &key)];
   if let Some(props_name) = &props {
@@ -178,6 +230,7 @@ fn normalize_jsx_output_options(
     children,
     key,
     fragment,
+    type_format,
   })
 }
 
@@ -578,7 +631,10 @@ pub fn evaluate(
       )?;
       let jsx_output = normalize_jsx_output_options(options, file_ctx, jsx_fragment.span.lo)?;
       create_jsx_node(
-        jsx_output.fragment,
+        JsxTypeInfo {
+          kind: JsxTypeKind::Fragment,
+          name: jsx_output.fragment,
+        },
         EvaluatedJsxAttributes {
           props: Vec::new(),
           key: None,
@@ -1786,6 +1842,60 @@ fn jsx_child_value(children: Vec<Value>) -> Value {
   }
 }
 
+fn is_intrinsic_jsx_identifier(name: &str) -> bool {
+  name.contains('-') || matches!(name.chars().next(), Some(c) if c.is_ascii_lowercase())
+}
+
+fn jsx_member_object_name(obj: &JSXObject) -> String {
+  match obj {
+    JSXObject::Ident(ident) => ident_name(ident).to_string(),
+    JSXObject::JSXMemberExpr(member) => jsx_member_name(member),
+  }
+}
+
+fn jsx_member_name(member: &JSXMemberExpr) -> String {
+  format!(
+    "{}.{}",
+    jsx_member_object_name(&member.obj),
+    member.prop.sym.as_str()
+  )
+}
+
+fn get_jsx_element_type(name: &JSXElementName) -> JsxTypeInfo {
+  match name {
+    JSXElementName::Ident(ident) => {
+      let name = ident.sym.as_str().to_string();
+      let kind = if is_intrinsic_jsx_identifier(&name) {
+        JsxTypeKind::Intrinsic
+      } else {
+        JsxTypeKind::Component
+      };
+      JsxTypeInfo { kind, name }
+    }
+    JSXElementName::JSXMemberExpr(member) => JsxTypeInfo {
+      kind: JsxTypeKind::Component,
+      name: jsx_member_name(member),
+    },
+    JSXElementName::JSXNamespacedName(ns) => JsxTypeInfo {
+      kind: JsxTypeKind::Intrinsic,
+      name: format!("{}:{}", ns.ns.sym.as_str(), ns.name.sym.as_str()),
+    },
+  }
+}
+
+fn format_jsx_type(type_info: &JsxTypeInfo, jsx_output: &NormalizedJsxOutputOptions) -> Value {
+  match jsx_output.type_format {
+    JsxTypeFormat::String => Value::String(type_info.name.clone()),
+    JsxTypeFormat::Descriptor => Value::Object(vec![
+      (
+        "kind".to_string(),
+        Value::String(type_info.kind.as_str().to_string()),
+      ),
+      ("name".to_string(), Value::String(type_info.name.clone())),
+    ]),
+  }
+}
+
 fn assert_no_flat_jsx_prop_collision(
   props: &[(String, Value)],
   jsx_output: &NormalizedJsxOutputOptions,
@@ -1817,7 +1927,7 @@ fn assert_no_flat_jsx_prop_collision(
 }
 
 fn create_jsx_node(
-  type_name: String,
+  type_info: JsxTypeInfo,
   attrs: EvaluatedJsxAttributes,
   children: Vec<Value>,
   file_ctx: &FileContext,
@@ -1825,10 +1935,11 @@ fn create_jsx_node(
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
   let jsx_output = normalize_jsx_output_options(options, file_ctx, pos)?;
+  let output_type = format_jsx_type(&type_info, &jsx_output);
 
   if jsx_output.props.is_none() {
     assert_no_flat_jsx_prop_collision(&attrs.props, &jsx_output, file_ctx, pos)?;
-    let mut output = vec![(jsx_output.type_name, Value::String(type_name))];
+    let mut output = vec![(jsx_output.type_name, output_type)];
     for (key, value) in attrs.props {
       set_object_prop(&mut output, key, value, options.preserve_key_order);
     }
@@ -1874,7 +1985,7 @@ fn create_jsx_node(
   }
 
   Ok(Value::Object(vec![
-    (jsx_output.type_name, Value::String(type_name)),
+    (jsx_output.type_name, output_type),
     (jsx_output.props.unwrap(), Value::Object(props)),
   ]))
 }
@@ -1909,18 +2020,7 @@ fn evaluate_jsx_element(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  let type_name = match &element.opening.name {
-    JSXElementName::Ident(ident) => ident.sym.as_str().to_string(),
-    _ => {
-      let (line, character) = get_location(&file_ctx.source_map, element.opening.span.lo);
-      return Err(ConfTSError::new(
-        "Unsupported JSX tag: member expressions and namespaced names are not supported",
-        &file_ctx.file_path,
-        line,
-        character,
-      ));
-    }
-  };
+  let type_info = get_jsx_element_type(&element.opening.name);
 
   let props = evaluate_jsx_attributes(
     &element.opening.attrs,
@@ -1933,7 +2033,7 @@ fn evaluate_jsx_element(
 
   let children = evaluate_jsx_children(&element.children, file_ctx, ctx, local_context, options)?;
   create_jsx_node(
-    type_name,
+    type_info,
     props,
     children,
     file_ctx,
@@ -1977,7 +2077,10 @@ fn evaluate_jsx_attributes(
               evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
             let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.lo)?;
             create_jsx_node(
-              jsx_output.fragment,
+              JsxTypeInfo {
+                kind: JsxTypeKind::Fragment,
+                name: jsx_output.fragment,
+              },
               EvaluatedJsxAttributes {
                 props: Vec::new(),
                 key: None,
@@ -2069,7 +2172,10 @@ fn evaluate_jsx_children(
           evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
         let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.lo)?;
         result.push(create_jsx_node(
-          jsx_output.fragment,
+          JsxTypeInfo {
+            kind: JsxTypeKind::Fragment,
+            name: jsx_output.fragment,
+          },
           EvaluatedJsxAttributes {
             props: Vec::new(),
             key: None,

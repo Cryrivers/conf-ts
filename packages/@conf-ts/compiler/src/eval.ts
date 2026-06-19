@@ -11,12 +11,20 @@ type NormalizedJsxOutputOptions = {
   children: string | false;
   key: string;
   fragment: string;
+  typeFormat: 'string' | 'descriptor';
 };
 
 type EvaluatedJsxAttributes = {
   props: { [key: string]: any };
   key?: any;
   hasKey: boolean;
+};
+
+type JsxTypeKind = 'intrinsic' | 'component' | 'fragment';
+
+type JsxTypeInfo = {
+  kind: JsxTypeKind;
+  name: string;
 };
 
 function getNodeLocation(sourceFile: ts.SourceFile, node: ts.Node) {
@@ -79,6 +87,20 @@ function validateJsxField(
   return value;
 }
 
+function validateJsxTypeFormat(
+  value: unknown,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): 'string' | 'descriptor' {
+  if (value === 'string' || value === 'descriptor') {
+    return value;
+  }
+  throw new ConfTSError(
+    'Invalid option: jsxOutput.typeFormat must be "string" or "descriptor"',
+    getNodeLocation(sourceFile, node),
+  );
+}
+
 function normalizeJsxOutputOptions(
   options: CompileOptions | undefined,
   sourceFile: ts.SourceFile,
@@ -106,6 +128,10 @@ function normalizeJsxOutputOptions(
       raw.fragment === undefined
         ? 'Fragment'
         : validateJsxName(raw.fragment, 'fragment', sourceFile, node),
+    typeFormat:
+      raw.typeFormat === undefined
+        ? 'string'
+        : validateJsxTypeFormat(raw.typeFormat, sourceFile, node),
   };
 
   const enabledFields = [
@@ -131,6 +157,69 @@ function normalizeJsxOutputOptions(
   }
 
   return normalized;
+}
+
+function isIntrinsicJsxIdentifier(name: string): boolean {
+  return name.includes('-') || /^[a-z]/.test(name);
+}
+
+function jsxTypeDescriptor(kind: JsxTypeKind, name: string) {
+  return { kind, name };
+}
+
+function formatJsxType(
+  type: JsxTypeInfo,
+  jsxOutput: NormalizedJsxOutputOptions,
+) {
+  if (jsxOutput.typeFormat === 'descriptor') {
+    return jsxTypeDescriptor(type.kind, type.name);
+  }
+  return type.name;
+}
+
+function getJsxMemberName(
+  tagName: ts.JsxTagNameExpression,
+  sourceFile: ts.SourceFile,
+): string {
+  if (ts.isIdentifier(tagName)) {
+    return tagName.text;
+  }
+  if (ts.isPropertyAccessExpression(tagName)) {
+    return `${getJsxMemberName(
+      tagName.expression as ts.JsxTagNameExpression,
+      sourceFile,
+    )}.${tagName.name.text}`;
+  }
+  return tagName.getText(sourceFile);
+}
+
+function getJsxElementType(
+  tagName: ts.JsxTagNameExpression,
+  sourceFile: ts.SourceFile,
+): JsxTypeInfo {
+  if (ts.isIdentifier(tagName)) {
+    const name = tagName.text;
+    return {
+      kind: isIntrinsicJsxIdentifier(name) ? 'intrinsic' : 'component',
+      name,
+    };
+  }
+  if (ts.isPropertyAccessExpression(tagName)) {
+    return {
+      kind: 'component',
+      name: getJsxMemberName(tagName, sourceFile),
+    };
+  }
+  if (ts.isJsxNamespacedName(tagName)) {
+    return {
+      kind: 'intrinsic',
+      name: `${tagName.namespace.text}:${tagName.name.text}`,
+    };
+  }
+  throw new ConfTSError(
+    'Unsupported JSX tag: this expressions are not supported',
+    getNodeLocation(sourceFile, tagName),
+  );
 }
 
 function cleanJsxText(raw: string): string | null {
@@ -351,7 +440,7 @@ function assertNoFlatJsxPropCollision(
 }
 
 function createJsxNode(
-  type: string,
+  type: JsxTypeInfo,
   attrs: EvaluatedJsxAttributes,
   children: any[],
   sourceFile: ts.SourceFile,
@@ -363,7 +452,9 @@ function createJsxNode(
 
   if (jsxOutput.props === false) {
     assertNoFlatJsxPropCollision(attrs.props, jsxOutput, sourceFile, node);
-    const output: { [key: string]: any } = { [jsxOutput.type]: type };
+    const output: { [key: string]: any } = {
+      [jsxOutput.type]: formatJsxType(type, jsxOutput),
+    };
     for (const k of Object.keys(attrs.props)) {
       setObjectProp(output, k, attrs.props[k], preserveKeyOrder);
     }
@@ -395,7 +486,7 @@ function createJsxNode(
   }
 
   return {
-    [jsxOutput.type]: type,
+    [jsxOutput.type]: formatJsxType(type, jsxOutput),
     [jsxOutput.props]: props,
   };
 }
@@ -1671,16 +1762,7 @@ export function evaluate(
         );
   } else if (ts.isJsxElement(expression)) {
     const tagName = expression.openingElement.tagName;
-    if (!ts.isIdentifier(tagName)) {
-      throw new ConfTSError(
-        `Unsupported JSX tag: member expressions and namespaced names are not supported`,
-        {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(sourceFile, tagName.getStart()),
-        },
-      );
-    }
-    const type = tagName.text;
+    const type = getJsxElementType(tagName, sourceFile);
     const attrs = evaluateJsxAttributes(
       expression.openingElement.attributes,
       sourceFile,
@@ -1713,16 +1795,7 @@ export function evaluate(
     );
   } else if (ts.isJsxSelfClosingElement(expression)) {
     const tagName = expression.tagName;
-    if (!ts.isIdentifier(tagName)) {
-      throw new ConfTSError(
-        `Unsupported JSX tag: member expressions and namespaced names are not supported`,
-        {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(sourceFile, tagName.getStart()),
-        },
-      );
-    }
-    const type = tagName.text;
+    const type = getJsxElementType(tagName, sourceFile);
     const attrs = evaluateJsxAttributes(
       expression.attributes,
       sourceFile,
@@ -1753,7 +1826,7 @@ export function evaluate(
       expression,
     );
     return createJsxNode(
-      jsxOutput.fragment,
+      { kind: 'fragment', name: jsxOutput.fragment },
       { props: {}, hasKey: false },
       children,
       sourceFile,

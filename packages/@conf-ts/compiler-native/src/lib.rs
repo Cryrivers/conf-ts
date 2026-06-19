@@ -27,6 +27,8 @@ pub struct JsxOutputOptions {
   pub children: Option<Either<String, bool>>,
   pub key: Option<String>,
   pub fragment: Option<String>,
+  #[napi(js_name = "typeFormat", ts_type = "'string' | 'descriptor'")]
+  pub type_format: Option<String>,
 }
 
 #[napi(object)]
@@ -53,6 +55,7 @@ fn convert_jsx_output(value: Option<JsxOutputOptions>) -> Option<NativeJsxOutput
     children: convert_jsx_field(o.children),
     key: o.key,
     fragment: o.fragment,
+    type_format: o.type_format,
   })
 }
 

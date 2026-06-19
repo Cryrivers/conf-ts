@@ -17,6 +17,22 @@ describe('JSX Test', () => {
     assertJsxOutput('imports');
   });
 
+  it('should serialize component, member, and namespaced JSX tag names', () => {
+    assertJsxOutput('type-names');
+  });
+
+  it('should support descriptor JSX type output', () => {
+    assertJsxOutput('type-descriptor', {
+      jsxOutput: { typeFormat: 'descriptor' },
+    });
+  });
+
+  it('should support descriptor JSX type output in flat props mode', () => {
+    assertJsxOutput('type-descriptor-flat', {
+      jsxOutput: { type: '$type', props: false, typeFormat: 'descriptor' },
+    });
+  });
+
   it('should handle macro calls inside JSX attributes', () => {
     assertJsxOutput('with-macros', { macroMode: true });
   });

@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const { Fragment, jsx, jsxs } = require('@conf-ts/macro/jsx-runtime') as {
-  Fragment: string;
-  jsx: (type: string, props: Record<string, any> | null, key?: string) => any;
-  jsxs: (type: string, props: Record<string, any> | null, key?: string) => any;
+  Fragment: symbol;
+  jsx: (type: unknown, props: Record<string, any> | null, key?: string) => any;
+  jsxs: (type: unknown, props: Record<string, any> | null, key?: string) => any;
 };
 const { jsxDEV } = require('@conf-ts/macro/jsx-dev-runtime') as {
   jsxDEV: (
-    type: string,
+    type: unknown,
     props: Record<string, any> | null,
     key?: string,
   ) => any;
@@ -80,6 +80,62 @@ describe('@conf-ts/macro JSX runtime', () => {
     });
   });
 
+  it('supports descriptor type output at runtime', () => {
+    setJsxOutput({ typeFormat: 'descriptor' });
+
+    expect(jsx('button', { id: 'submit' })).toEqual({
+      type: { kind: 'intrinsic', name: 'button' },
+      props: { id: 'submit' },
+    });
+    expect(jsx(Fragment, {})).toEqual({
+      type: { kind: 'fragment', name: 'Fragment' },
+      props: {},
+    });
+  });
+
+  it('serializes runtime components by displayName or name without executing them', () => {
+    let executed = false;
+    function RawComponent() {
+      executed = true;
+      return null;
+    }
+    RawComponent.displayName = 'PublicComponent';
+
+    function NamedComponent() {
+      executed = true;
+      return null;
+    }
+
+    expect(jsx(RawComponent, { enabled: true })).toEqual({
+      type: 'PublicComponent',
+      props: { enabled: true },
+    });
+    expect(jsx(NamedComponent, {})).toEqual({
+      type: 'NamedComponent',
+      props: {},
+    });
+    expect(executed).toBe(false);
+  });
+
+  it('rejects runtime component values without a serializable name', () => {
+    expect(() => jsx(Object.create(null), {})).toThrow(
+      'displayName or name',
+    );
+  });
+
+  it('distinguishes the Fragment sentinel from a string named Fragment', () => {
+    setJsxOutput({ fragment: 'Group', typeFormat: 'descriptor' });
+
+    expect(jsx(Fragment, {})).toEqual({
+      type: { kind: 'fragment', name: 'Group' },
+      props: {},
+    });
+    expect(jsx('Fragment', {})).toEqual({
+      type: { kind: 'intrinsic', name: 'Fragment' },
+      props: {},
+    });
+  });
+
   it('supports key, children, and fragments in flat mode', () => {
     setJsxOutput({
       type: '$type',
@@ -129,6 +185,11 @@ describe('@conf-ts/macro JSX runtime', () => {
       'jsxOutput.children must be a non-empty string or false',
     );
 
+    setJsxOutput({ typeFormat: 'object' });
+    expect(() => jsx('div', {})).toThrow(
+      'jsxOutput.typeFormat must be "string" or "descriptor"',
+    );
+
     setJsxOutput({ type: 'node', key: 'node' });
     expect(() => jsx('div', {})).toThrow(
       'jsxOutput.key conflicts with jsxOutput.type field "node"',
@@ -157,7 +218,7 @@ describe('@conf-ts/macro JSX runtime', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { createElement } = require('@conf-ts/macro') as {
       createElement: (
-        type: string,
+        type: unknown,
         props: Record<string, any> | null,
         ...children: any[]
       ) => any;

@@ -1,0 +1,37 @@
+intrinsic:
+  type:
+    kind: intrinsic
+    name: div
+  props: {}
+customElement:
+  type:
+    kind: intrinsic
+    name: my-widget
+  props: {}
+component:
+  type:
+    kind: component
+    name: Button
+  props:
+    variant: primary
+memberComponent:
+  type:
+    kind: component
+    name: UI.Button
+  props: {}
+namespaced:
+  type:
+    kind: intrinsic
+    name: svg:path
+  props:
+    stroke: currentColor
+fragment:
+  type:
+    kind: fragment
+    name: Fragment
+  props:
+    children:
+      type:
+        kind: intrinsic
+        name: span
+      props: {}

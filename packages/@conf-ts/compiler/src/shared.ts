@@ -18,6 +18,7 @@ export interface JsxOutputOptions {
   children?: string | false;
   key?: string;
   fragment?: string;
+  typeFormat?: 'string' | 'descriptor';
 }
 
 /**

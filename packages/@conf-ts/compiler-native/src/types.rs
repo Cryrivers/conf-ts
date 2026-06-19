@@ -270,6 +270,7 @@ pub struct JsxOutputOptions {
   pub children: Option<JsxOutputField>,
   pub key: Option<String>,
   pub fragment: Option<String>,
+  pub type_format: Option<String>,
 }
 
 /// Per-file context containing parsed AST and metadata.

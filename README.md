@@ -236,6 +236,7 @@ compile('path/to/index.conf.tsx', 'json', {
     children: 'children',
     key: 'key',
     fragment: 'Fragment',
+    typeFormat: 'string',
   },
 });
 ```
@@ -249,16 +250,34 @@ With `props: false`, JSX attributes are written at the node root next to the typ
 
 In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `children: false` to reject JSX children entirely; whitespace-only children are ignored.
 
+Set `typeFormat: 'descriptor'` to emit a structured type descriptor instead of a string:
+
+```tsx
+<Button />
+// compiles to: { type: { kind: "component", name: "Button" }, props: {} }
+
+<svg:path />
+// compiles to: { type: { kind: "intrinsic", name: "svg:path" }, props: {} }
+
+<>
+  <span />
+</>
+// compiles to: { type: { kind: "fragment", name: "Fragment" }, props: { children: ... } }
+```
+
+Intrinsic tags use their literal JSX name, component tags use the identifier or member path such as `"Button"` or `"UI.Button"`, and fragments use `jsxOutput.fragment` when configured.
+
 The runtime in `@conf-ts/macro/jsx-runtime` reads the same option shape from `globalThis.__CONF_TS_JSX_OUTPUT__` when JSX is executed as JavaScript:
 
 ```ts
 globalThis.__CONF_TS_JSX_OUTPUT__ = {
   type: '$type',
   props: false,
+  typeFormat: 'descriptor',
 };
 ```
 
-When using the automatic JSX transform, TypeScript emits JSX children as `props.children`; the runtime treats that field as JSX children and applies the configured `children` name or `children: false` behavior. TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
+When using the automatic JSX transform, TypeScript emits JSX children as `props.children`; the runtime treats that field as JSX children and applies the configured `children` name or `children: false` behavior. Runtime component values are not executed; functions, classes, and component-like objects serialize from `displayName` first and then `name`, and anonymous component values fail. TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
 
 ## Programmatic API
 

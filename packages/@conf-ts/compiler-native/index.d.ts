@@ -24,4 +24,5 @@ export interface JsxOutputOptions {
   children?: string | boolean
   key?: string
   fragment?: string
+  typeFormat?: 'string' | 'descriptor'
 }

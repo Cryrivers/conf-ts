@@ -1,0 +1,18 @@
+field:
+  $type:
+    kind: intrinsic
+    name: input
+  type: text
+component:
+  $type:
+    kind: component
+    name: Button
+  key: primary
+fragment:
+  $type:
+    kind: fragment
+    name: Fragment
+  children:
+    $type:
+      kind: intrinsic
+      name: span

@@ -4,6 +4,7 @@ export interface JsxOutputOptions {
   children?: string | false;
   key?: string;
   fragment?: string;
+  typeFormat?: 'string' | 'descriptor';
 }
 
 declare global {
@@ -16,11 +17,19 @@ type NormalizedJsxOutputOptions = {
   children: string | false;
   key: string;
   fragment: string;
+  typeFormat: 'string' | 'descriptor';
 };
 
 type JsxProps = Record<string, any> | null | undefined;
 
-export const Fragment = 'Fragment';
+type JsxTypeKind = 'intrinsic' | 'component' | 'fragment';
+
+type JsxTypeInfo = {
+  kind: JsxTypeKind;
+  name: string;
+};
+
+export const Fragment = Symbol.for('@conf-ts/macro.Fragment');
 
 function validateJsxName(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) {
@@ -50,6 +59,15 @@ function validateJsxField(
   return value;
 }
 
+function validateJsxTypeFormat(value: unknown): 'string' | 'descriptor' {
+  if (value === 'string' || value === 'descriptor') {
+    return value;
+  }
+  throw new Error(
+    'Invalid option: jsxOutput.typeFormat must be "string" or "descriptor"',
+  );
+}
+
 function normalizeJsxOutputOptions(): NormalizedJsxOutputOptions {
   const raw = globalThis.__CONF_TS_JSX_OUTPUT__ ?? {};
   const normalized: NormalizedJsxOutputOptions = {
@@ -61,6 +79,10 @@ function normalizeJsxOutputOptions(): NormalizedJsxOutputOptions {
       raw.fragment === undefined
         ? 'Fragment'
         : validateJsxName(raw.fragment, 'fragment'),
+    typeFormat:
+      raw.typeFormat === undefined
+        ? 'string'
+        : validateJsxTypeFormat(raw.typeFormat),
   };
 
   const enabledFields = [
@@ -83,6 +105,53 @@ function normalizeJsxOutputOptions(): NormalizedJsxOutputOptions {
   }
 
   return normalized;
+}
+
+function formatJsxType(
+  type: JsxTypeInfo,
+  jsxOutput: NormalizedJsxOutputOptions,
+) {
+  if (jsxOutput.typeFormat === 'descriptor') {
+    return { kind: type.kind, name: type.name };
+  }
+  return type.name;
+}
+
+function getRuntimeComponentName(type: unknown): string | undefined {
+  if (
+    (typeof type !== 'function' && typeof type !== 'object') ||
+    type === null
+  ) {
+    return undefined;
+  }
+
+  const value = type as { displayName?: unknown; name?: unknown };
+  if (typeof value.displayName === 'string' && value.displayName.length > 0) {
+    return value.displayName;
+  }
+  if (typeof value.name === 'string' && value.name.length > 0) {
+    return value.name;
+  }
+  return undefined;
+}
+
+function getRuntimeJsxType(
+  type: unknown,
+  jsxOutput: NormalizedJsxOutputOptions,
+): JsxTypeInfo {
+  if (type === Fragment) {
+    return { kind: 'fragment', name: jsxOutput.fragment };
+  }
+  if (typeof type === 'string') {
+    return { kind: 'intrinsic', name: type };
+  }
+
+  const componentName = getRuntimeComponentName(type);
+  if (componentName !== undefined) {
+    return { kind: 'component', name: componentName };
+  }
+
+  throw new Error('JSX component type must have a displayName or name');
 }
 
 function isWhitespaceOnlyChild(value: unknown): boolean {
@@ -120,7 +189,7 @@ function assertNoFlatJsxPropCollision(
 }
 
 function createJsxNode(
-  type: string,
+  type: unknown,
   inputProps: JsxProps,
   key?: string,
 ): Record<string, any> {
@@ -129,7 +198,7 @@ function createJsxNode(
   const hasChildren = Object.prototype.hasOwnProperty.call(props, 'children');
   const children = props.children;
   delete props.children;
-  const outputType = type === Fragment ? jsxOutput.fragment : type;
+  const outputType = formatJsxType(getRuntimeJsxType(type, jsxOutput), jsxOutput);
 
   if (jsxOutput.children === false && hasChildren) {
     assertChildrenAllowed(children);
@@ -162,7 +231,7 @@ function createJsxNode(
 }
 
 export function jsx(
-  type: string,
+  type: unknown,
   props: JsxProps,
   key?: string,
 ): Record<string, any> {
@@ -172,7 +241,7 @@ export function jsx(
 export const jsxs = jsx;
 
 export function createElement(
-  type: string,
+  type: unknown,
   props: JsxProps,
   ...children: any[]
 ): Record<string, any> {
