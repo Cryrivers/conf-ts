@@ -339,6 +339,7 @@ describe('Template Literals', () => {
 describe('Error Handling and Edge Cases', () => {
   test('Invalid inputs and syntax errors', () => {
     // Missing expression
+    // @ts-expect-error
     expect(() => expression(undefined)).toThrow('invalid expression');
 
     // Invalid object key and structure

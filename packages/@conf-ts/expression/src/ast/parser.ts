@@ -1,4 +1,4 @@
-import { raiseParseError } from './errors';
+import { raiseParseError } from '../errors';
 import { tokenize } from './lexer';
 import type { ASTNode, BinaryNode, LogicalNode, ObjectProperty, SpreadElement, Token, UnaryNode } from './types';
 

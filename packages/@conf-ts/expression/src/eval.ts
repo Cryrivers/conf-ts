@@ -10,7 +10,7 @@ import type {
   ObjectProperty,
   SpreadElement,
   UnaryNode,
-} from './types';
+} from './ast/types';
 
 const toBool = (v: unknown): boolean => !!v;
 const toKey = (k: unknown): PropertyKey => (typeof k === 'symbol' ? k : String(k));

@@ -1,4 +1,4 @@
-import { formatInvalid, raiseInvalid } from './errors';
+import { formatInvalid, raiseInvalid } from '../errors';
 import type { Token } from './types';
 
 const isDigit = (ch: string) => ch >= '0' && ch <= '9';
