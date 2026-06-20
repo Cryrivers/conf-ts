@@ -17,6 +17,9 @@ pub fn evaluate_macro(
 ) -> Result<Value, ConfTSError> {
   let callee = call_expr_callee_name(call);
 
+  if let Some(val) = evaluate_expr(&callee, call, file_ctx, ctx)? {
+    return Ok(val);
+  }
   if let Some(val) = evaluate_type_casting(&callee, call, file_ctx, ctx, local_context, options)? {
     return Ok(val);
   }
@@ -658,5 +661,525 @@ fn is_param_chain(expr: &Expression, param_name: &str) -> bool {
     Expression::StaticMemberExpression(member) => is_param_chain(&member.object, param_name),
     Expression::ComputedMemberExpression(member) => is_param_chain(&member.object, param_name),
     _ => false,
+  }
+}
+
+const EXPR_CALLBACK_ERROR: &str =
+  "expr callback must be an arrow function with a single identifier parameter and expression body";
+
+fn evaluate_expr(
+  callee: &str,
+  call: &CallExpression,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+) -> Result<Option<Value>, ConfTSError> {
+  if callee != "expr" {
+    return Ok(None);
+  }
+
+  if !check_macro_import(callee, ctx, &file_ctx.file_path) {
+    let (line, character) = get_location(&file_ctx.line_index, call.span.start);
+    return Err(ConfTSError::new(
+      format!(
+        "Macro function '{}' must be imported from '@conf-ts/macro' to use in macro mode",
+        callee
+      ),
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+
+  if call.arguments.len() != 1 {
+    let (line, character) = get_location(&file_ctx.line_index, call.span.start);
+    return Err(ConfTSError::new(
+      EXPR_CALLBACK_ERROR,
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+
+  let callback = call.arguments[0].as_expression().unwrap();
+  let arrow = match callback {
+    Expression::ArrowFunctionExpression(arrow) if !arrow.r#async => arrow,
+    _ => {
+      let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
+      return Err(ConfTSError::new(
+        EXPR_CALLBACK_ERROR,
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  if arrow.params.items.len() != 1 || arrow.params.rest.is_some() {
+    let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
+    return Err(ConfTSError::new(
+      EXPR_CALLBACK_ERROR,
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+
+  let param_name = match &arrow.params.items[0].pattern {
+    BindingPattern::BindingIdentifier(ident) => ident.name.as_str().to_string(),
+    _ => {
+      let (line, character) = get_location(&file_ctx.line_index, arrow.params.span.start);
+      return Err(ConfTSError::new(
+        EXPR_CALLBACK_ERROR,
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  if !arrow.expression {
+    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+    return Err(ConfTSError::new(
+      EXPR_CALLBACK_ERROR,
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+
+  let body_expr = match arrow.body.statements.first() {
+    Some(Statement::ExpressionStatement(expr_stmt)) => &expr_stmt.expression,
+    _ => {
+      let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+      return Err(ConfTSError::new(
+        EXPR_CALLBACK_ERROR,
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  validate_expr_syntax(body_expr, file_ctx)?;
+
+  let source = file_ctx.parsed.source();
+  let body_start = body_expr.span().start;
+  let body_text = &source[body_start as usize..body_expr.span().end as usize];
+
+  let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+  collect_context_replacements(body_expr, &param_name, body_start, &mut replacements, file_ctx)?;
+
+  replacements.sort_by(|a, b| b.0.cmp(&a.0));
+  let mut result = body_text.to_string();
+  for (start, end, replacement) in &replacements {
+    result.replace_range(*start..*end, replacement);
+  }
+
+  Ok(Some(Value::String(result)))
+}
+
+fn is_valid_identifier(s: &str) -> bool {
+  let mut chars = s.chars();
+  match chars.next() {
+    None => false,
+    Some(c) if c == '_' || c == '$' || c.is_ascii_alphabetic() => {
+      chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric())
+    }
+    _ => false,
+  }
+}
+
+fn collect_context_replacements(
+  expr: &Expression,
+  param_name: &str,
+  body_start: u32,
+  replacements: &mut Vec<(usize, usize, String)>,
+  file_ctx: &FileContext,
+) -> Result<(), ConfTSError> {
+  match expr {
+    Expression::StaticMemberExpression(member)
+      if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+    {
+      let ident_start = member.object.span().start;
+      let prop_start = member.property.span.start;
+      let relative_start = ident_start as usize - body_start as usize;
+      let relative_end = prop_start as usize - body_start as usize;
+      replacements.push((relative_start, relative_end, String::new()));
+      Ok(())
+    }
+
+    Expression::ComputedMemberExpression(member)
+      if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+    {
+      match &member.expression {
+        Expression::StringLiteral(s) => {
+          let key = s.value.as_str();
+          if !is_valid_identifier(key) {
+            let (line, character) = get_location(&file_ctx.line_index, member.span.start);
+            return Err(ConfTSError::new(
+              "expr callback can only access context properties with identifier property names",
+              &file_ctx.file_path,
+              line,
+              character,
+            ));
+          }
+          let relative_start = member.span.start as usize - body_start as usize;
+          let relative_end = member.span.end as usize - body_start as usize;
+          replacements.push((relative_start, relative_end, key.to_string()));
+          Ok(())
+        }
+        _ => {
+          let (line, character) = get_location(&file_ctx.line_index, member.span.start);
+          Err(ConfTSError::new(
+            "expr callback can only access context properties with identifier property names",
+            &file_ctx.file_path,
+            line,
+            character,
+          ))
+        }
+      }
+    }
+
+    Expression::Identifier(ident) if ident.name.as_str() == param_name => {
+      let (line, character) = get_location(&file_ctx.line_index, ident.span.start);
+      Err(ConfTSError::new(
+        "expr callback cannot use the context parameter directly",
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+
+    _ => walk_expr_children(expr, param_name, body_start, replacements, file_ctx),
+  }
+}
+
+fn walk_expr_children(
+  expr: &Expression,
+  param_name: &str,
+  body_start: u32,
+  replacements: &mut Vec<(usize, usize, String)>,
+  file_ctx: &FileContext,
+) -> Result<(), ConfTSError> {
+  match expr {
+    Expression::BinaryExpression(bin) => {
+      collect_context_replacements(&bin.left, param_name, body_start, replacements, file_ctx)?;
+      collect_context_replacements(&bin.right, param_name, body_start, replacements, file_ctx)
+    }
+    Expression::LogicalExpression(log) => {
+      collect_context_replacements(&log.left, param_name, body_start, replacements, file_ctx)?;
+      collect_context_replacements(&log.right, param_name, body_start, replacements, file_ctx)
+    }
+    Expression::UnaryExpression(unary) => {
+      collect_context_replacements(&unary.argument, param_name, body_start, replacements, file_ctx)
+    }
+    Expression::ConditionalExpression(cond) => {
+      collect_context_replacements(&cond.test, param_name, body_start, replacements, file_ctx)?;
+      collect_context_replacements(
+        &cond.consequent,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )?;
+      collect_context_replacements(
+        &cond.alternate,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::ParenthesizedExpression(paren) => {
+      collect_context_replacements(
+        &paren.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::TemplateLiteral(tpl) => {
+      for e in &tpl.expressions {
+        collect_context_replacements(e, param_name, body_start, replacements, file_ctx)?;
+      }
+      Ok(())
+    }
+    Expression::ArrayExpression(arr) => {
+      for elem in &arr.elements {
+        match elem {
+          ArrayExpressionElement::SpreadElement(spread) => {
+            collect_context_replacements(
+              &spread.argument,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+            )?;
+          }
+          ArrayExpressionElement::Elision(_) => {}
+          other => {
+            if let Some(e) = other.as_expression() {
+              collect_context_replacements(e, param_name, body_start, replacements, file_ctx)?;
+            }
+          }
+        }
+      }
+      Ok(())
+    }
+    Expression::ObjectExpression(obj) => {
+      for prop_kind in &obj.properties {
+        match prop_kind {
+          ObjectPropertyKind::ObjectProperty(prop) => {
+            if !prop.shorthand {
+              collect_context_replacements(
+                &prop.value,
+                param_name,
+                body_start,
+                replacements,
+                file_ctx,
+              )?;
+            }
+          }
+          ObjectPropertyKind::SpreadProperty(spread) => {
+            collect_context_replacements(
+              &spread.argument,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+            )?;
+          }
+        }
+      }
+      Ok(())
+    }
+    Expression::CallExpression(call) => {
+      collect_context_replacements(&call.callee, param_name, body_start, replacements, file_ctx)?;
+      for arg in &call.arguments {
+        if let Some(e) = arg.as_expression() {
+          collect_context_replacements(e, param_name, body_start, replacements, file_ctx)?;
+        }
+      }
+      Ok(())
+    }
+    Expression::StaticMemberExpression(member) => {
+      collect_context_replacements(
+        &member.object,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::ComputedMemberExpression(member) => {
+      collect_context_replacements(
+        &member.object,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )?;
+      collect_context_replacements(
+        &member.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::ChainExpression(chain) => match &chain.expression {
+      ChainElement::StaticMemberExpression(member)
+        if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+      {
+        let ident_start = member.object.span().start;
+        let prop_start = member.property.span.start;
+        let relative_start = ident_start as usize - body_start as usize;
+        let relative_end = prop_start as usize - body_start as usize;
+        replacements.push((relative_start, relative_end, String::new()));
+        Ok(())
+      }
+      ChainElement::ComputedMemberExpression(member)
+        if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+      {
+        match &member.expression {
+          Expression::StringLiteral(s) => {
+            let key = s.value.as_str();
+            if !is_valid_identifier(key) {
+              let (line, character) = get_location(&file_ctx.line_index, member.span.start);
+              return Err(ConfTSError::new(
+                "expr callback can only access context properties with identifier property names",
+                &file_ctx.file_path,
+                line,
+                character,
+              ));
+            }
+            let relative_start = member.span.start as usize - body_start as usize;
+            let relative_end = member.span.end as usize - body_start as usize;
+            replacements.push((relative_start, relative_end, key.to_string()));
+            Ok(())
+          }
+          _ => {
+            let (line, character) = get_location(&file_ctx.line_index, member.span.start);
+            Err(ConfTSError::new(
+              "expr callback can only access context properties with identifier property names",
+              &file_ctx.file_path,
+              line,
+              character,
+            ))
+          }
+        }
+      }
+      _ => Ok(()),
+    },
+    Expression::TSAsExpression(ts_as) => {
+      collect_context_replacements(
+        &ts_as.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::TSSatisfiesExpression(ts_sat) => {
+      collect_context_replacements(
+        &ts_sat.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::TSNonNullExpression(ts_nn) => {
+      collect_context_replacements(
+        &ts_nn.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      )
+    }
+    Expression::SequenceExpression(seq) => {
+      for e in &seq.expressions {
+        collect_context_replacements(e, param_name, body_start, replacements, file_ctx)?;
+      }
+      Ok(())
+    }
+    _ => Ok(()),
+  }
+}
+
+fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(), ConfTSError> {
+  match expr {
+    Expression::BinaryExpression(bin) => {
+      if matches!(
+        bin.operator,
+        BinaryOperator::Exponential
+          | BinaryOperator::BitwiseAnd
+          | BinaryOperator::BitwiseOR
+          | BinaryOperator::BitwiseXOR
+          | BinaryOperator::ShiftLeft
+          | BinaryOperator::ShiftRight
+          | BinaryOperator::ShiftRightZeroFill
+          | BinaryOperator::Instanceof
+          | BinaryOperator::In
+      ) {
+        let source = file_ctx.parsed.source();
+        let text = &source[bin.span.start as usize..bin.span.end as usize];
+        let (line, character) = get_location(&file_ctx.line_index, bin.span.start);
+        return Err(ConfTSError::new(
+          format!("parse expression error: {}", text),
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+      validate_expr_syntax(&bin.left, file_ctx)?;
+      validate_expr_syntax(&bin.right, file_ctx)
+    }
+    Expression::UnaryExpression(unary) => {
+      if matches!(
+        unary.operator,
+        UnaryOperator::BitwiseNot | UnaryOperator::Void | UnaryOperator::Delete | UnaryOperator::Typeof
+      ) {
+        let source = file_ctx.parsed.source();
+        let text = &source[unary.span.start as usize..unary.span.end as usize];
+        let (line, character) = get_location(&file_ctx.line_index, unary.span.start);
+        return Err(ConfTSError::new(
+          format!("parse expression error: {}", text),
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+      validate_expr_syntax(&unary.argument, file_ctx)
+    }
+    Expression::LogicalExpression(log) => {
+      validate_expr_syntax(&log.left, file_ctx)?;
+      validate_expr_syntax(&log.right, file_ctx)
+    }
+    Expression::ConditionalExpression(cond) => {
+      validate_expr_syntax(&cond.test, file_ctx)?;
+      validate_expr_syntax(&cond.consequent, file_ctx)?;
+      validate_expr_syntax(&cond.alternate, file_ctx)
+    }
+    Expression::ParenthesizedExpression(paren) => {
+      validate_expr_syntax(&paren.expression, file_ctx)
+    }
+    Expression::StaticMemberExpression(member) => {
+      validate_expr_syntax(&member.object, file_ctx)
+    }
+    Expression::ComputedMemberExpression(member) => {
+      validate_expr_syntax(&member.object, file_ctx)?;
+      validate_expr_syntax(&member.expression, file_ctx)
+    }
+    Expression::CallExpression(call) => {
+      validate_expr_syntax(&call.callee, file_ctx)?;
+      for arg in &call.arguments {
+        if let Some(e) = arg.as_expression() {
+          validate_expr_syntax(e, file_ctx)?;
+        }
+      }
+      Ok(())
+    }
+    Expression::ArrayExpression(arr) => {
+      for elem in &arr.elements {
+        if let Some(e) = elem.as_expression() {
+          validate_expr_syntax(e, file_ctx)?;
+        }
+      }
+      Ok(())
+    }
+    Expression::ObjectExpression(obj) => {
+      for prop_kind in &obj.properties {
+        match prop_kind {
+          ObjectPropertyKind::ObjectProperty(prop) => {
+            validate_expr_syntax(&prop.value, file_ctx)?;
+          }
+          ObjectPropertyKind::SpreadProperty(spread) => {
+            validate_expr_syntax(&spread.argument, file_ctx)?;
+          }
+        }
+      }
+      Ok(())
+    }
+    Expression::TemplateLiteral(tpl) => {
+      for e in &tpl.expressions {
+        validate_expr_syntax(e, file_ctx)?;
+      }
+      Ok(())
+    }
+    Expression::TSAsExpression(ts_as) => validate_expr_syntax(&ts_as.expression, file_ctx),
+    Expression::TSSatisfiesExpression(ts_sat) => {
+      validate_expr_syntax(&ts_sat.expression, file_ctx)
+    }
+    Expression::TSNonNullExpression(ts_nn) => validate_expr_syntax(&ts_nn.expression, file_ctx),
+    Expression::SequenceExpression(seq) => {
+      for e in &seq.expressions {
+        validate_expr_syntax(e, file_ctx)?;
+      }
+      Ok(())
+    }
+    _ => Ok(()),
   }
 }

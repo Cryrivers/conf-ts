@@ -1,25 +1,31 @@
-import { compileInMemory } from '@conf-ts/compiler';
+import { compileInMemory as compileJs } from '@conf-ts/compiler';
+import { compileInMemory as compileNative } from '@conf-ts/compiler-native';
 import expression from '@conf-ts/expression';
 import { describe, expect, it } from 'vitest';
 
 const callbackError =
   'expr callback must be an arrow function with a single identifier parameter and expression body';
 
-function compileConfig(source: string): Record<string, any> {
-  const { output } = compileInMemory(
-    { '/index.ts': source },
-    '/index.ts',
-    'json',
-    true,
-  );
-  return JSON.parse(output);
-}
+const compilers = [
+  ['compiler', compileJs],
+  ['compiler-native', compileNative],
+] as const;
 
-function expectCompileError(source: string, message: string) {
-  expect(() => compileConfig(source)).toThrow(message);
-}
+describe.each(compilers)('%s expr macro', (_name, compileInMemory) => {
+  function compileConfig(source: string): Record<string, any> {
+    const { output } = compileInMemory(
+      { '/index.ts': source },
+      '/index.ts',
+      'json',
+      true,
+    );
+    return JSON.parse(output);
+  }
 
-describe('Compiler expr macro', () => {
+  function expectCompileError(source: string, message: string) {
+    expect(() => compileConfig(source)).toThrow(message);
+  }
+
   it('converts context property access into expression strings', () => {
     const output = compileConfig(`
       import { expr } from '@conf-ts/macro';
