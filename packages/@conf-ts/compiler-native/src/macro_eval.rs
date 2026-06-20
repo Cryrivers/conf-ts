@@ -17,7 +17,7 @@ pub fn evaluate_macro(
 ) -> Result<Value, ConfTSError> {
   let callee = call_expr_callee_name(call);
 
-  if let Some(val) = evaluate_expr(&callee, call, file_ctx, ctx)? {
+  if let Some(val) = evaluate_expr(&callee, call, file_ctx, ctx, options)? {
     return Ok(val);
   }
   if let Some(val) = evaluate_type_casting(&callee, call, file_ctx, ctx, local_context, options)? {
@@ -667,11 +667,212 @@ fn is_param_chain(expr: &Expression, param_name: &str) -> bool {
 const EXPR_CALLBACK_ERROR: &str =
   "expr callback must be an arrow function with a single identifier parameter and expression body";
 
+fn value_to_expr_literal(
+  value: &Value,
+  file_ctx: &FileContext,
+  offset: u32,
+) -> Result<String, ConfTSError> {
+  match value {
+    Value::Number(n) => {
+      if n.value == (n.value as i64) as f64 && n.value.abs() < 1e15 {
+        Ok(format!("{}", n.value as i64))
+      } else {
+        Ok(format!("{}", n.value))
+      }
+    }
+    Value::String(s) => {
+      let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+      Ok(format!("\"{}\"", escaped))
+    }
+    Value::Bool(b) => Ok(b.to_string()),
+    Value::Null => Ok("null".to_string()),
+    _ => {
+      let (line, character) = get_location(&file_ctx.line_index, offset);
+      Err(ConfTSError::new(
+        format!(
+          "Cannot inline value of type {} into expr",
+          value.typeof_string()
+        ),
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+  }
+}
+
+fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+  match expr {
+    Expression::StaticMemberExpression(member) => get_member_root(&member.object),
+    _ => expr,
+  }
+}
+
+fn collect_const_replacements(
+  expr: &Expression,
+  param_name: &str,
+  body_start: u32,
+  replacements: &mut Vec<(usize, usize, String)>,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<(), ConfTSError> {
+  match expr {
+    Expression::StaticMemberExpression(member) => {
+      let root = get_member_root(&member.object);
+      if matches!(root, Expression::Identifier(id) if id.name.as_str() == param_name) {
+        return Ok(());
+      }
+      let value = evaluate(expr, file_ctx, ctx, None, options)?;
+      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start)?;
+      let start = expr.span().start as usize - body_start as usize;
+      let end = expr.span().end as usize - body_start as usize;
+      replacements.push((start, end, literal));
+      Ok(())
+    }
+
+    // ctx[key] where key is a const identifier — resolve key and replace entire expression
+    Expression::ComputedMemberExpression(member)
+      if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name)
+        && !matches!(&member.expression, Expression::StringLiteral(_)) =>
+    {
+      let key_value = evaluate(&member.expression, file_ctx, ctx, None, options)?;
+      match &key_value {
+        Value::String(s) if is_valid_identifier(s) => {
+          let start = expr.span().start as usize - body_start as usize;
+          let end = expr.span().end as usize - body_start as usize;
+          replacements.push((start, end, s.clone()));
+          Ok(())
+        }
+        _ => {
+          let (line, character) = get_location(&file_ctx.line_index, member.expression.span().start);
+          Err(ConfTSError::new(
+            "expr callback can only access context properties with identifier property names",
+            &file_ctx.file_path,
+            line,
+            character,
+          ))
+        }
+      }
+    }
+
+    Expression::Identifier(ident) if ident.name.as_str() != param_name => {
+      let value = evaluate(expr, file_ctx, ctx, None, options)?;
+      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start)?;
+      let start = expr.span().start as usize - body_start as usize;
+      let end = expr.span().end as usize - body_start as usize;
+      replacements.push((start, end, literal));
+      Ok(())
+    }
+
+    _ => walk_const_children(expr, param_name, body_start, replacements, file_ctx, ctx, options),
+  }
+}
+
+fn walk_const_children(
+  expr: &Expression,
+  param_name: &str,
+  body_start: u32,
+  replacements: &mut Vec<(usize, usize, String)>,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<(), ConfTSError> {
+  match expr {
+    Expression::BinaryExpression(bin) => {
+      collect_const_replacements(&bin.left, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      collect_const_replacements(&bin.right, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::LogicalExpression(log) => {
+      collect_const_replacements(&log.left, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      collect_const_replacements(&log.right, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::UnaryExpression(unary) => {
+      collect_const_replacements(&unary.argument, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::ConditionalExpression(cond) => {
+      collect_const_replacements(&cond.test, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      collect_const_replacements(&cond.consequent, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      collect_const_replacements(&cond.alternate, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::ParenthesizedExpression(paren) => {
+      collect_const_replacements(&paren.expression, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::TemplateLiteral(tpl) => {
+      for e in &tpl.expressions {
+        collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      }
+      Ok(())
+    }
+    Expression::ArrayExpression(arr) => {
+      for elem in &arr.elements {
+        match elem {
+          ArrayExpressionElement::SpreadElement(spread) => {
+            collect_const_replacements(&spread.argument, param_name, body_start, replacements, file_ctx, ctx, options)?;
+          }
+          ArrayExpressionElement::Elision(_) => {}
+          other => {
+            if let Some(e) = other.as_expression() {
+              collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+            }
+          }
+        }
+      }
+      Ok(())
+    }
+    Expression::ObjectExpression(obj) => {
+      for prop_kind in &obj.properties {
+        match prop_kind {
+          ObjectPropertyKind::ObjectProperty(prop) => {
+            if !prop.shorthand {
+              collect_const_replacements(&prop.value, param_name, body_start, replacements, file_ctx, ctx, options)?;
+            }
+          }
+          ObjectPropertyKind::SpreadProperty(spread) => {
+            collect_const_replacements(&spread.argument, param_name, body_start, replacements, file_ctx, ctx, options)?;
+          }
+        }
+      }
+      Ok(())
+    }
+    Expression::CallExpression(call) => {
+      collect_const_replacements(&call.callee, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      for arg in &call.arguments {
+        if let Some(e) = arg.as_expression() {
+          collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+        }
+      }
+      Ok(())
+    }
+    Expression::ComputedMemberExpression(member) => {
+      collect_const_replacements(&member.object, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      collect_const_replacements(&member.expression, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::TSAsExpression(ts_as) => {
+      collect_const_replacements(&ts_as.expression, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::TSSatisfiesExpression(ts_sat) => {
+      collect_const_replacements(&ts_sat.expression, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::TSNonNullExpression(ts_nn) => {
+      collect_const_replacements(&ts_nn.expression, param_name, body_start, replacements, file_ctx, ctx, options)
+    }
+    Expression::SequenceExpression(seq) => {
+      for e in &seq.expressions {
+        collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      }
+      Ok(())
+    }
+    _ => Ok(()),
+  }
+}
+
 fn evaluate_expr(
   callee: &str,
   call: &CallExpression,
   file_ctx: &FileContext,
-  ctx: &EvalContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
   if callee != "expr" {
     return Ok(None);
@@ -767,6 +968,7 @@ fn evaluate_expr(
   let body_text = &source[body_start as usize..body_expr.span().end as usize];
 
   let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+  collect_const_replacements(body_expr, &param_name, body_start, &mut replacements, file_ctx, ctx, options)?;
   collect_context_replacements(body_expr, &param_name, body_start, &mut replacements, file_ctx)?;
 
   replacements.sort_by(|a, b| b.0.cmp(&a.0));
@@ -811,6 +1013,11 @@ fn collect_context_replacements(
     Expression::ComputedMemberExpression(member)
       if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
     {
+      let relative_start = member.span.start as usize - body_start as usize;
+      let relative_end = member.span.end as usize - body_start as usize;
+      if replacements.iter().any(|(s, e, _)| *s == relative_start && *e == relative_end) {
+        return Ok(());
+      }
       match &member.expression {
         Expression::StringLiteral(s) => {
           let key = s.value.as_str();
@@ -823,8 +1030,6 @@ fn collect_context_replacements(
               character,
             ));
           }
-          let relative_start = member.span.start as usize - body_start as usize;
-          let relative_end = member.span.end as usize - body_start as usize;
           replacements.push((relative_start, relative_end, key.to_string()));
           Ok(())
         }

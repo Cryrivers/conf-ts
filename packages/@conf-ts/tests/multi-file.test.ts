@@ -217,6 +217,25 @@ describe('Multi-file test', () => {
     );
   });
 
+  it('should expand imported const and enum values in expr macro', () => {
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
+    const { output: resultJs } = compileJs(
+      path.join(configPath, 'expr-import.ts'),
+      'json',
+      { macroMode: true },
+    );
+    const { output: resultNative } = compileNative(
+      path.join(configPath, 'expr-import.ts'),
+      'json',
+      { macroMode: true },
+    );
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(configPath, 'expr-import.json'), 'utf8'),
+    );
+    expect(JSON.parse(resultJs)).toEqual(expected);
+    expect(JSON.parse(resultNative)).toEqual(expected);
+  });
+
   it('should resolve in-memory default re-exports and track the entry file', () => {
     const files = {
       '/index.ts': "export { default } from './source';",

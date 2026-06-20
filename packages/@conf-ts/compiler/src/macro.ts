@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { MACRO_FUNCTIONS } from './constants';
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
+import { FormattedNumber } from './shared';
 
 type MacroFunction = {
   name: (typeof MACRO_FUNCTIONS)[number];
@@ -390,10 +391,117 @@ function getExprCallbackDetails(
   };
 }
 
+function valueToExprLiteral(
+  value: any,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): string {
+  if (typeof value === 'number' || value instanceof FormattedNumber) {
+    return String(Number(value));
+  }
+  if (typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'boolean') {
+    return String(value);
+  }
+  if (value === null) {
+    return 'null';
+  }
+  throw new ConfTSError(
+    `Cannot inline value of type ${typeof value} into expr`,
+    {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
+    },
+  );
+}
+
+function getPropertyAccessRoot(node: ts.Expression): ts.Expression {
+  if (ts.isPropertyAccessExpression(node)) {
+    return getPropertyAccessRoot(node.expression);
+  }
+  return node;
+}
+
+function collectConstReplacements(
+  node: ts.Node,
+  paramName: string,
+  bodyStart: number,
+  replacements: [number, number, string][],
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+): void {
+  if (ts.isPropertyAccessExpression(node)) {
+    const root = getPropertyAccessRoot(node);
+    if (ts.isIdentifier(root) && root.text === paramName) {
+      return;
+    }
+    const value = evaluate(
+      node,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      true,
+      evaluatedFiles,
+      undefined,
+      options,
+    );
+    const literal = valueToExprLiteral(value, sourceFile, node);
+    const start = node.getStart(sourceFile) - bodyStart;
+    const end = node.getEnd() - bodyStart;
+    replacements.push([start, end, literal]);
+    return;
+  }
+
+  if (ts.isIdentifier(node) && node.text !== paramName) {
+    const value = evaluate(
+      node,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      true,
+      evaluatedFiles,
+      undefined,
+      options,
+    );
+    const literal = valueToExprLiteral(value, sourceFile, node);
+    const start = node.getStart(sourceFile) - bodyStart;
+    const end = node.getEnd() - bodyStart;
+    replacements.push([start, end, literal]);
+    return;
+  }
+
+  ts.forEachChild(node, child =>
+    collectConstReplacements(
+      child,
+      paramName,
+      bodyStart,
+      replacements,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      options,
+    ),
+  );
+}
+
 function evaluateExpr(
   expression: ts.CallExpression,
   sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
   macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ): string | undefined {
   const callee = getCalleeName(expression, sourceFile);
   if (callee !== 'expr') {
@@ -420,11 +528,30 @@ function evaluateExpr(
     sourceFile,
   );
 
+  let bodyText = bodyExpression.getText(sourceFile);
+  const bodyStart = bodyExpression.getStart(sourceFile);
+
+  const replacements: [number, number, string][] = [];
+  collectConstReplacements(
+    bodyExpression,
+    paramName,
+    bodyStart,
+    replacements,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+  );
+
+  replacements.sort((a, b) => b[0] - a[0]);
+  for (const [start, end, literal] of replacements) {
+    bodyText = bodyText.slice(0, start) + literal + bodyText.slice(end);
+  }
+
   try {
-    return rewriteContextExpression(
-      bodyExpression.getText(sourceFile),
-      paramName,
-    );
+    return rewriteContextExpression(bodyText, paramName);
   } catch (error) {
     throw new ConfTSError(
       error instanceof Error ? error.message : String(error),
@@ -795,7 +922,15 @@ export function evaluateMacro(
   context?: { [name: string]: any },
   options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
 ): any {
-  let result: any = evaluateExpr(expression, sourceFile, macroImportsMap);
+  let result: any = evaluateExpr(
+    expression,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+  );
   if (result !== undefined) {
     return result;
   }
