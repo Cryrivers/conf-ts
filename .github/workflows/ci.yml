@@ -134,6 +134,9 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.settings.target }}
 
+      - name: Add Rust target for active toolchain
+        run: rustup target add ${{ matrix.settings.target }}
+
       - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
