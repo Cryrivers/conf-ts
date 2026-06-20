@@ -77,4 +77,32 @@ export default {
     ctx => ctx.user!.profile.score,
   ),
   throwingCall: expr<Context, never>(ctx => ctx.fail()),
+  nullishCoalescing: expr<Context, unknown>(ctx => ctx.value ?? ctx.right),
+  logicalOr: expr<Context, unknown>(ctx => ctx.left || ctx.right),
+  conditional: expr<Context, string>(
+    ctx => ctx.enabled ? ctx.status : ctx.right,
+  ),
+  voidExpr: expr<Context, undefined>(ctx => void ctx.number),
+  typeofExpr: expr<Context, string>(ctx => typeof ctx.value),
+  bitwiseNot: expr<Context, number>(ctx => ~ctx.number),
+  unaryNegate: expr<Context, number>(ctx => -ctx.number),
+  unaryNot: expr<Context, boolean>(ctx => !ctx.enabled),
+  equality: expr<Context, boolean>(ctx => ctx.number == ctx.text),
+  inequality: expr<Context, boolean>(ctx => ctx.number != ctx.text),
+  strictInequality: expr<Context, boolean>(
+    ctx => ctx.number !== THRESHOLD,
+  ),
+  exponentiation: expr<Context, number>(
+    ctx => ctx.increment ** ctx.increment,
+  ),
+  modulo: expr<Context, number>(ctx => ctx.number % ctx.increment),
+  nestedTernary: expr<Context, string>(
+    ctx => ctx.number > THRESHOLD ? "high" : ctx.number > 5 ? "mid" : "low",
+  ),
+  comparison: expr<Context, boolean>(
+    ctx => ctx.number >= THRESHOLD && ctx.number <= THRESHOLD,
+  ),
+  shiftRight: expr<Context, number>(ctx => ctx.number >> 1),
+  shiftRightZeroFill: expr<Context, number>(ctx => ctx.number >>> 1),
+  bitwiseXor: expr<Context, number>(ctx => ctx.number ^ ctx.increment),
 };

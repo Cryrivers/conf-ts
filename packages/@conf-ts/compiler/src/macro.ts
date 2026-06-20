@@ -1,15 +1,9 @@
 import { rewriteContextExpression } from '@conf-ts/expression';
 import ts from 'typescript';
 
-import { MACRO_FUNCTIONS } from './constants';
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
 import { FormattedNumber } from './shared';
-
-type MacroFunction = {
-  name: (typeof MACRO_FUNCTIONS)[number];
-  argLength: number;
-};
 
 type MacroOptions = {
   preserveKeyOrder?: boolean;
@@ -29,22 +23,6 @@ type ExprReplacementContext = {
   evaluatedFiles: Set<string>;
   options?: MacroOptions;
 };
-
-const TYPE_CASTING_FUNCTIONS = [
-  { name: 'String', argLength: 1 },
-  { name: 'Number', argLength: 1 },
-  { name: 'Boolean', argLength: 1 },
-] satisfies MacroFunction[];
-
-const ARRAY_MACRO_FUNCTIONS = [
-  { name: 'arrayMap', argLength: 2 },
-  { name: 'arrayFilter', argLength: 2 },
-  { name: 'arrayFlatMap', argLength: 2 },
-] satisfies MacroFunction[];
-
-const ENV_MACRO_FUNCTIONS = [
-  { name: 'env', argLength: 1 },
-] satisfies MacroFunction[];
 
 const EXPR_CALLBACK_ERROR =
   'expr callback must be an arrow function with a single identifier parameter and expression body';
@@ -618,6 +596,7 @@ function collectTypeSyntaxErasures(
 }
 
 function evaluateExpr(
+  callee: string,
   expression: ts.CallExpression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -626,7 +605,6 @@ function evaluateExpr(
   evaluatedFiles: Set<string>,
   options?: MacroOptions,
 ): string | undefined {
-  const callee = getCalleeName(expression, sourceFile);
   if (callee !== 'expr') {
     return undefined;
   }
@@ -698,6 +676,7 @@ function evaluateExpr(
  * and propagating the current context to ensure correct scope handling.
  */
 function evaluateEnv(
+  callee: string,
   expression: ts.CallExpression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -707,12 +686,8 @@ function evaluateEnv(
   context?: { [name: string]: any },
   options?: MacroOptions,
 ) {
-  const callee = getCalleeName(expression, sourceFile);
-  const macroFunction = ENV_MACRO_FUNCTIONS.find(
-    macro => macro.name === callee,
-  );
   if (
-    macroFunction &&
+    callee === 'env' &&
     (expression.arguments.length === 1 || expression.arguments.length === 2)
   ) {
     assertMacroImported(
@@ -788,6 +763,7 @@ function evaluateEnv(
  * and passing through current context for proper identifier resolution.
  */
 function evaluateTypeCasting(
+  callee: string,
   expression: ts.CallExpression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -797,13 +773,9 @@ function evaluateTypeCasting(
   context?: { [name: string]: any },
   options?: { preserveKeyOrder?: boolean },
 ) {
-  const callee = getCalleeName(expression, sourceFile);
-  const macroFunction = TYPE_CASTING_FUNCTIONS.find(
-    macro => macro.name === callee,
-  );
   if (
-    macroFunction &&
-    expression.arguments.length === macroFunction.argLength
+    (callee === 'String' || callee === 'Number' || callee === 'Boolean') &&
+    expression.arguments.length === 1
   ) {
     assertMacroImported(
       callee,
@@ -837,77 +809,16 @@ function evaluateTypeCasting(
   return undefined;
 }
 
-/**
- * Evaluate arrayMap macro.
- * - Allows nested macros both in the array argument and within the callback body.
- * - Propagates context so that callback parameter is correctly scoped in nested calls.
- */
-function evaluateArrayMap(
-  expression: ts.CallExpression,
-  sourceFile: ts.SourceFile,
-  typeChecker: ts.TypeChecker,
-  enumMap: { [filePath: string]: { [key: string]: any } },
-  macroImportsMap: { [filePath: string]: Set<string> },
-  evaluatedFiles: Set<string>,
-  context?: { [name: string]: any },
-  options?: MacroOptions,
-): any {
-  const callee = getCalleeName(expression, sourceFile);
-  if (callee !== 'arrayMap' || expression.arguments.length !== 2) {
-    return undefined;
-  }
-  assertMacroImported(
-    callee,
-    sourceFile,
-    macroImportsMap,
-    expression,
-    `Macro function '${callee}' must be imported from '@conf-ts/macro' to use in macro mode`,
-  );
-  const arr = evaluate(
-    expression.arguments[0],
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    true, // Allow nested macros inside the array argument
-    evaluatedFiles,
-    context,
-    options,
-  );
-  const { paramName, bodyExpression } = getArrayCallbackDetails({
-    callbackExpression: expression.arguments[1],
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    arrowErrorMessage: 'arrayMap: callback must be an arrow function',
-    paramErrorMessage: 'arrayMap: callback must have exactly one parameter',
-    bodyErrorMessage:
-      'arrayMap: callback body must be a single return statement',
-    identifierErrorMessage:
-      'arrayMap: callback can only use its parameter and literals',
-  });
-  return arr.map((item: any) => {
-    return evaluate(
-      bodyExpression,
-      sourceFile,
-      typeChecker,
-      enumMap,
-      macroImportsMap,
-      true,
-      evaluatedFiles,
-      { [paramName]: item },
-      options,
-    );
-  });
-}
+type ArrayMacroMethod = 'map' | 'flatMap' | 'filter';
 
-/**
- * Evaluate arrayFlatMap macro.
- * - Allows nested macros both in the array argument and within the callback body.
- * - Flattens callback array results by one level, matching Array.prototype.flatMap.
- */
-function evaluateArrayFlatMap(
+const ARRAY_MACRO_METHODS: Record<string, ArrayMacroMethod> = {
+  arrayMap: 'map',
+  arrayFlatMap: 'flatMap',
+  arrayFilter: 'filter',
+};
+
+function evaluateArrayMacro(
+  callee: string,
   expression: ts.CallExpression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -917,8 +828,8 @@ function evaluateArrayFlatMap(
   context?: { [name: string]: any },
   options?: MacroOptions,
 ): any {
-  const callee = getCalleeName(expression, sourceFile);
-  if (callee !== 'arrayFlatMap' || expression.arguments.length !== 2) {
+  const method = ARRAY_MACRO_METHODS[callee];
+  if (!method || expression.arguments.length !== 2) {
     return undefined;
   }
   assertMacroImported(
@@ -934,7 +845,7 @@ function evaluateArrayFlatMap(
     typeChecker,
     enumMap,
     macroImportsMap,
-    true, // Allow nested macros inside the array argument
+    true,
     evaluatedFiles,
     context,
     options,
@@ -945,18 +856,16 @@ function evaluateArrayFlatMap(
     typeChecker,
     enumMap,
     macroImportsMap,
-    arrowErrorMessage: 'arrayFlatMap: callback must be an arrow function',
-    paramErrorMessage: 'arrayFlatMap: callback must have exactly one parameter',
-    bodyErrorMessage:
-      'arrayFlatMap: callback body must be a single return statement',
-    identifierErrorMessage:
-      'arrayFlatMap: callback can only use its parameter and literals',
+    arrowErrorMessage: `${callee}: callback must be an arrow function`,
+    paramErrorMessage: `${callee}: callback must have exactly one parameter`,
+    bodyErrorMessage: `${callee}: callback body must be a single return statement`,
+    identifierErrorMessage: `${callee}: callback can only use its parameter and literals`,
   });
   if (!Array.isArray(arr)) {
     return [];
   }
-  return arr.flatMap((item: any) => {
-    return evaluate(
+  const evalItem = (item: any) =>
+    evaluate(
       bodyExpression,
       sourceFile,
       typeChecker,
@@ -967,73 +876,14 @@ function evaluateArrayFlatMap(
       { [paramName]: item },
       options,
     );
-  });
-}
-
-/**
- * Evaluate arrayFilter macro.
- * - Allows nested macros both in the array argument and within the predicate body.
- * - Propagates context for correct identifier resolution in nested calls.
- */
-function evaluateArrayFilter(
-  expression: ts.CallExpression,
-  sourceFile: ts.SourceFile,
-  typeChecker: ts.TypeChecker,
-  enumMap: { [filePath: string]: { [key: string]: any } },
-  macroImportsMap: { [filePath: string]: Set<string> },
-  evaluatedFiles: Set<string>,
-  context?: { [name: string]: any },
-  options?: MacroOptions,
-): any {
-  const callee = getCalleeName(expression, sourceFile);
-  if (callee !== 'arrayFilter' || expression.arguments.length !== 2) {
-    return undefined;
+  switch (method) {
+    case 'map':
+      return arr.map((item: any) => evalItem(item));
+    case 'flatMap':
+      return arr.flatMap((item: any) => evalItem(item));
+    case 'filter':
+      return arr.filter((item: any) => Boolean(evalItem(item)));
   }
-  assertMacroImported(
-    callee,
-    sourceFile,
-    macroImportsMap,
-    expression,
-    `Macro function '${callee}' must be imported from '@conf-ts/macro' to use in macro mode`,
-  );
-  const arr = evaluate(
-    expression.arguments[0],
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    true, // Allow nested macros inside the array argument
-    evaluatedFiles,
-    context,
-    options,
-  );
-  const { paramName, bodyExpression } = getArrayCallbackDetails({
-    callbackExpression: expression.arguments[1],
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    arrowErrorMessage: 'arrayFilter: callback must be an arrow function',
-    paramErrorMessage: 'arrayFilter: callback must have exactly one parameter',
-    bodyErrorMessage:
-      'arrayFilter: callback body must be a single return statement',
-    identifierErrorMessage:
-      'arrayFilter: callback can only use its parameter and literals',
-  });
-  return arr.filter((item: any) => {
-    const result = evaluate(
-      bodyExpression,
-      sourceFile,
-      typeChecker,
-      enumMap,
-      macroImportsMap,
-      true,
-      evaluatedFiles,
-      { [paramName]: item },
-      options,
-    );
-    return Boolean(result);
-  });
 }
 
 /**
@@ -1050,83 +900,65 @@ export function evaluateMacro(
   context?: { [name: string]: any },
   options?: MacroOptions,
 ): any {
-  let result: any = evaluateExpr(
-    expression,
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    options,
-  );
-  if (result !== undefined) {
-    return result;
+  const callee = getCalleeName(expression, sourceFile);
+
+  const handlers = [
+    () =>
+      evaluateExpr(
+        callee,
+        expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        evaluatedFiles,
+        options,
+      ),
+    () =>
+      evaluateTypeCasting(
+        callee,
+        expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        evaluatedFiles,
+        context,
+        options,
+      ),
+    () =>
+      evaluateArrayMacro(
+        callee,
+        expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        evaluatedFiles,
+        context,
+        options,
+      ),
+    () =>
+      evaluateEnv(
+        callee,
+        expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        evaluatedFiles,
+        context,
+        options,
+      ),
+  ];
+
+  for (const handler of handlers) {
+    const result = handler();
+    if (result !== undefined) {
+      return result;
+    }
   }
-  result = evaluateTypeCasting(
-    expression,
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    context,
-    options,
-  );
-  if (result !== undefined) {
-    return result;
-  }
-  result = evaluateArrayMap(
-    expression,
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    context,
-    options,
-  );
-  if (result !== undefined) {
-    return result;
-  }
-  result = evaluateArrayFlatMap(
-    expression,
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    context,
-    options,
-  );
-  if (result !== undefined) {
-    return result;
-  }
-  result = evaluateArrayFilter(
-    expression,
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    context,
-    options,
-  );
-  if (result !== undefined) {
-    return result;
-  }
-  result = evaluateEnv(
-    expression,
-    sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    context,
-    options,
-  );
-  if (result !== undefined) {
-    return result;
-  }
+
   throw new ConfTSError(
     `Unsupported call expression in macro mode: ${expression.getText(sourceFile)}`,
     {

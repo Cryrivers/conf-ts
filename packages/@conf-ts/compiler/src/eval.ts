@@ -275,10 +275,10 @@ function evaluateJsxChildren(
   macroImportsMap: { [filePath: string]: Set<string> },
   macro: boolean,
   evaluatedFiles: Set<string>,
+  jsxOutput: NormalizedJsxOutputOptions,
   context?: { [name: string]: any },
   options?: CompileOptions,
 ): any[] {
-  const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, sourceFile);
   if (jsxOutput.children === false) {
     const child = findMeaningfulJsxChild(children);
     if (child) {
@@ -346,10 +346,10 @@ function evaluateJsxAttributes(
   macroImportsMap: { [filePath: string]: Set<string> },
   macro: boolean,
   evaluatedFiles: Set<string>,
+  jsxOutput: NormalizedJsxOutputOptions,
   context?: { [name: string]: any },
   options?: CompileOptions,
 ): EvaluatedJsxAttributes {
-  const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, attributes);
   const preserveKeyOrder = options?.preserveKeyOrder;
   const props: { [key: string]: any } = {};
   let key: any;
@@ -445,9 +445,9 @@ function createJsxNode(
   children: any[],
   sourceFile: ts.SourceFile,
   node: ts.Node,
+  jsxOutput: NormalizedJsxOutputOptions,
   options?: CompileOptions,
 ) {
-  const jsxOutput = normalizeJsxOutputOptions(options, sourceFile, node);
   const preserveKeyOrder = options?.preserveKeyOrder;
 
   if (jsxOutput.props === false) {
@@ -1835,6 +1835,11 @@ export function evaluate(
           options,
         );
   } else if (ts.isJsxElement(expression)) {
+    const jsxOutput = normalizeJsxOutputOptions(
+      options,
+      sourceFile,
+      expression,
+    );
     const tagName = expression.openingElement.tagName;
     const type = getJsxElementType(tagName, sourceFile);
     const attrs = evaluateJsxAttributes(
@@ -1845,6 +1850,7 @@ export function evaluate(
       macroImportsMap,
       macro,
       evaluatedFiles,
+      jsxOutput,
       context,
       options,
     );
@@ -1856,6 +1862,7 @@ export function evaluate(
       macroImportsMap,
       macro,
       evaluatedFiles,
+      jsxOutput,
       context,
       options,
     );
@@ -1865,9 +1872,15 @@ export function evaluate(
       children,
       sourceFile,
       expression,
+      jsxOutput,
       options,
     );
   } else if (ts.isJsxSelfClosingElement(expression)) {
+    const jsxOutput = normalizeJsxOutputOptions(
+      options,
+      sourceFile,
+      expression,
+    );
     const tagName = expression.tagName;
     const type = getJsxElementType(tagName, sourceFile);
     const attrs = evaluateJsxAttributes(
@@ -1878,11 +1891,25 @@ export function evaluate(
       macroImportsMap,
       macro,
       evaluatedFiles,
+      jsxOutput,
       context,
       options,
     );
-    return createJsxNode(type, attrs, [], sourceFile, expression, options);
+    return createJsxNode(
+      type,
+      attrs,
+      [],
+      sourceFile,
+      expression,
+      jsxOutput,
+      options,
+    );
   } else if (ts.isJsxFragment(expression)) {
+    const jsxOutput = normalizeJsxOutputOptions(
+      options,
+      sourceFile,
+      expression,
+    );
     const children = evaluateJsxChildren(
       expression.children,
       sourceFile,
@@ -1891,13 +1918,9 @@ export function evaluate(
       macroImportsMap,
       macro,
       evaluatedFiles,
+      jsxOutput,
       context,
       options,
-    );
-    const jsxOutput = normalizeJsxOutputOptions(
-      options,
-      sourceFile,
-      expression,
     );
     return createJsxNode(
       { kind: 'fragment', name: jsxOutput.fragment },
@@ -1905,6 +1928,7 @@ export function evaluate(
       children,
       sourceFile,
       expression,
+      jsxOutput,
       options,
     );
   } else if (ts.isNonNullExpression(expression)) {
