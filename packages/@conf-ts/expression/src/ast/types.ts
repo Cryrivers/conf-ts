@@ -30,9 +30,12 @@ export type ASTNode =
   | BinaryNode
   | LogicalNode
   | ConditionalNode
+  | ParenthesizedNode
+  | ChainNode
   | MemberNode
   | CallNode
   | ArrayNode
+  | ElisionNode
   | ObjectNode
   | TemplateLiteralNode
   | TaggedTemplateNode;
@@ -96,6 +99,16 @@ export interface ConditionalNode {
   alternate: ASTNode;
 }
 
+export interface ParenthesizedNode {
+  type: 'ParenthesizedExpression';
+  expression: ASTNode;
+}
+
+export interface ChainNode {
+  type: 'ChainExpression';
+  expression: ASTNode;
+}
+
 export interface MemberNode {
   type: 'MemberExpression';
   object: ASTNode;
@@ -116,6 +129,10 @@ export interface CallNode {
 export interface ArrayNode {
   type: 'ArrayExpression';
   elements: ASTNode[];
+}
+
+export interface ElisionNode {
+  type: 'Elision';
 }
 
 export interface ObjectProperty {

@@ -16,6 +16,20 @@ type MacroOptions = {
   env?: Record<string, string>;
 };
 
+type ExprReplacement = [start: number, end: number, value: string];
+
+type ExprReplacementContext = {
+  paramName: string;
+  bodyStart: number;
+  replacements: ExprReplacement[];
+  sourceFile: ts.SourceFile;
+  typeChecker: ts.TypeChecker;
+  enumMap: { [filePath: string]: { [key: string]: any } };
+  macroImportsMap: { [filePath: string]: Set<string> };
+  evaluatedFiles: Set<string>;
+  options?: MacroOptions;
+};
+
 const TYPE_CASTING_FUNCTIONS = [
   { name: 'String', argLength: 1 },
   { name: 'Number', argLength: 1 },
@@ -397,7 +411,14 @@ function valueToExprLiteral(
   node: ts.Node,
 ): string {
   if (typeof value === 'number' || value instanceof FormattedNumber) {
-    return String(Number(value));
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      throw new ConfTSError('Cannot inline non-finite number into expr', {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
+      });
+    }
+    return Object.is(number, -0) ? '-0' : String(number);
   }
   if (typeof value === 'string') {
     return JSON.stringify(value);
@@ -417,80 +438,182 @@ function valueToExprLiteral(
   );
 }
 
-function getPropertyAccessRoot(node: ts.Expression): ts.Expression {
-  if (ts.isPropertyAccessExpression(node)) {
-    return getPropertyAccessRoot(node.expression);
+function unwrapExprSyntax(node: ts.Expression): ts.Expression {
+  if (
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isParenthesizedExpression(node)
+  ) {
+    return unwrapExprSyntax(node.expression);
   }
   return node;
 }
 
+function isContextAccess(node: ts.Expression, paramName: string): boolean {
+  const expression = unwrapExprSyntax(node);
+  if (ts.isIdentifier(expression)) {
+    return expression.text === paramName;
+  }
+  if (
+    ts.isPropertyAccessExpression(expression) ||
+    ts.isElementAccessExpression(expression)
+  ) {
+    return isContextAccess(expression.expression, paramName);
+  }
+  return false;
+}
+
+function addNodeReplacement(
+  node: ts.Node,
+  value: string,
+  context: ExprReplacementContext,
+): void {
+  context.replacements.push([
+    node.getStart(context.sourceFile) - context.bodyStart,
+    node.getEnd() - context.bodyStart,
+    value,
+  ]);
+}
+
+function evaluateNodeLiteral(
+  node: ts.Expression,
+  context: ExprReplacementContext,
+): string {
+  const {
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+  } = context;
+  const value = evaluate(
+    node,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    true,
+    evaluatedFiles,
+    undefined,
+    options,
+  );
+  return valueToExprLiteral(value, sourceFile, node);
+}
+
+function collectContextComputedReplacements(
+  node: ts.Expression,
+  context: ExprReplacementContext,
+): void {
+  const expression = unwrapExprSyntax(node);
+  if (
+    ts.isPropertyAccessExpression(expression) ||
+    ts.isElementAccessExpression(expression)
+  ) {
+    collectContextComputedReplacements(expression.expression, context);
+    if (ts.isElementAccessExpression(expression)) {
+      collectConstReplacements(expression.argumentExpression, context);
+    }
+  }
+}
+
 function collectConstReplacements(
   node: ts.Node,
-  paramName: string,
-  bodyStart: number,
-  replacements: [number, number, string][],
-  sourceFile: ts.SourceFile,
-  typeChecker: ts.TypeChecker,
-  enumMap: { [filePath: string]: { [key: string]: any } },
-  macroImportsMap: { [filePath: string]: Set<string> },
-  evaluatedFiles: Set<string>,
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  context: ExprReplacementContext,
 ): void {
-  if (ts.isPropertyAccessExpression(node)) {
-    const root = getPropertyAccessRoot(node);
-    if (ts.isIdentifier(root) && root.text === paramName) {
-      return;
-    }
-    const value = evaluate(
-      node,
-      sourceFile,
-      typeChecker,
-      enumMap,
-      macroImportsMap,
-      true,
-      evaluatedFiles,
-      undefined,
-      options,
-    );
-    const literal = valueToExprLiteral(value, sourceFile, node);
-    const start = node.getStart(sourceFile) - bodyStart;
-    const end = node.getEnd() - bodyStart;
-    replacements.push([start, end, literal]);
+  const { paramName } = context;
+
+  if (
+    (ts.isPropertyAccessExpression(node) ||
+      ts.isElementAccessExpression(node)) &&
+    isContextAccess(node, paramName)
+  ) {
+    collectContextComputedReplacements(node, context);
+    return;
+  }
+
+  if (
+    ts.isPropertyAccessExpression(node) ||
+    ts.isElementAccessExpression(node)
+  ) {
+    addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
+    return;
+  }
+
+  if (
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isParenthesizedExpression(node)
+  ) {
+    collectConstReplacements(node.expression, context);
+    return;
+  }
+
+  if (ts.isPropertyAssignment(node)) {
+    collectConstReplacements(node.initializer, context);
+    return;
+  }
+
+  if (ts.isShorthandPropertyAssignment(node)) {
+    const literal = evaluateNodeLiteral(node.name, context);
+    addNodeReplacement(node, node.name.text + ': ' + literal, context);
     return;
   }
 
   if (ts.isIdentifier(node) && node.text !== paramName) {
-    const value = evaluate(
-      node,
+    addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
+    return;
+  }
+
+  ts.forEachChild(node, child => collectConstReplacements(child, context));
+}
+
+function collectTypeSyntaxErasures(
+  node: ts.Node,
+  bodyStart: number,
+  replacements: ExprReplacement[],
+  sourceFile: ts.SourceFile,
+): void {
+  if (
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node)
+  ) {
+    replacements.push([
+      node.expression.getEnd() - bodyStart,
+      node.getEnd() - bodyStart,
+      '',
+    ]);
+    collectTypeSyntaxErasures(
+      node.expression,
+      bodyStart,
+      replacements,
       sourceFile,
-      typeChecker,
-      enumMap,
-      macroImportsMap,
-      true,
-      evaluatedFiles,
-      undefined,
-      options,
     );
-    const literal = valueToExprLiteral(value, sourceFile, node);
-    const start = node.getStart(sourceFile) - bodyStart;
-    const end = node.getEnd() - bodyStart;
-    replacements.push([start, end, literal]);
+    return;
+  }
+
+  if (ts.isTypeAssertionExpression(node)) {
+    replacements.push([
+      node.getStart(sourceFile) - bodyStart,
+      node.expression.getStart(sourceFile) - bodyStart,
+      '',
+    ]);
+    collectTypeSyntaxErasures(
+      node.expression,
+      bodyStart,
+      replacements,
+      sourceFile,
+    );
     return;
   }
 
   ts.forEachChild(node, child =>
-    collectConstReplacements(
-      child,
-      paramName,
-      bodyStart,
-      replacements,
-      sourceFile,
-      typeChecker,
-      enumMap,
-      macroImportsMap,
-      evaluatedFiles,
-      options,
-    ),
+    collectTypeSyntaxErasures(child, bodyStart, replacements, sourceFile),
   );
 }
 
@@ -501,7 +624,7 @@ function evaluateExpr(
   enumMap: { [filePath: string]: { [key: string]: any } },
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: MacroOptions,
 ): string | undefined {
   const callee = getCalleeName(expression, sourceFile);
   if (callee !== 'expr') {
@@ -531,9 +654,8 @@ function evaluateExpr(
   let bodyText = bodyExpression.getText(sourceFile);
   const bodyStart = bodyExpression.getStart(sourceFile);
 
-  const replacements: [number, number, string][] = [];
-  collectConstReplacements(
-    bodyExpression,
+  const replacements: ExprReplacement[] = [];
+  collectConstReplacements(bodyExpression, {
     paramName,
     bodyStart,
     replacements,
@@ -543,6 +665,12 @@ function evaluateExpr(
     macroImportsMap,
     evaluatedFiles,
     options,
+  });
+  collectTypeSyntaxErasures(
+    bodyExpression,
+    bodyStart,
+    replacements,
+    sourceFile,
   );
 
   replacements.sort((a, b) => b[0] - a[0]);
@@ -577,7 +705,7 @@ function evaluateEnv(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: MacroOptions,
 ) {
   const callee = getCalleeName(expression, sourceFile);
   const macroFunction = ENV_MACRO_FUNCTIONS.find(
@@ -920,7 +1048,7 @@ export function evaluateMacro(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: MacroOptions,
 ): any {
   let result: any = evaluateExpr(
     expression,

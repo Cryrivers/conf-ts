@@ -46,15 +46,17 @@ function expression<
   Context extends RuntimeEnv = RuntimeEnv,
   ReturnType = unknown,
 >(expr: Expr<Context, ReturnType> | string): Compiled<Context, ReturnType> {
-  const cacheKey = expr ?? '';
-  const cached = cacheGet(cacheKey);
-  if (cached) {
-    return cached as Compiled<Context, ReturnType>;
+  if (typeof expr === 'function') {
+    return expr as Compiled<Context, ReturnType>;
   }
 
-  // special case: undefined input
-  if (!expr && expr !== '') {
+  if (typeof expr !== 'string') {
     throw new Error(formatInvalid());
+  }
+
+  const cached = cacheGet(expr);
+  if (cached) {
+    return cached as Compiled<Context, ReturnType>;
   }
 
   let ast: ASTNode | null = null;
@@ -84,13 +86,13 @@ function expression<
   }
 
   const fn: Compiled<Context, ReturnType> = (env: Context) =>
-    evaluate(ast, env ?? {}) as ReturnType;
+    evaluate(ast, env) as ReturnType;
   cacheSet(expr, fn);
   return fn;
 }
 
 export default expression;
 export { parse, tokenize };
-export { rewriteContextExpression } from './rewrite';
+export { rewriteContextExpression, validateContextExpression } from './rewrite';
 export type * from './ast/types';
 export type { Expr, RuntimeEnv };

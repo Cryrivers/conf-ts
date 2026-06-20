@@ -9,192 +9,280 @@ import type {
   MemberNode,
   ObjectProperty,
   SpreadElement,
+  TaggedTemplateNode,
   UnaryNode,
 } from './ast/types';
 
-const toBool = (v: unknown): boolean => !!v;
-const toKey = (k: unknown): PropertyKey =>
-  typeof k === 'symbol' ? k : String(k);
+const CHAIN_SHORT_CIRCUIT = Symbol('chain-short-circuit');
 
-const getProp = (obj: unknown, key: PropertyKey): unknown => {
-  if (obj === null || obj === undefined) {
-    return null;
-  }
-  try {
-    // Only string/number/symbol keys are meaningful; others stringify
-    return (obj as Record<PropertyKey, unknown>)[key];
-  } catch {
-    return null;
-  }
+type ChainResult = unknown | typeof CHAIN_SHORT_CIRCUIT;
+type Reference = {
+  value: unknown;
+  object: unknown;
+  key: PropertyKey;
 };
 
-const evalMember = (node: MemberNode, env: Env): unknown => {
-  const obj = evaluate(node.object, env);
-  if (obj === null || obj === undefined) {
-    // For optional chaining, missing object yields undefined like JS; otherwise null
-    return node.optional ? undefined : null;
-  }
-  const key: PropertyKey = node.computed
+const toKey = (key: unknown): PropertyKey =>
+  typeof key === 'symbol' ? key : String(key);
+
+const propertyKey = (node: MemberNode, env: Env): PropertyKey =>
+  node.computed
     ? toKey(evaluate(node.property, env))
     : String((node.property as LiteralNode).value);
-  return getProp(obj, key);
+
+const nullishMemberError = (): never => {
+  throw new TypeError('Cannot read properties of null or undefined');
 };
 
-const evalCall = (node: CallNode, env: Env): unknown => {
-  // determine this binding
-  let fn: any;
-  let thisArg: any = undefined;
+const nonCallableError = (): never => {
+  throw new TypeError('Expression value is not callable');
+};
+
+const memberReference = (
+  node: MemberNode,
+  env: Env,
+  chain: boolean,
+): Reference | typeof CHAIN_SHORT_CIRCUIT => {
+  const object = chain
+    ? evaluateChainOperand(node.object, env)
+    : evaluate(node.object, env);
+  if (object === CHAIN_SHORT_CIRCUIT) {
+    return CHAIN_SHORT_CIRCUIT;
+  }
+  if (object === null || object === undefined) {
+    if (node.optional) {
+      return CHAIN_SHORT_CIRCUIT;
+    }
+    return nullishMemberError();
+  }
+  const key = propertyKey(node, env);
+  return {
+    value: (object as Record<PropertyKey, unknown>)[key],
+    object,
+    key,
+  };
+};
+
+const evaluateChainOperand = (node: ASTNode, env: Env): ChainResult => {
+  if (node.type === 'MemberExpression') {
+    const reference = memberReference(node, env, true);
+    return reference === CHAIN_SHORT_CIRCUIT ? reference : reference.value;
+  }
+  if (node.type === 'CallExpression') {
+    return evaluateCall(node, env, true);
+  }
+  return evaluate(node, env);
+};
+
+const evaluateCall = (
+  node: CallNode,
+  env: Env,
+  chain: boolean,
+): ChainResult => {
+  let value: unknown;
+  let thisArg: unknown = undefined;
 
   if (node.callee.type === 'MemberExpression') {
-    const calleeMember = node.callee;
-    thisArg = evaluate(calleeMember.object, env);
-    if (thisArg === null || thisArg === undefined) {
-      // Optional member access before call short-circuits to undefined
-      return calleeMember.optional ? undefined : null;
+    const reference = memberReference(node.callee, env, chain);
+    if (reference === CHAIN_SHORT_CIRCUIT) {
+      return reference;
     }
-    const key: PropertyKey = calleeMember.computed
-      ? toKey(evaluate(calleeMember.property, env))
-      : String((calleeMember.property as LiteralNode).value);
-    fn = getProp(thisArg, key);
+    value = reference.value;
+    thisArg = reference.object;
   } else {
-    fn = evaluate(node.callee, env);
-  }
-
-  if (typeof fn !== 'function') {
-    // Keep engine's backward-compat behavior: non-callable returns null
-    // For optional call (?.()), short-circuit to undefined when callee is nullish
-    if (node.optional && (fn === null || fn === undefined)) {
-      return undefined;
+    const callee = chain
+      ? evaluateChainOperand(node.callee, env)
+      : evaluate(node.callee, env);
+    if (callee === CHAIN_SHORT_CIRCUIT) {
+      return callee;
     }
-    return null;
+    value = callee;
   }
-  const args = node.args.map(a => evaluate(a, env));
-  try {
-    return fn.apply(thisArg, args);
-  } catch {
-    return null;
+
+  if (node.optional && (value === null || value === undefined)) {
+    return CHAIN_SHORT_CIRCUIT;
   }
+  if (typeof value !== 'function') {
+    return nonCallableError();
+  }
+
+  const args = node.args.map(arg => evaluate(arg, env));
+  return Reflect.apply(value, thisArg, args);
 };
 
-const evalIdentifier = (node: IdentifierNode, env: Env): unknown => {
-  if (!env) {
-    return null;
+const evaluateIdentifier = (node: IdentifierNode, env: Env): unknown =>
+  env[node.name];
+
+const deleteExpression = (node: ASTNode, env: Env): boolean => {
+  if (node.type === 'ParenthesizedExpression') {
+    return deleteExpression(node.expression, env);
   }
-  return Object.prototype.hasOwnProperty.call(env, node.name)
-    ? env[node.name]
-    : null;
+  if (node.type === 'ChainExpression') {
+    const expression = node.expression;
+    if (expression.type !== 'MemberExpression') {
+      evaluate(expression, env);
+      return true;
+    }
+    const reference = memberReference(expression, env, true);
+    if (reference === CHAIN_SHORT_CIRCUIT) {
+      return true;
+    }
+    return delete (reference.object as Record<PropertyKey, unknown>)[
+      reference.key
+    ];
+  }
+  if (node.type === 'Identifier') {
+    return delete env[node.name];
+  }
+  if (node.type === 'MemberExpression') {
+    const reference = memberReference(node, env, false);
+    if (reference === CHAIN_SHORT_CIRCUIT) {
+      return true;
+    }
+    return delete (reference.object as Record<PropertyKey, unknown>)[
+      reference.key
+    ];
+  }
+  evaluate(node, env);
+  return true;
 };
 
-const evalUnary = (node: UnaryNode, env: Env): unknown => {
+const evaluateUnary = (node: UnaryNode, env: Env): unknown => {
   if (node.operator === 'delete') {
-    if (node.argument.type === 'Identifier') {
-      return delete env[node.argument.name];
-    }
-    if (node.argument.type === 'MemberExpression') {
-      const obj = evaluate(node.argument.object, env);
-      if (obj === null || obj === undefined) {
-        return true;
-      }
-      const key = node.argument.computed
-        ? toKey(evaluate(node.argument.property, env))
-        : String((node.argument.property as LiteralNode).value);
-      try {
-        return delete (obj as Record<PropertyKey, unknown>)[key];
-      } catch {
-        return false;
-      }
-    }
-    evaluate(node.argument, env);
-    return true;
+    return deleteExpression(node.argument, env);
   }
 
-  if (node.operator === 'typeof' && node.argument.type === 'Identifier') {
-    return Object.prototype.hasOwnProperty.call(env, node.argument.name)
-      ? typeof env[node.argument.name]
-      : 'undefined';
-  }
-
-  const v = evaluate(node.argument, env);
+  const value = evaluate(node.argument, env);
   switch (node.operator) {
     case '!':
-      return !toBool(v);
+      return !value;
     case '+':
-      // Non-standard: identity (matching test expectations)
-      return v;
+      return +(value as any);
     case '-':
-      return typeof v === 'number' ? -v : -Number(v);
+      return -(value as any);
     case '~':
-      return ~(v as any);
+      return ~(value as any);
     case 'void':
       return undefined;
     case 'typeof':
-      return typeof v;
+      return typeof value;
   }
 };
 
-const evalBinary = (node: BinaryNode, env: Env): unknown => {
-  const l = evaluate(node.left, env);
-  const r = evaluate(node.right, env);
+const evaluateBinary = (node: BinaryNode, env: Env): unknown => {
+  const left = evaluate(node.left, env);
+  const right = evaluate(node.right, env);
   switch (node.operator) {
     case '+':
-      return (l as any) + (r as any);
+      return (left as any) + (right as any);
     case '-':
-      return (l as any) - (r as any);
+      return (left as any) - (right as any);
     case '*':
-      return (l as any) * (r as any);
+      return (left as any) * (right as any);
     case '**':
-      return (l as any) ** (r as any);
+      return (left as any) ** (right as any);
     case '/':
-      return (l as any) / (r as any);
+      return (left as any) / (right as any);
     case '%':
-      return (l as any) % (r as any);
+      return (left as any) % (right as any);
     case '&':
-      return (l as any) & (r as any);
+      return (left as any) & (right as any);
     case '|':
-      return (l as any) | (r as any);
+      return (left as any) | (right as any);
     case '^':
-      return (l as any) ^ (r as any);
+      return (left as any) ^ (right as any);
     case '<<':
-      return (l as any) << (r as any);
+      return (left as any) << (right as any);
     case '>>':
-      return (l as any) >> (r as any);
+      return (left as any) >> (right as any);
     case '>>>':
-      return (l as any) >>> (r as any);
+      return (left as any) >>> (right as any);
     case '>':
-      return (l as any) > (r as any);
+      return (left as any) > (right as any);
     case '<':
-      return (l as any) < (r as any);
+      return (left as any) < (right as any);
     case '>=':
-      return (l as any) >= (r as any);
+      return (left as any) >= (right as any);
     case '<=':
-      return (l as any) <= (r as any);
+      return (left as any) <= (right as any);
     case '==':
-      return l == r;
+      return left == right;
     case '!=':
-      return l != r;
+      return left != right;
     case '===':
-      return l === r;
+      return left === right;
     case '!==':
-      return l !== r;
+      return left !== right;
     case 'instanceof':
-      return (l as any) instanceof (r as any);
+      return (left as any) instanceof (right as any);
     case 'in':
-      return (l as any) in (r as any);
+      return (left as any) in (right as any);
   }
 };
 
-const evalLogical = (node: LogicalNode, env: Env): unknown => {
+const evaluateLogical = (node: LogicalNode, env: Env): unknown => {
+  const left = evaluate(node.left, env);
   if (node.operator === '&&') {
-    const left = evaluate(node.left, env);
-    return toBool(left) ? evaluate(node.right, env) : false;
+    return left ? evaluate(node.right, env) : left;
   }
   if (node.operator === '||') {
-    const left = evaluate(node.left, env);
-    return toBool(left) ? true : evaluate(node.right, env);
+    return left ? left : evaluate(node.right, env);
   }
-  // null coalescing - ??
-  const left = evaluate(node.left, env);
   return left === null || left === undefined ? evaluate(node.right, env) : left;
+};
+
+const copySpread = (target: object, source: unknown): void => {
+  if (source === null || source === undefined) {
+    return;
+  }
+  const boxed = Object(source);
+  for (const key of Reflect.ownKeys(boxed)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(boxed, key);
+    if (!descriptor?.enumerable) {
+      continue;
+    }
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: true,
+      value: Reflect.get(boxed, key),
+      writable: true,
+    });
+  }
+};
+
+const evaluateTaggedTemplate = (
+  node: TaggedTemplateNode,
+  env: Env,
+): unknown => {
+  let tag: unknown;
+  let thisArg: unknown;
+  if (node.tag.type === 'MemberExpression') {
+    const reference = memberReference(node.tag, env, false);
+    if (reference === CHAIN_SHORT_CIRCUIT) {
+      return undefined;
+    }
+    tag = reference.value;
+    thisArg = reference.object;
+  } else {
+    tag = evaluate(node.tag, env);
+  }
+  if (typeof tag !== 'function') {
+    return nonCallableError();
+  }
+
+  const raw = Object.freeze([...node.quasi.rawQuasis]);
+  const strings = [...node.quasi.quasis] as string[] & {
+    raw: readonly string[];
+  };
+  Object.defineProperty(strings, 'raw', {
+    value: raw,
+  });
+  Object.freeze(strings);
+
+  return Reflect.apply(tag, thisArg, [
+    strings,
+    ...node.quasi.expressions.map(expression => evaluate(expression, env)),
+  ]);
 };
 
 export const evaluate = (node: ASTNode, env: Env): unknown => {
@@ -202,85 +290,69 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
     case 'Literal':
       return node.value;
     case 'Identifier':
-      return evalIdentifier(node, env);
-    case 'UnaryExpression':
-      return evalUnary(node, env);
-    case 'BinaryExpression':
-      return evalBinary(node, env);
-    case 'LogicalExpression':
-      return evalLogical(node, env);
-    case 'ConditionalExpression': {
-      const n = node;
-      const test = evaluate(n.test, env);
-      return toBool(test)
-        ? evaluate(n.consequent, env)
-        : evaluate(n.alternate, env);
+      return evaluateIdentifier(node, env);
+    case 'Elision':
+      return undefined;
+    case 'ParenthesizedExpression':
+      return evaluate(node.expression, env);
+    case 'ChainExpression': {
+      const result = evaluateChainOperand(node.expression, env);
+      return result === CHAIN_SHORT_CIRCUIT ? undefined : result;
     }
-    case 'MemberExpression':
-      return evalMember(node, env);
-    case 'CallExpression':
-      return evalCall(node, env);
-    case 'ArrayExpression':
-      return node.elements.map(el => evaluate(el, env));
-    case 'ObjectExpression': {
-      const obj: Record<string, unknown> = {};
-      for (const p of node.properties) {
-        if ((p as SpreadElement).type === 'SpreadElement') {
-          const src = evaluate((p as SpreadElement).argument, env);
-          if (src && typeof src === 'object') {
-            try {
-              for (const k of Object.keys(src)) {
-                obj[k] = (src as Record<string, unknown>)[k];
-              }
-            } catch {
-              // ignore spread errors for robustness
-            }
-          }
+    case 'UnaryExpression':
+      return evaluateUnary(node, env);
+    case 'BinaryExpression':
+      return evaluateBinary(node, env);
+    case 'LogicalExpression':
+      return evaluateLogical(node, env);
+    case 'ConditionalExpression':
+      return evaluate(node.test, env)
+        ? evaluate(node.consequent, env)
+        : evaluate(node.alternate, env);
+    case 'MemberExpression': {
+      const reference = memberReference(node, env, false);
+      return reference === CHAIN_SHORT_CIRCUIT ? undefined : reference.value;
+    }
+    case 'CallExpression': {
+      const result = evaluateCall(node, env, false);
+      return result === CHAIN_SHORT_CIRCUIT ? undefined : result;
+    }
+    case 'ArrayExpression': {
+      const array: unknown[] = [];
+      for (const element of node.elements) {
+        if (element.type === 'Elision') {
+          array.length += 1;
         } else {
-          const prop = p as ObjectProperty;
-          obj[prop.key] = evaluate(prop.value, env);
+          array.push(evaluate(element, env));
         }
       }
-      return obj;
+      return array;
+    }
+    case 'ObjectExpression': {
+      const object: Record<PropertyKey, unknown> = {};
+      for (const property of node.properties) {
+        if ((property as SpreadElement).type === 'SpreadElement') {
+          copySpread(
+            object,
+            evaluate((property as SpreadElement).argument, env),
+          );
+        } else {
+          const item = property as ObjectProperty;
+          object[item.key] = evaluate(item.value, env);
+        }
+      }
+      return object;
     }
     case 'TemplateLiteral': {
-      const cooked = node.quasis;
-      const exprs = node.expressions.map(e => evaluate(e, env));
-      let out = cooked[0] ?? '';
-      for (let i = 0; i < exprs.length; i++) {
-        out += String(exprs[i]) + (cooked[i + 1] ?? '');
+      let output = node.quasis[0] ?? '';
+      for (let index = 0; index < node.expressions.length; index++) {
+        output +=
+          String(evaluate(node.expressions[index], env)) +
+          (node.quasis[index + 1] ?? '');
       }
-      return out;
+      return output;
     }
-    case 'TaggedTemplateExpression': {
-      // Resolve tag function and this binding similar to CallExpression
-      let fn: any;
-      let thisArg: any = undefined;
-      const tag = node.tag as any;
-      if (tag.type === 'MemberExpression') {
-        thisArg = evaluate(tag.object, env);
-        if (thisArg === null || thisArg === undefined) {
-          return null;
-        }
-        const key: PropertyKey = tag.computed
-          ? toKey(evaluate(tag.property, env))
-          : String((tag.property as LiteralNode).value);
-        fn = getProp(thisArg, key);
-      } else {
-        fn = evaluate(tag, env);
-      }
-      if (typeof fn !== 'function') {
-        return null;
-      }
-      const strings = [...node.quasi.quasis];
-      // attach raw per JS semantics
-      (strings as any).raw = [...node.quasi.rawQuasis];
-      const values = node.quasi.expressions.map(e => evaluate(e, env));
-      try {
-        return fn.apply(thisArg, [strings, ...values]);
-      } catch {
-        return null;
-      }
-    }
+    case 'TaggedTemplateExpression':
+      return evaluateTaggedTemplate(node, env);
   }
 };

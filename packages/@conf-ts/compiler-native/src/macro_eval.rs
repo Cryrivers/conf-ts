@@ -667,6 +667,8 @@ fn is_param_chain(expr: &Expression, param_name: &str) -> bool {
 const EXPR_CALLBACK_ERROR: &str =
   "expr callback must be an arrow function with a single identifier parameter and expression body";
 
+type ExprReplacement = (usize, usize, String);
+
 fn value_to_expr_literal(
   value: &Value,
   file_ctx: &FileContext,
@@ -674,16 +676,25 @@ fn value_to_expr_literal(
 ) -> Result<String, ConfTSError> {
   match value {
     Value::Number(n) => {
+      if !n.value.is_finite() {
+        let (line, character) = get_location(&file_ctx.line_index, offset);
+        return Err(ConfTSError::new(
+          "Cannot inline non-finite number into expr",
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+      if n.value == 0.0 && n.value.is_sign_negative() {
+        return Ok("-0".to_string());
+      }
       if n.value == (n.value as i64) as f64 && n.value.abs() < 1e15 {
         Ok(format!("{}", n.value as i64))
       } else {
         Ok(format!("{}", n.value))
       }
     }
-    Value::String(s) => {
-      let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-      Ok(format!("\"{}\"", escaped))
-    }
+    Value::String(s) => Ok(serde_json::to_string(s.as_str()).unwrap()),
     Value::Bool(b) => Ok(b.to_string()),
     Value::Null => Ok("null".to_string()),
     _ => {
@@ -704,6 +715,11 @@ fn value_to_expr_literal(
 fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
   match expr {
     Expression::StaticMemberExpression(member) => get_member_root(&member.object),
+    Expression::ComputedMemberExpression(member) => get_member_root(&member.object),
+    Expression::TSAsExpression(ts_as) => get_member_root(&ts_as.expression),
+    Expression::TSSatisfiesExpression(ts_satisfies) => get_member_root(&ts_satisfies.expression),
+    Expression::TSNonNullExpression(ts_non_null) => get_member_root(&ts_non_null.expression),
+    Expression::TSTypeAssertion(assertion) => get_member_root(&assertion.expression),
     _ => expr,
   }
 }
@@ -712,7 +728,7 @@ fn collect_const_replacements(
   expr: &Expression,
   param_name: &str,
   body_start: u32,
-  replacements: &mut Vec<(usize, usize, String)>,
+  replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   options: &CompileOptions,
@@ -721,7 +737,15 @@ fn collect_const_replacements(
     Expression::StaticMemberExpression(member) => {
       let root = get_member_root(&member.object);
       if matches!(root, Expression::Identifier(id) if id.name.as_str() == param_name) {
-        return Ok(());
+        return collect_const_replacements(
+          &member.object,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        );
       }
       let value = evaluate(expr, file_ctx, ctx, None, options)?;
       let literal = value_to_expr_literal(&value, file_ctx, expr.span().start)?;
@@ -782,7 +806,7 @@ fn walk_const_children(
   expr: &Expression,
   param_name: &str,
   body_start: u32,
-  replacements: &mut Vec<(usize, usize, String)>,
+  replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   options: &CompileOptions,
@@ -997,6 +1021,63 @@ fn walk_const_children(
         options,
       )
     }
+    Expression::ChainExpression(chain) => match &chain.expression {
+      ChainElement::StaticMemberExpression(member) => collect_const_replacements(
+        &member.object,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      ),
+      ChainElement::ComputedMemberExpression(member) => {
+        collect_const_replacements(
+          &member.object,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )?;
+        collect_const_replacements(
+          &member.expression,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )
+      }
+      ChainElement::CallExpression(call) => {
+        collect_const_replacements(
+          &call.callee,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )?;
+        for arg in &call.arguments {
+          if let Some(expression) = arg.as_expression() {
+            collect_const_replacements(
+              expression,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+              ctx,
+              options,
+            )?;
+          }
+        }
+        Ok(())
+      }
+      _ => Ok(()),
+    },
     Expression::TSAsExpression(ts_as) => collect_const_replacements(
       &ts_as.expression,
       param_name,
@@ -1024,6 +1105,15 @@ fn walk_const_children(
       ctx,
       options,
     ),
+    Expression::TSTypeAssertion(assertion) => collect_const_replacements(
+      &assertion.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
     Expression::SequenceExpression(seq) => {
       for e in &seq.expressions {
         collect_const_replacements(
@@ -1039,6 +1129,129 @@ fn walk_const_children(
       Ok(())
     }
     _ => Ok(()),
+  }
+}
+
+fn collect_type_syntax_erasures(
+  expr: &Expression,
+  body_start: u32,
+  replacements: &mut Vec<ExprReplacement>,
+) {
+  match expr {
+    Expression::TSAsExpression(ts_as) => {
+      replacements.push((
+        ts_as.expression.span().end as usize - body_start as usize,
+        ts_as.span.end as usize - body_start as usize,
+        String::new(),
+      ));
+      collect_type_syntax_erasures(&ts_as.expression, body_start, replacements);
+    }
+    Expression::TSSatisfiesExpression(ts_satisfies) => {
+      replacements.push((
+        ts_satisfies.expression.span().end as usize - body_start as usize,
+        ts_satisfies.span.end as usize - body_start as usize,
+        String::new(),
+      ));
+      collect_type_syntax_erasures(&ts_satisfies.expression, body_start, replacements);
+    }
+    Expression::TSNonNullExpression(ts_non_null) => {
+      replacements.push((
+        ts_non_null.expression.span().end as usize - body_start as usize,
+        ts_non_null.span.end as usize - body_start as usize,
+        String::new(),
+      ));
+      collect_type_syntax_erasures(&ts_non_null.expression, body_start, replacements);
+    }
+    Expression::TSTypeAssertion(assertion) => {
+      replacements.push((
+        assertion.span.start as usize - body_start as usize,
+        assertion.expression.span().start as usize - body_start as usize,
+        String::new(),
+      ));
+      collect_type_syntax_erasures(&assertion.expression, body_start, replacements);
+    }
+    Expression::BinaryExpression(binary) => {
+      collect_type_syntax_erasures(&binary.left, body_start, replacements);
+      collect_type_syntax_erasures(&binary.right, body_start, replacements);
+    }
+    Expression::LogicalExpression(logical) => {
+      collect_type_syntax_erasures(&logical.left, body_start, replacements);
+      collect_type_syntax_erasures(&logical.right, body_start, replacements);
+    }
+    Expression::UnaryExpression(unary) => {
+      collect_type_syntax_erasures(&unary.argument, body_start, replacements);
+    }
+    Expression::ConditionalExpression(conditional) => {
+      collect_type_syntax_erasures(&conditional.test, body_start, replacements);
+      collect_type_syntax_erasures(&conditional.consequent, body_start, replacements);
+      collect_type_syntax_erasures(&conditional.alternate, body_start, replacements);
+    }
+    Expression::ParenthesizedExpression(parenthesized) => {
+      collect_type_syntax_erasures(&parenthesized.expression, body_start, replacements);
+    }
+    Expression::StaticMemberExpression(member) => {
+      collect_type_syntax_erasures(&member.object, body_start, replacements);
+    }
+    Expression::ComputedMemberExpression(member) => {
+      collect_type_syntax_erasures(&member.object, body_start, replacements);
+      collect_type_syntax_erasures(&member.expression, body_start, replacements);
+    }
+    Expression::CallExpression(call) => {
+      collect_type_syntax_erasures(&call.callee, body_start, replacements);
+      for argument in &call.arguments {
+        if let Some(expression) = argument.as_expression() {
+          collect_type_syntax_erasures(expression, body_start, replacements);
+        }
+      }
+    }
+    Expression::ChainExpression(chain) => match &chain.expression {
+      ChainElement::StaticMemberExpression(member) => {
+        collect_type_syntax_erasures(&member.object, body_start, replacements);
+      }
+      ChainElement::ComputedMemberExpression(member) => {
+        collect_type_syntax_erasures(&member.object, body_start, replacements);
+        collect_type_syntax_erasures(&member.expression, body_start, replacements);
+      }
+      ChainElement::CallExpression(call) => {
+        collect_type_syntax_erasures(&call.callee, body_start, replacements);
+        for argument in &call.arguments {
+          if let Some(expression) = argument.as_expression() {
+            collect_type_syntax_erasures(expression, body_start, replacements);
+          }
+        }
+      }
+      _ => {}
+    },
+    Expression::ArrayExpression(array) => {
+      for element in &array.elements {
+        if let Some(expression) = element.as_expression() {
+          collect_type_syntax_erasures(expression, body_start, replacements);
+        }
+      }
+    }
+    Expression::ObjectExpression(object) => {
+      for property in &object.properties {
+        match property {
+          ObjectPropertyKind::ObjectProperty(property) => {
+            collect_type_syntax_erasures(&property.value, body_start, replacements);
+          }
+          ObjectPropertyKind::SpreadProperty(spread) => {
+            collect_type_syntax_erasures(&spread.argument, body_start, replacements);
+          }
+        }
+      }
+    }
+    Expression::TemplateLiteral(template) => {
+      for expression in &template.expressions {
+        collect_type_syntax_erasures(expression, body_start, replacements);
+      }
+    }
+    Expression::SequenceExpression(sequence) => {
+      for expression in &sequence.expressions {
+        collect_type_syntax_erasures(expression, body_start, replacements);
+      }
+    }
+    _ => {}
   }
 }
 
@@ -1142,7 +1355,7 @@ fn evaluate_expr(
   let body_start = body_expr.span().start;
   let body_text = &source[body_start as usize..body_expr.span().end as usize];
 
-  let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+  let mut replacements: Vec<ExprReplacement> = Vec::new();
   collect_const_replacements(
     body_expr,
     &param_name,
@@ -1159,6 +1372,7 @@ fn evaluate_expr(
     &mut replacements,
     file_ctx,
   )?;
+  collect_type_syntax_erasures(body_expr, body_start, &mut replacements);
 
   replacements.sort_by(|a, b| b.0.cmp(&a.0));
   let mut result = body_text.to_string();
@@ -1180,59 +1394,64 @@ fn is_valid_identifier(s: &str) -> bool {
   }
 }
 
+fn replace_static_context_root(
+  member: &StaticMemberExpression<'_>,
+  body_start: u32,
+  replacements: &mut Vec<ExprReplacement>,
+) {
+  let relative_start = member.object.span().start as usize - body_start as usize;
+  let relative_end = member.property.span.start as usize - body_start as usize;
+  replacements.push((relative_start, relative_end, String::new()));
+}
+
+fn replace_computed_context_root(
+  member: &ComputedMemberExpression<'_>,
+  body_start: u32,
+  replacements: &mut Vec<ExprReplacement>,
+  file_ctx: &FileContext,
+) -> Result<(), ConfTSError> {
+  let relative_start = member.span.start as usize - body_start as usize;
+  let relative_end = member.span.end as usize - body_start as usize;
+  if replacements
+    .iter()
+    .any(|(start, end, _)| *start == relative_start && *end == relative_end)
+  {
+    return Ok(());
+  }
+
+  if let Expression::StringLiteral(string) = &member.expression {
+    let key = string.value.as_str();
+    if is_valid_identifier(key) {
+      replacements.push((relative_start, relative_end, key.to_string()));
+      return Ok(());
+    }
+  }
+
+  let (line, character) = get_location(&file_ctx.line_index, member.span.start);
+  Err(ConfTSError::new(
+    "expr callback can only access context properties with identifier property names",
+    &file_ctx.file_path,
+    line,
+    character,
+  ))
+}
+
 fn collect_context_replacements(
   expr: &Expression,
   param_name: &str,
   body_start: u32,
-  replacements: &mut Vec<(usize, usize, String)>,
+  replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
 ) -> Result<(), ConfTSError> {
   match expr {
     Expression::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
     {
-      let ident_start = member.object.span().start;
-      let prop_start = member.property.span.start;
-      let relative_start = ident_start as usize - body_start as usize;
-      let relative_end = prop_start as usize - body_start as usize;
-      replacements.push((relative_start, relative_end, String::new()));
+      replace_static_context_root(member, body_start, replacements);
       Ok(())
     }
 
-    Expression::ComputedMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
-    {
-      let relative_start = member.span.start as usize - body_start as usize;
-      let relative_end = member.span.end as usize - body_start as usize;
-      if replacements
-        .iter()
-        .any(|(s, e, _)| *s == relative_start && *e == relative_end)
-      {
-        return Ok(());
-      }
-      match &member.expression {
-        Expression::StringLiteral(s) => {
-          let key = s.value.as_str();
-          if !is_valid_identifier(key) {
-            let (line, character) = get_location(&file_ctx.line_index, member.span.start);
-            return Err(ConfTSError::new(
-              "expr callback can only access context properties with identifier property names",
-              &file_ctx.file_path,
-              line,
-              character,
-            ));
-          }
-          replacements.push((relative_start, relative_end, key.to_string()));
-          Ok(())
-        }
-        _ => {
-          let (line, character) = get_location(&file_ctx.line_index, member.span.start);
-          Err(ConfTSError::new(
-            "expr callback can only access context properties with identifier property names",
-            &file_ctx.file_path,
-            line,
-            character,
-          ))
-        }
-      }
+    Expression::ComputedMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) => {
+      replace_computed_context_root(member, body_start, replacements, file_ctx)
     }
 
     Expression::Identifier(ident) if ident.name.as_str() == param_name => {
@@ -1253,7 +1472,7 @@ fn walk_expr_children(
   expr: &Expression,
   param_name: &str,
   body_start: u32,
-  replacements: &mut Vec<(usize, usize, String)>,
+  replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
 ) -> Result<(), ConfTSError> {
   match expr {
@@ -1386,41 +1605,49 @@ fn walk_expr_children(
     Expression::ChainExpression(chain) => match &chain.expression {
       ChainElement::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
       {
-        let ident_start = member.object.span().start;
-        let prop_start = member.property.span.start;
-        let relative_start = ident_start as usize - body_start as usize;
-        let relative_end = prop_start as usize - body_start as usize;
-        replacements.push((relative_start, relative_end, String::new()));
+        replace_static_context_root(member, body_start, replacements);
         Ok(())
       }
       ChainElement::ComputedMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) => {
-        match &member.expression {
-          Expression::StringLiteral(s) => {
-            let key = s.value.as_str();
-            if !is_valid_identifier(key) {
-              let (line, character) = get_location(&file_ctx.line_index, member.span.start);
-              return Err(ConfTSError::new(
-                "expr callback can only access context properties with identifier property names",
-                &file_ctx.file_path,
-                line,
-                character,
-              ));
-            }
-            let relative_start = member.span.start as usize - body_start as usize;
-            let relative_end = member.span.end as usize - body_start as usize;
-            replacements.push((relative_start, relative_end, key.to_string()));
-            Ok(())
-          }
-          _ => {
-            let (line, character) = get_location(&file_ctx.line_index, member.span.start);
-            Err(ConfTSError::new(
-              "expr callback can only access context properties with identifier property names",
-              &file_ctx.file_path,
-              line,
-              character,
-            ))
+        replace_computed_context_root(member, body_start, replacements, file_ctx)
+      }
+      ChainElement::StaticMemberExpression(member) => collect_context_replacements(
+        &member.object,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      ),
+      ChainElement::ComputedMemberExpression(member) => {
+        collect_context_replacements(
+          &member.object,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+        )?;
+        collect_context_replacements(
+          &member.expression,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+        )
+      }
+      ChainElement::CallExpression(call) => {
+        collect_context_replacements(&call.callee, param_name, body_start, replacements, file_ctx)?;
+        for arg in &call.arguments {
+          if let Some(expression) = arg.as_expression() {
+            collect_context_replacements(
+              expression,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+            )?;
           }
         }
+        Ok(())
       }
       _ => Ok(()),
     },
@@ -1440,6 +1667,13 @@ fn walk_expr_children(
     ),
     Expression::TSNonNullExpression(ts_nn) => collect_context_replacements(
       &ts_nn.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
+    Expression::TSTypeAssertion(assertion) => collect_context_replacements(
+      &assertion.expression,
       param_name,
       body_start,
       replacements,
@@ -1527,6 +1761,7 @@ fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(),
     Expression::TSAsExpression(ts_as) => validate_expr_syntax(&ts_as.expression, file_ctx),
     Expression::TSSatisfiesExpression(ts_sat) => validate_expr_syntax(&ts_sat.expression, file_ctx),
     Expression::TSNonNullExpression(ts_nn) => validate_expr_syntax(&ts_nn.expression, file_ctx),
+    Expression::TSTypeAssertion(assertion) => validate_expr_syntax(&assertion.expression, file_ctx),
     Expression::SequenceExpression(seq) => {
       for e in &seq.expressions {
         validate_expr_syntax(e, file_ctx)?;

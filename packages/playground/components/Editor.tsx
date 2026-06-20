@@ -205,11 +205,9 @@ export function Editor({
             `
             declare module '@conf-ts/macro' {
               export type RuntimeEnv = Record<string, unknown>;
-              export type Expr<Context extends RuntimeEnv, ReturnType> = string & {
-                __brand: 'ExpressionString';
-                __context: Context;
-                __returnType: ReturnType;
-              };
+              export type Expr<Context extends RuntimeEnv, ReturnType> = (
+                ctx: Context
+              ) => ReturnType;
               export function expr<
                 Context extends RuntimeEnv = RuntimeEnv,
                 ReturnType = unknown,

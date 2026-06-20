@@ -134,7 +134,7 @@ export default {
     id: 'expr',
     title: 'Macros: Expressions',
     description:
-      '`expr` turns a typed callback into an expression string, so `ctx => ctx.requestCount < ctx.quota` compiles to `"requestCount < quota"`.',
+      '`expr` preserves a typed callback at runtime and compiles it to an expression string, so `ctx => ctx.requestCount < ctx.quota` becomes `"requestCount < quota"` in generated output.',
     goal: 'Use `expr` to create an `allowRequest` rule for `requestCount < quota`.',
     initialCode: `import { expr, type Expr } from '@conf-ts/macro';
 

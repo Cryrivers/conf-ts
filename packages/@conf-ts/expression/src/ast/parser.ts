@@ -100,7 +100,10 @@ const parsePrimary = (ps: ParserState): ASTNode | null => {
     next(ps);
     const e = parseExpression(ps);
     expectPunct(ps, ')');
-    return e ?? { type: 'Literal', value: undefined };
+    return {
+      type: 'ParenthesizedExpression',
+      expression: e ?? { type: 'Literal', value: undefined },
+    };
   }
   if (isPunct(ps, '[')) {
     return parseArray(ps);
@@ -115,6 +118,11 @@ const parseArray = (ps: ParserState): ASTNode => {
   expectPunct(ps, '[');
   const elements: ASTNode[] = [];
   while (!eof(ps) && !isPunct(ps, ']')) {
+    if (isPunct(ps, ',')) {
+      elements.push({ type: 'Elision' });
+      next(ps);
+      continue;
+    }
     const el = parseExpression(ps);
     if (el) {
       elements.push(el);
@@ -175,6 +183,7 @@ const parsePostfix = (
   base: ASTNode | null,
 ): ASTNode | null => {
   let expr = base;
+  let optionalChain = false;
   while (expr) {
     // Tagged template: Identifier/MemberExpression immediately followed by template token
     if (peek(ps)?.kind === 'template') {
@@ -210,6 +219,7 @@ const parsePostfix = (
         break;
       }
       next(ps); // consume '?'
+      optionalChain = true;
       if (isPunct(ps, '.')) {
         next(ps); // consume '.'
         // Support '?.[' (optional computed property)
@@ -334,7 +344,9 @@ const parsePostfix = (
     }
     break;
   }
-  return expr;
+  return expr && optionalChain
+    ? { type: 'ChainExpression', expression: expr }
+    : expr;
 };
 
 const prefixOps = new Set(['+', '-', '!', '~', 'void', 'delete', 'typeof']);

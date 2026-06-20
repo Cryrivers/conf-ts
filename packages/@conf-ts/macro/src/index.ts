@@ -1,5 +1,5 @@
 import {
-  rewriteContextExpression,
+  validateContextExpression,
   type Expr,
   type RuntimeEnv,
 } from '@conf-ts/expression';
@@ -20,7 +20,7 @@ type ParsedCallback = {
 };
 
 function parseCallback(callback: Function): ParsedCallback {
-  const source = callback.toString().trim();
+  const source = Function.prototype.toString.call(callback).trim();
   const arrowIndex = source.indexOf('=>');
   if (arrowIndex === -1) {
     throw new Error(EXPR_CALLBACK_ERROR);
@@ -54,7 +54,8 @@ export function expr<
   ReturnType = unknown,
 >(callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType> {
   const { paramName, body } = parseCallback(callback);
-  return rewriteContextExpression(body, paramName) as Expr<Context, ReturnType>;
+  validateContextExpression(body, paramName);
+  return callback as Expr<Context, ReturnType>;
 }
 
 export function String(value: any): string {

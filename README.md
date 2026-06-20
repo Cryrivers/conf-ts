@@ -149,7 +149,7 @@ export default {
 
 ### Type-safe runtime expressions: `expr(ctx => expression)`
 
-`expr()` turns a typed arrow expression into a string that can be stored in the generated JSON/YAML and later evaluated with `@conf-ts/expression`. Accesses to the callback parameter become root identifiers; referenced `const` and enum values are resolved while the config is compiled.
+`expr()` marks a typed arrow expression for configuration compilation. During normal runtime execution it preserves and returns the callback, including its closure. During JSON/YAML compilation it emits a portable expression string: accesses to the callback parameter become root identifiers, and serializable `const` and enum values are resolved.
 
 ```ts
 import { expr } from '@conf-ts/macro';
@@ -195,7 +195,7 @@ canEnter({ user: { age: 16, status: 'active' } }); // false
 Constraints:
 
 - The callback must be a synchronous arrow function with exactly one identifier parameter and an expression body.
-- Root context access must use a property name, such as `ctx.user` or `ctx['user']`. Direct `ctx` use and dynamic root access such as `ctx[key]` are rejected.
+- Root context access must use a property name, such as `ctx.user` or `ctx['user']`. Direct `ctx` use is rejected. A computed root key such as `ctx[key]` must resolve to a valid identifier name when compiled.
 - Nested access, calls, templates, object/array literals, and the operators listed in [Runtime expression syntax](#runtime-expression-syntax) are supported.
 - Assignment, update, function/arrow, `new`, regular expression, and other syntax outside that grammar is rejected during compilation.
 
@@ -253,7 +253,7 @@ Install `@conf-ts/expression` when an application needs to evaluate expressions 
 pnpm add @conf-ts/expression
 ```
 
-The default export parses once and returns a reusable function. The function receives a plain environment object whose own properties become the expression's root identifiers.
+The default export accepts either a serialized expression string or an `Expr` callback and returns a reusable function. String expressions are parsed; callback expressions are returned directly so their closures remain available. The function receives a plain environment object whose properties become the serialized expression's root identifiers.
 
 ```ts
 import expression from '@conf-ts/expression';
@@ -263,7 +263,7 @@ const calculate = expression('subtotal * (1 + taxRate)');
 calculate({ subtotal: 100, taxRate: 0.08 }); // 108
 ```
 
-Compiled expressions are cached in a 1,000-entry LRU cache, so compiling the same source repeatedly returns the same function. The package also exports `tokenize`, `parse`, AST/token types, and `rewriteContextExpression` for tooling.
+Parsed string expressions are cached in a 1,000-entry LRU cache, so parsing the same source repeatedly returns the same function. Callback expressions preserve their original identity. The package also exports `tokenize`, `parse`, AST/token types, `rewriteContextExpression`, and `validateContextExpression` for tooling.
 
 ### Runtime expression syntax
 
@@ -285,14 +285,12 @@ The parser applies JavaScript-style precedence to the supported operators, inclu
 
 ### Runtime semantics and safety
 
-The evaluator is intentionally fault-tolerant and differs from JavaScript in several cases:
+Within the supported grammar, serialized expressions follow JavaScript semantics:
 
-- A missing identifier evaluates to `null`. Missing non-optional member access also returns `null`; optional member access returns `undefined`.
-- Accessor errors, non-callable values, and functions that throw evaluate to `null` instead of propagating the error.
-- Unary `+` is an identity operation rather than numeric coercion.
-- A falsy left side of `&&` returns `false`, and a truthy left side of `||` returns `true`; evaluated right sides retain their value.
-- Object spread ignores nullish/non-object values and spread failures.
-- `delete` mutates the supplied environment or nested object. `void` still evaluates its operand.
+- Missing properties evaluate to `undefined`; non-optional access through `null` or `undefined` throws.
+- Accessor, Proxy, non-callable, and invoked-function errors propagate.
+- Unary coercion, `&&`, `||`, optional chaining, object spread, array holes, `this`, `delete`, and `void` behave like their JavaScript counterparts.
+- Errors from runtime callbacks and serialized compiler output are expected to agree by error type and timing; engine-specific message text is not part of the contract.
 
 This package is an evaluator, not a security sandbox. Expressions can read objects and invoke functions exposed through the environment. Do not expose capabilities that untrusted expressions must not access.
 

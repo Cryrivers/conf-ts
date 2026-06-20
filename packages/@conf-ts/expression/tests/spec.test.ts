@@ -35,10 +35,9 @@ describe('Basic Expressions and Literals', () => {
     expect(expr(env)).toBe(123.456);
   });
 
-  test('Unary operators: + identity, - negate, ! not', () => {
-    // Engine-specific: unary + acts as identity
+  test('Unary operators follow JavaScript coercion', () => {
     let expr = expression('+"123"');
-    expect(expr(env)).toBe('123');
+    expect(expr(env)).toBe(123);
 
     expr = expression('-123');
     expect(expr(env)).toBe(-123);
@@ -78,10 +77,9 @@ describe('Basic Expressions and Literals', () => {
 });
 
 describe('Member Access and Collection Literals', () => {
-  test('Dot/Index member access with null-safe behavior', () => {
-    // Dot and bracket member access; null in chain yields null
+  test('Dot/Index member access follows JavaScript null behavior', () => {
     let expr = expression('a.b.c.d');
-    expect(expr({ a: { b: null } })).toBe(null);
+    expect(() => expr({ a: { b: null } })).toThrow(TypeError);
 
     expr = expression('a["b"].c + a.d["e"]');
     expect(expr({ a: { b: { c: 1 }, d: { e: 2 } } })).toBe(3);
@@ -127,10 +125,9 @@ describe('Function Calls and this Binding', () => {
     ).toBe(5);
   });
 
-  test('Non-function or throwing calls return null', () => {
-    // Callee not a function or throws during execution returns null
+  test('Property and call errors propagate', () => {
     let expr = expression('a.b()');
-    expect(expr({ a: { b: 123 } })).toBe(null);
+    expect(() => expr({ a: { b: 123 } })).toThrow(TypeError);
 
     expr = expression('p.x');
     const proxy = new Proxy(
@@ -141,10 +138,10 @@ describe('Function Calls and this Binding', () => {
         },
       },
     );
-    expect(expr({ p: proxy })).toBe(null);
+    expect(() => expr({ p: proxy })).toThrow('bad property');
 
     expr = expression('a.b()');
-    expect(
+    expect(() =>
       expr({
         a: {
           b() {
@@ -152,7 +149,7 @@ describe('Function Calls and this Binding', () => {
           },
         },
       }),
-    ).toBe(null);
+    ).toThrow('boom');
   });
 });
 
@@ -198,8 +195,7 @@ describe('Operators and Precedence', () => {
     expect(expr({ a: 1, b: 2, c: 3, d: 3 })).toBe(false);
   });
 
-  test('Logical operators (engine returns booleans)', () => {
-    // Engine returns booleans for && and || rather than short-circuit values
+  test('Logical operators return JavaScript operands', () => {
     let expr = expression('a && b || c && ( d || e )');
     expect(expr({ a: true, b: false, c: true, d: false, e: true })).toBe(true);
     expect(expr({ a: false, b: true, c: false, d: true, e: false })).toBe(
@@ -209,6 +205,9 @@ describe('Operators and Precedence', () => {
     expr = expression('!a');
     expect(expr({ a: 1 })).toBe(false);
     expect(expr({ a: 0 })).toBe(true);
+
+    expect(expression('a && b')({ a: 0, b: 2 })).toBe(0);
+    expect(expression('a || b')({ a: 'value', b: 2 })).toBe('value');
   });
 
   test('Conditional operator ?:', () => {
@@ -336,7 +335,7 @@ describe('Modern JS Features (ES6+) Support', () => {
     // Optional call: short-circuits if callee is nullish
     expr = expression('a?.b()');
     expect(expr({})).toBe(undefined);
-    expect(expr({ a: {} })).toBe(null); // non-callable returns null per engine semantics
+    expect(() => expr({ a: {} })).toThrow(TypeError);
 
     const env = {
       a: {
@@ -347,6 +346,9 @@ describe('Modern JS Features (ES6+) Support', () => {
       },
     };
     expect(expr(env)).toBe(7);
+
+    expect(expression('a?.b.c')({})).toBe(undefined);
+    expect(() => expression('(a?.b).c')({})).toThrow(TypeError);
   });
 });
 
@@ -479,7 +481,7 @@ describe('Nullish Coalescing Operator ??', () => {
     expect(count).toBe(0);
 
     const expr2 = expression('b ?? inc()');
-    // b is missing identifier => evaluates to null in this engine
+    // b is missing, so it evaluates to undefined and triggers the fallback
     expect(expr2(env)).toBe(2);
     expect(count).toBe(1);
   });
@@ -523,7 +525,7 @@ describe('Object Spread', () => {
     expect(expr({})).toEqual({});
   });
 
-  test('Spread error-resistant behavior (proxy throwing on keys)', () => {
+  test('Spread errors propagate', () => {
     const bad = new Proxy(
       {},
       {
@@ -533,6 +535,6 @@ describe('Object Spread', () => {
       },
     );
     const expr = expression('{ ...bad, a: 1 }');
-    expect(expr({ bad })).toEqual({ a: 1 });
+    expect(() => expr({ bad })).toThrow('bad');
   });
 });
