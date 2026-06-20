@@ -86,6 +86,34 @@ const evalIdentifier = (node: IdentifierNode, env: Env): unknown => {
 };
 
 const evalUnary = (node: UnaryNode, env: Env): unknown => {
+  if (node.operator === 'delete') {
+    if (node.argument.type === 'Identifier') {
+      return delete env[node.argument.name];
+    }
+    if (node.argument.type === 'MemberExpression') {
+      const obj = evaluate(node.argument.object, env);
+      if (obj === null || obj === undefined) {
+        return true;
+      }
+      const key = node.argument.computed
+        ? toKey(evaluate(node.argument.property, env))
+        : String((node.argument.property as LiteralNode).value);
+      try {
+        return delete (obj as Record<PropertyKey, unknown>)[key];
+      } catch {
+        return false;
+      }
+    }
+    evaluate(node.argument, env);
+    return true;
+  }
+
+  if (node.operator === 'typeof' && node.argument.type === 'Identifier') {
+    return Object.prototype.hasOwnProperty.call(env, node.argument.name)
+      ? typeof env[node.argument.name]
+      : 'undefined';
+  }
+
   const v = evaluate(node.argument, env);
   switch (node.operator) {
     case '!':
@@ -95,6 +123,12 @@ const evalUnary = (node: UnaryNode, env: Env): unknown => {
       return v;
     case '-':
       return typeof v === 'number' ? -v : -Number(v);
+    case '~':
+      return ~(v as any);
+    case 'void':
+      return undefined;
+    case 'typeof':
+      return typeof v;
   }
 };
 
@@ -108,10 +142,24 @@ const evalBinary = (node: BinaryNode, env: Env): unknown => {
       return (l as any) - (r as any);
     case '*':
       return (l as any) * (r as any);
+    case '**':
+      return (l as any) ** (r as any);
     case '/':
       return (l as any) / (r as any);
     case '%':
       return (l as any) % (r as any);
+    case '&':
+      return (l as any) & (r as any);
+    case '|':
+      return (l as any) | (r as any);
+    case '^':
+      return (l as any) ^ (r as any);
+    case '<<':
+      return (l as any) << (r as any);
+    case '>>':
+      return (l as any) >> (r as any);
+    case '>>>':
+      return (l as any) >>> (r as any);
     case '>':
       return (l as any) > (r as any);
     case '<':
@@ -128,6 +176,10 @@ const evalBinary = (node: BinaryNode, env: Env): unknown => {
       return l === r;
     case '!==':
       return l !== r;
+    case 'instanceof':
+      return (l as any) instanceof (r as any);
+    case 'in':
+      return (l as any) in (r as any);
   }
 };
 

@@ -49,7 +49,7 @@ export interface IdentifierNode {
 
 export interface UnaryNode {
   type: 'UnaryExpression';
-  operator: '+' | '-' | '!';
+  operator: '+' | '-' | '!' | '~' | 'void' | 'delete' | 'typeof';
   argument: ASTNode;
 }
 
@@ -59,8 +59,15 @@ export interface BinaryNode {
     | '+'
     | '-'
     | '*'
+    | '**'
     | '/'
     | '%'
+    | '&'
+    | '|'
+    | '^'
+    | '<<'
+    | '>>'
+    | '>>>'
     | '>'
     | '<'
     | '>='
@@ -68,7 +75,9 @@ export interface BinaryNode {
     | '=='
     | '!='
     | '==='
-    | '!==';
+    | '!=='
+    | 'instanceof'
+    | 'in';
   left: ASTNode;
   right: ASTNode;
 }

@@ -10,3 +10,7 @@ inObj: true
 missingInObj: false
 inArr: true
 outOfRangeInArr: false
+arrayInstanceofArray: true
+arrayInstanceofObject: true
+objectInstanceofArray: false
+objectInstanceofObject: true

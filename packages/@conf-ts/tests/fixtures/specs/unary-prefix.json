@@ -18,6 +18,7 @@
   "bitwiseNotNumber": -43,
   "bitwiseNotNegative": 0,
   "bitwiseNotConstant": -43,
+  "deleteResult": true,
   "complexNested": 1,
   "chainedUnary": true,
   "mixedWithBinary": -5,

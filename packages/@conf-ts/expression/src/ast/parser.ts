@@ -30,6 +30,10 @@ const isPunct = (ps: ParserState, value: string) =>
   peek(ps)?.kind === 'punct' && peek(ps)?.value === value;
 const isOp = (ps: ParserState, value?: string) =>
   peek(ps)?.kind === 'operator' && (value ? peek(ps)?.value === value : true);
+const isIdentifierName = (token: Token | undefined) =>
+  token?.kind === 'identifier' ||
+  (token?.kind === 'operator' &&
+    ['instanceof', 'in', 'typeof', 'void', 'delete'].includes(token.value));
 
 const expectPunct = (ps: ParserState, value: string) => {
   if (!isPunct(ps, value)) {
@@ -141,7 +145,7 @@ const parseObject = (ps: ParserState): ASTNode => {
     }
 
     const keyTk = peek(ps);
-    if (!keyTk || (keyTk.kind !== 'identifier' && keyTk.kind !== 'string')) {
+    if (!keyTk || (!isIdentifierName(keyTk) && keyTk.kind !== 'string')) {
       raiseParseError(ps.src);
     }
     next(ps);
@@ -227,7 +231,7 @@ const parsePostfix = (
         }
         // Otherwise, expect identifier for '?.prop'
         const prop = peek(ps);
-        if (!prop || prop.kind !== 'identifier') {
+        if (!isIdentifierName(prop)) {
           raiseParseError(ps.src);
         }
         next(ps);
@@ -281,7 +285,7 @@ const parsePostfix = (
     if (isPunct(ps, '.')) {
       next(ps);
       const prop = peek(ps);
-      if (!prop || prop.kind !== 'identifier') {
+      if (!isIdentifierName(prop)) {
         raiseParseError(ps.src);
       }
       next(ps);
@@ -333,7 +337,7 @@ const parsePostfix = (
   return expr;
 };
 
-const prefixOps = new Set(['+', '-', '!']);
+const prefixOps = new Set(['+', '-', '!', '~', 'void', 'delete', 'typeof']);
 
 const parseUnary = (ps: ParserState): ASTNode | null => {
   const tk = peek(ps);
@@ -354,19 +358,28 @@ const parseUnary = (ps: ParserState): ASTNode | null => {
 };
 
 const precedence: Record<string, number> = {
-  '*': 7,
-  '/': 7,
-  '%': 7,
-  '+': 6,
-  '-': 6,
-  '>': 5,
-  '<': 5,
-  '>=': 5,
-  '<=': 5,
-  '==': 4,
-  '!=': 4,
-  '===': 4,
-  '!==': 4,
+  '**': 12,
+  '*': 11,
+  '/': 11,
+  '%': 11,
+  '+': 10,
+  '-': 10,
+  '<<': 9,
+  '>>': 9,
+  '>>>': 9,
+  '>': 8,
+  '<': 8,
+  '>=': 8,
+  '<=': 8,
+  instanceof: 8,
+  in: 8,
+  '==': 7,
+  '!=': 7,
+  '===': 7,
+  '!==': 7,
+  '&': 6,
+  '^': 5,
+  '|': 4,
   '&&': 3,
   '||': 2,
   '??': 2,
@@ -389,7 +402,10 @@ const parseBinaryRHS = (
     // handle right-assoc? none here
     while (!eof(ps) && peek(ps).kind === 'operator') {
       const nextPrec = precedence[peek(ps).value];
-      if (nextPrec !== undefined && nextPrec > prec) {
+      if (
+        nextPrec !== undefined &&
+        (nextPrec > prec || (opTk.value === '**' && nextPrec === prec))
+      ) {
         rhs = parseBinaryRHS(ps, nextPrec, rhs);
       } else {
         break;

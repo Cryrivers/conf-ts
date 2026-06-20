@@ -17,6 +17,10 @@ describe('Expr Macro', () => {
     assertMacroOutput('expr-const');
   });
 
+  it('should support extended binary and unary operators', () => {
+    assertMacroOutput('expr-operators');
+  });
+
   it('should return output consumable by @conf-ts/expression', () => {
     const result = compileJs(
       path.resolve(__dirname, 'fixtures/macros/expr-const.conf.ts'),

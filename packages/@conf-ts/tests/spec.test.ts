@@ -126,7 +126,7 @@ describe('Spec Test', () => {
     assertSpecOutput('bitwise-and-exp');
   });
 
-  it('should handle typeof and in operators', () => {
+  it('should handle typeof, in, and instanceof operators', () => {
     assertSpecOutput('typeof-in');
   });
 

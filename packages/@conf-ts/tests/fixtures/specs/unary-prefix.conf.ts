@@ -30,6 +30,10 @@ export default {
   bitwiseNotNegative: ~-1,
   bitwiseNotConstant: ~MY_NUMBER,
 
+  // Void and delete
+  voidResult: void MY_NUMBER,
+  deleteResult: delete { removable: true }.removable,
+
   // Complex nested expressions
   complexNested: -(!true + ~0),
   chainedUnary: !!true,

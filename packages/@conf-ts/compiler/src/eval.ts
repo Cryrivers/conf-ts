@@ -1134,6 +1134,12 @@ export function evaluate(
     if (expression.text === 'undefined') {
       return undefined;
     }
+    if (expression.text === 'Array') {
+      return Array;
+    }
+    if (expression.text === 'Object') {
+      return Object;
+    }
     if (
       context &&
       Object.prototype.hasOwnProperty.call(context, expression.text)
@@ -1411,6 +1417,72 @@ export function evaluate(
         ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
       },
     );
+  } else if (ts.isVoidExpression(expression)) {
+    evaluate(
+      expression.expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    return undefined;
+  } else if (ts.isDeleteExpression(expression)) {
+    const target = expression.expression;
+    if (ts.isPropertyAccessExpression(target)) {
+      const object = evaluate(
+        target.expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+      return delete object[target.name.text];
+    }
+    if (ts.isElementAccessExpression(target)) {
+      const object = evaluate(
+        target.expression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+      const key = evaluate(
+        target.argumentExpression,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        context,
+        options,
+      );
+      return delete object[key];
+    }
+    evaluate(
+      target,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      macro,
+      evaluatedFiles,
+      context,
+      options,
+    );
+    return true;
   } else if (ts.isTypeOfExpression(expression)) {
     // `typeof` on an unresolved identifier should yield "undefined" (matches JS).
     let operand: any;
@@ -1593,6 +1665,8 @@ export function evaluate(
         }
         return String(left) in (right as object);
       }
+      case ts.SyntaxKind.InstanceOfKeyword:
+        return left instanceof right;
       default:
         throw new ConfTSError(
           `Unsupported binary operator: ${

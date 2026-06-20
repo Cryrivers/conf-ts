@@ -1457,52 +1457,22 @@ fn walk_expr_children(
 
 fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(), ConfTSError> {
   match expr {
+    Expression::AssignmentExpression(assignment) => {
+      let source = file_ctx.parsed.source();
+      let text = &source[assignment.span.start as usize..assignment.span.end as usize];
+      let (line, character) = get_location(&file_ctx.line_index, assignment.span.start);
+      Err(ConfTSError::new(
+        format!("parse expression error: {}", text),
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
     Expression::BinaryExpression(bin) => {
-      if matches!(
-        bin.operator,
-        BinaryOperator::Exponential
-          | BinaryOperator::BitwiseAnd
-          | BinaryOperator::BitwiseOR
-          | BinaryOperator::BitwiseXOR
-          | BinaryOperator::ShiftLeft
-          | BinaryOperator::ShiftRight
-          | BinaryOperator::ShiftRightZeroFill
-          | BinaryOperator::Instanceof
-          | BinaryOperator::In
-      ) {
-        let source = file_ctx.parsed.source();
-        let text = &source[bin.span.start as usize..bin.span.end as usize];
-        let (line, character) = get_location(&file_ctx.line_index, bin.span.start);
-        return Err(ConfTSError::new(
-          format!("parse expression error: {}", text),
-          &file_ctx.file_path,
-          line,
-          character,
-        ));
-      }
       validate_expr_syntax(&bin.left, file_ctx)?;
       validate_expr_syntax(&bin.right, file_ctx)
     }
-    Expression::UnaryExpression(unary) => {
-      if matches!(
-        unary.operator,
-        UnaryOperator::BitwiseNot
-          | UnaryOperator::Void
-          | UnaryOperator::Delete
-          | UnaryOperator::Typeof
-      ) {
-        let source = file_ctx.parsed.source();
-        let text = &source[unary.span.start as usize..unary.span.end as usize];
-        let (line, character) = get_location(&file_ctx.line_index, unary.span.start);
-        return Err(ConfTSError::new(
-          format!("parse expression error: {}", text),
-          &file_ctx.file_path,
-          line,
-          character,
-        ));
-      }
-      validate_expr_syntax(&unary.argument, file_ctx)
-    }
+    Expression::UnaryExpression(unary) => validate_expr_syntax(&unary.argument, file_ctx),
     Expression::LogicalExpression(log) => {
       validate_expr_syntax(&log.left, file_ctx)?;
       validate_expr_syntax(&log.right, file_ctx)

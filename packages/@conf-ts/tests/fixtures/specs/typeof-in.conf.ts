@@ -18,4 +18,8 @@ export default {
   missingInObj: 'missing' in obj,
   inArr: 0 in arr,
   outOfRangeInArr: 5 in arr,
+  arrayInstanceofArray: arr instanceof Array,
+  arrayInstanceofObject: arr instanceof Object,
+  objectInstanceofArray: obj instanceof Array,
+  objectInstanceofObject: obj instanceof Object,
 };

@@ -1,0 +1,15 @@
+{
+  "exponential": "base ** exponent",
+  "bitwiseAnd": "left & right",
+  "bitwiseOr": "left | right",
+  "bitwiseXor": "left ^ right",
+  "shiftLeft": "left << right",
+  "shiftRight": "left >> right",
+  "shiftRightZeroFill": "left >>> right",
+  "instanceOf": "value instanceof Constructor",
+  "in": "key in object",
+  "bitwiseNot": "~left",
+  "void": "void value",
+  "delete": "delete object.removable",
+  "typeof": "typeof value"
+}

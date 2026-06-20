@@ -19,7 +19,11 @@ function contextProperty(tokens: Token[], index: number): [string, number] {
 
   if (
     maybeDot?.value === '.' &&
-    tokens[index + 2 + offset]?.kind === 'identifier'
+    (tokens[index + 2 + offset]?.kind === 'identifier' ||
+      (tokens[index + 2 + offset]?.kind === 'operator' &&
+        ['instanceof', 'in', 'typeof', 'void', 'delete'].includes(
+          tokens[index + 2 + offset].value,
+        )))
   ) {
     return [tokens[index + 2 + offset].value, index + 3 + offset];
   }
@@ -97,8 +101,20 @@ function renderTokens(tokens: OutputToken[]): string {
     const previous = tokens[i - 1];
 
     if (token.kind === 'operator') {
-      if (value === '...' || (['+', '-', '!'].includes(value) && !previous)) {
+      if (previous?.value === '.') {
         output = trimRight(output) + value;
+        continue;
+      }
+      if (
+        value === '...' ||
+        (['+', '-', '!', '~'].includes(value) && !previous)
+      ) {
+        output = trimRight(output) + value;
+      } else if (['typeof', 'void', 'delete'].includes(value)) {
+        if (output && !/\s$/u.test(output)) {
+          output += ' ';
+        }
+        output += `${value} `;
       } else {
         output = `${trimRight(output)} ${value} `;
       }
@@ -123,7 +139,7 @@ function renderTokens(tokens: OutputToken[]): string {
       continue;
     }
 
-    if (output && !/[\s.([{]$/u.test(output)) {
+    if (output && !/[\s.([{!~+\-]$/u.test(output)) {
       output += ' ';
     }
     output += value;

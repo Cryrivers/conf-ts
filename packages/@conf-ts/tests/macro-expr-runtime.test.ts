@@ -43,6 +43,27 @@ describe('Macro expr runtime helper', () => {
     expect(compiled({ a: 1, b: 2 })).toBe(false);
   });
 
+  it('supports extended binary and unary operators', () => {
+    class Example {}
+    const object: { removable?: number } = { removable: 1 };
+
+    expect(
+      expr<{ base: number; exponent: number }, number>(
+        ctx => ctx.base ** ctx.exponent,
+      ),
+    ).toBe('base ** exponent');
+    expect(
+      expr<{ value: object; Constructor: typeof Example }, boolean>(
+        ctx => ctx.value instanceof ctx.Constructor,
+      ),
+    ).toBe('value instanceof Constructor');
+    expect(expr<{ value: unknown }, string>(ctx => typeof ctx.value)).toBe(
+      'typeof value',
+    );
+    expect(expression('delete object.removable')({ object })).toBe(true);
+    expect(object).toEqual({});
+  });
+
   it('rejects block bodies', () => {
     expect(() =>
       expr<{ a: number }, number>(ctx => {
@@ -74,7 +95,7 @@ describe('Macro expr runtime helper', () => {
   });
 
   it('rejects syntax unsupported by @conf-ts/expression', () => {
-    expect(() => expr<{ a: number }, number>(ctx => ctx.a ** 2)).toThrow(
+    expect(() => expr<{ a: number }, number>(ctx => (ctx.a = 2))).toThrow(
       'parse expression error',
     );
   });

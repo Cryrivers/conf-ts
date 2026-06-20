@@ -216,6 +216,63 @@ describe('Operators and Precedence', () => {
     expect(expr({ a: 2, b: 1 })).toBe(1);
     expect(expr({ a: 2, b: 3 })).toBe(2);
   });
+
+  test('Exponentiation is right-associative', () => {
+    expect(expression('2 ** 3 ** 2')({})).toBe(512);
+    expect(expression('2 * 3 ** 2')({})).toBe(18);
+  });
+
+  test('Bitwise and shift operators follow JavaScript precedence', () => {
+    expect(expression('12 & 10')({})).toBe(8);
+    expect(expression('12 | 3')({})).toBe(15);
+    expect(expression('12 ^ 10')({})).toBe(6);
+    expect(expression('3 << 2')({})).toBe(12);
+    expect(expression('-8 >> 2')({})).toBe(-2);
+    expect(expression('-1 >>> 1')({})).toBe(2147483647);
+    expect(expression('1 | 2 ^ 3 & 1')({})).toBe(3);
+  });
+
+  test('instanceof and in operators', () => {
+    class Example {}
+    const inherited = Object.create({ inherited: true });
+
+    expect(
+      expression('value instanceof Constructor')({
+        value: new Example(),
+        Constructor: Example,
+      }),
+    ).toBe(true);
+    expect(
+      expression('key in object')({ key: 'inherited', object: inherited }),
+    ).toBe(true);
+  });
+
+  test('bitwise not, void, delete, and typeof unary operators', () => {
+    const object: { removable?: number; retained: number } = {
+      removable: 1,
+      retained: 2,
+    };
+    let calls = 0;
+
+    expect(expression('~value')({ value: 5 })).toBe(-6);
+    expect(expression('void effect()')({ effect: () => calls++ })).toBe(
+      undefined,
+    );
+    expect(calls).toBe(1);
+    expect(expression('typeof missing')({})).toBe('undefined');
+    expect(expression('typeof value')({ value: null })).toBe('object');
+    expect(expression('delete object.removable')({ object })).toBe(true);
+    expect(object).toEqual({ retained: 2 });
+  });
+
+  test('operator keywords remain valid property names', () => {
+    expect(
+      expression('object.in + object.typeof')({
+        object: { in: 1, typeof: 2 },
+      }),
+    ).toBe(3);
+    expect(expression('{ delete: 1 }.delete')({})).toBe(1);
+  });
 });
 
 describe('Type Coercion Edge Cases', () => {

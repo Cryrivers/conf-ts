@@ -15,8 +15,19 @@ const isIdentPart = (ch: string) => isIdentStart(ch) || isDigit(ch);
 
 const punctuators = new Set(['(', ')', '[', ']', '{', '}', ',', ':', '.', '?']);
 
-const twoCharOps = new Set(['==', '!=', '>=', '<=', '&&', '||', '??']);
-const threeCharOps = new Set(['===', '!==', '...']);
+const twoCharOps = new Set([
+  '==',
+  '!=',
+  '>=',
+  '<=',
+  '&&',
+  '||',
+  '??',
+  '**',
+  '<<',
+  '>>',
+]);
+const threeCharOps = new Set(['===', '!==', '...', '>>>']);
 
 export interface LexerState {
   input: string;
@@ -321,6 +332,15 @@ const readIdentifier = (st: LexerState): Token => {
   if (lowers === 'undefined') {
     return { kind: 'undefined', value: lowers, pos: startPos };
   }
+  if (
+    id === 'instanceof' ||
+    id === 'in' ||
+    id === 'typeof' ||
+    id === 'void' ||
+    id === 'delete'
+  ) {
+    return { kind: 'operator', value: id, pos: startPos };
+  }
   return { kind: 'identifier', value: id, pos: startPos };
 };
 
@@ -349,6 +369,10 @@ const readOperatorOrPunct = (st: LexerState): Token => {
     ch1 === '/' ||
     ch1 === '%' ||
     ch1 === '!' ||
+    ch1 === '~' ||
+    ch1 === '&' ||
+    ch1 === '|' ||
+    ch1 === '^' ||
     ch1 === '='
   ) {
     return { kind: 'operator', value: ch1, pos: startPos };

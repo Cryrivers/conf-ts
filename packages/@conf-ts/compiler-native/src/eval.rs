@@ -486,6 +486,14 @@ pub fn evaluate(
         };
         return Ok(Value::String(operand.typeof_string().to_string()));
       }
+      if matches!(unary.operator, UnaryOperator::Void) {
+        evaluate(&unary.argument, file_ctx, ctx, local_context, options)?;
+        return Ok(Value::Undefined);
+      }
+      if matches!(unary.operator, UnaryOperator::Delete) {
+        evaluate(&unary.argument, file_ctx, ctx, local_context, options)?;
+        return Ok(Value::Bool(true));
+      }
       let operand = evaluate(&unary.argument, file_ctx, ctx, local_context, options)?;
       match unary.operator {
         UnaryOperator::UnaryPlus => Ok(Value::number(operand.to_number())),
@@ -535,6 +543,26 @@ pub fn evaluate(
 
     Expression::BinaryExpression(bin) => {
       let left = evaluate(&bin.left, file_ctx, ctx, local_context, options)?;
+      if matches!(bin.operator, BinaryOperator::Instanceof) {
+        let result = match &bin.right {
+          Expression::Identifier(identifier) if identifier.name.as_str() == "Array" => {
+            matches!(&left, Value::Array(_))
+          }
+          Expression::Identifier(identifier) if identifier.name.as_str() == "Object" => {
+            matches!(&left, Value::Object(_) | Value::Array(_))
+          }
+          _ => {
+            let (line, character) = get_location(&file_ctx.line_index, bin.right.span().start);
+            return Err(ConfTSError::new(
+              "Unsupported instanceof constructor",
+              &file_ctx.file_path,
+              line,
+              character,
+            ));
+          }
+        };
+        return Ok(Value::Bool(result));
+      }
       let right = evaluate(&bin.right, file_ctx, ctx, local_context, options)?;
       eval_binary_op(
         bin.operator,

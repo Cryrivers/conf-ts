@@ -19,7 +19,9 @@ function assertOutput(
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
   const expectedOutputFilePath = path.join(inputFolder, `${testName}.json`);
 
-  const expectedOutput = fs.readFileSync(expectedOutputFilePath, 'utf-8');
+  const expectedOutput = fs
+    .readFileSync(expectedOutputFilePath, 'utf-8')
+    .replace(/\n$/, '');
   const expectedYamlOutputFilePath = path.join(inputFolder, `${testName}.yaml`);
   const expectedYamlOutput = fs.readFileSync(
     expectedYamlOutputFilePath,

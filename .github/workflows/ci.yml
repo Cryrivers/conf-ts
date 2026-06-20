@@ -340,6 +340,7 @@ jobs:
 
       - name: Build compiler and macro
         run: |
+          pnpm --filter @conf-ts/expression build
           pnpm --filter @conf-ts/macro build
           pnpm --filter @conf-ts/compiler build
           pnpm --filter @conf-ts/webpack-plugin build
@@ -376,6 +377,7 @@ jobs:
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
           git status
           git diff
+          pnpm publish -r --filter "@conf-ts/expression" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/compiler" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/webpack-plugin" --access public ${{ steps.tag.outputs.tag }}
