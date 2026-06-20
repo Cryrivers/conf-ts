@@ -10,7 +10,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 
 - **Type-safe configs**: Author in TypeScript with enums, constants, spreads, and expressions.
 - **Deterministic output**: Produces JSON/YAML with no runtime TypeScript.
-- **Macro mode (opt-in)**: Compile-time helpers for casting, array transforms, and env injection.
+- **Macro mode (opt-in)**: Compile-time helpers for casting, array transforms, env injection, and typed runtime expressions.
 - **Multi-file + path aliases**: Works across files and honors `tsconfig.json` path aliases.
 
 ## Packages in this monorepo
@@ -18,6 +18,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/cli`: CLI to compile `.ts`/`.conf.ts` to JSON/YAML
 - `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
+- `@conf-ts/expression`: JavaScript-like expression parser and evaluator
 - `@conf-ts/macro`: Macro functions and JSX runtime available in macro mode
 - `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
 
@@ -73,18 +74,19 @@ Enable with `--macro`. All macros must be imported from `@conf-ts/macro`.
 ### Type casting: `String()`, `Number()`, `Boolean()`
 
 ```ts
-import { String, Number, Boolean } from '@conf-ts/macro';
+import { Boolean, Number, String } from '@conf-ts/macro';
 
 export default {
-  asString: String(123),  // "123"
-  asNumber: Number('1'),  // 1
-  asBoolean: Boolean(0),  // false
-}
+  asString: String(123), // "123"
+  asNumber: Number('1'), // 1
+  asBoolean: Boolean(0), // false
+};
 ```
 
 ### Arrays: `arrayMap(array, item => expr)`
 
 Constraints:
+
 - Callback must be an arrow function with exactly one parameter
 - Body must be a single return expression (or expression body)
 - The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
@@ -95,12 +97,13 @@ import { arrayMap } from '@conf-ts/macro';
 const nums = [1, 2, 3, 4];
 export default {
   doubled: arrayMap(nums, x => x * 2),
-}
+};
 ```
 
 ### Arrays: `arrayFilter(array, item => predicate)`
 
 Constraints:
+
 - Callback must be an arrow function with exactly one parameter
 - Body must be a single return expression (or expression body)
 - The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
@@ -112,12 +115,13 @@ import { arrayFilter } from '@conf-ts/macro';
 const nums = [1, 2, 3, 4];
 export default {
   evens: arrayFilter(nums, x => x % 2 === 0),
-}
+};
 ```
 
 ### Arrays: `arrayFlatMap(array, item => expr)`
 
 Constraints:
+
 - Callback must be an arrow function with exactly one parameter
 - Body must be a single return expression (or expression body)
 - The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
@@ -129,7 +133,7 @@ import { arrayFlatMap } from '@conf-ts/macro';
 const nums = [1, 2, 3];
 export default {
   expanded: arrayFlatMap(nums, x => [x, x * 10]),
-}
+};
 ```
 
 ### Environment: `env(key)`
@@ -140,15 +144,74 @@ import { env } from '@conf-ts/macro';
 export default {
   nodeEnv: env('NODE_ENV'),
   port: Number(env('PORT') ?? '3000'),
+};
+```
+
+### Type-safe runtime expressions: `expr(ctx => expression)`
+
+`expr()` turns a typed arrow expression into a string that can be stored in the generated JSON/YAML and later evaluated with `@conf-ts/expression`. Accesses to the callback parameter become root identifiers; referenced `const` and enum values are resolved while the config is compiled.
+
+```ts
+import { expr } from '@conf-ts/macro';
+
+enum Status {
+  Active = 'active',
+}
+
+const MIN_AGE = 18;
+
+type UserContext = {
+  user: { age: number; status: Status };
+};
+
+export default {
+  canEnter: expr<UserContext, boolean>(
+    ctx => ctx.user.age >= MIN_AGE && ctx.user.status === Status.Active,
+  ),
+};
+```
+
+The generated value is a portable expression string:
+
+```json
+{
+  "canEnter": "user.age >= 18 && user.status === \"active\""
 }
 ```
+
+Evaluate it against runtime data:
+
+```ts
+import expression from '@conf-ts/expression';
+
+import config from './config.generated.json';
+
+const canEnter = expression(config.canEnter);
+
+canEnter({ user: { age: 20, status: 'active' } }); // true
+canEnter({ user: { age: 16, status: 'active' } }); // false
+```
+
+Constraints:
+
+- The callback must be a synchronous arrow function with exactly one identifier parameter and an expression body.
+- Root context access must use a property name, such as `ctx.user` or `ctx['user']`. Direct `ctx` use and dynamic root access such as `ctx[key]` are rejected.
+- Nested access, calls, templates, object/array literals, and the operators listed in [Runtime expression syntax](#runtime-expression-syntax) are supported.
+- Assignment, update, function/arrow, `new`, regular expression, and other syntax outside that grammar is rejected during compilation.
 
 ### Nested macros
 
 Macros can be nested inside other macros and within array callbacks. Context (the callback parameter) is correctly scoped during nested evaluation.
 
 ```ts
-import { arrayMap, arrayFilter, arrayFlatMap, String, Number, Boolean } from '@conf-ts/macro';
+import {
+  arrayFilter,
+  arrayFlatMap,
+  arrayMap,
+  Boolean,
+  Number,
+  String,
+} from '@conf-ts/macro';
 
 const users = [{ id: 1 }, { id: 2 }, { id: 3 }];
 const nums = [0, 1, 2];
@@ -166,20 +229,74 @@ export default {
   // Nested array macros in arguments + callback macro
   filteredThenString: arrayMap(
     arrayFilter(nums, n => Boolean(n)),
-    m => String(m)
+    m => String(m),
   ), // ["1","2"]
 
   // Flat-map arrays by one level
   expanded: arrayFlatMap(users, u => [u.id, String(u.id)]), // [1,"1",2,"2",3,"3"]
-}
+};
 ```
 
 Constraints remain the same for array callbacks:
+
 - Callback must be an arrow function with exactly one parameter
 - Body must be a single expression
 - Only the callback parameter and literals are allowed (property access and computed keys with the parameter are fine)
 - Nested macros are allowed both in the array argument and inside the callback body
 - `arrayFlatMap` flattens only one level, matching JavaScript `Array.prototype.flatMap`
+
+## Runtime expression parser
+
+Install `@conf-ts/expression` when an application needs to evaluate expressions emitted by `expr()` or expressions supplied as strings:
+
+```bash
+pnpm add @conf-ts/expression
+```
+
+The default export parses once and returns a reusable function. The function receives a plain environment object whose own properties become the expression's root identifiers.
+
+```ts
+import expression from '@conf-ts/expression';
+
+const calculate = expression('subtotal * (1 + taxRate)');
+
+calculate({ subtotal: 100, taxRate: 0.08 }); // 108
+```
+
+Compiled expressions are cached in a 1,000-entry LRU cache, so compiling the same source repeatedly returns the same function. The package also exports `tokenize`, `parse`, AST/token types, and `rewriteContextExpression` for tooling.
+
+### Runtime expression syntax
+
+| Category    | Supported syntax                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------------- |
+| Literals    | Decimal numbers (including exponent notation), strings, booleans, `null`, `undefined`                       |
+| Collections | Array literals; object literals with identifier/string keys, trailing commas, and object spread             |
+| Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`) |
+| Calls       | Functions and methods supplied by the environment; method calls preserve `this`                             |
+| Templates   | Template literals, nested interpolation, and tagged templates                                               |
+| Arithmetic  | `+`, `-`, `*`, `/`, `%`, `**`                                                                               |
+| Comparison  | `<`, `<=`, `>`, `>=`, `==`, `!=`, `===`, `!==`, `in`, `instanceof`                                          |
+| Bitwise     | `&`, `\|`, `^`, `~`, `<<`, `>>`, `>>>`                                                                      |
+| Logical     | `!`, `&&`, `\|\|`, `??` with short-circuit evaluation                                                       |
+| Unary       | Unary `+`/`-`, `typeof`, `void`, `delete`                                                                   |
+| Control     | Parentheses and conditional expressions (`condition ? yes : no`)                                            |
+
+The parser applies JavaScript-style precedence to the supported operators, including right-associative exponentiation.
+
+### Runtime semantics and safety
+
+The evaluator is intentionally fault-tolerant and differs from JavaScript in several cases:
+
+- A missing identifier evaluates to `null`. Missing non-optional member access also returns `null`; optional member access returns `undefined`.
+- Accessor errors, non-callable values, and functions that throw evaluate to `null` instead of propagating the error.
+- Unary `+` is an identity operation rather than numeric coercion.
+- A falsy left side of `&&` returns `false`, and a truthy left side of `||` returns `true`; evaluated right sides retain their value.
+- Object spread ignores nullish/non-object values and spread failures.
+- `delete` mutates the supplied environment or nested object. `void` still evaluates its operand.
+
+This package is an evaluator, not a security sandbox. Expressions can read objects and invoke functions exposed through the environment. Do not expose capabilities that untrusted expressions must not access.
+
+The runtime grammar does not support assignments, `++`/`--`, array spread, object shorthand/computed keys, arrow or function expressions, `new`, classes, regular expressions, comments, or statements.
 
 ## JSX support
 
@@ -192,10 +309,20 @@ export default {
   button: <button id="submit" disabled />,
   // compiles to: { type: "button", props: { id: "submit", disabled: true } }
 
-  withChildren: <ul><li>a</li><li>b</li></ul>,
+  withChildren: (
+    <ul>
+      <li>a</li>
+      <li>b</li>
+    </ul>
+  ),
   // compiles to: { type: "ul", props: { children: [{ type: "li", ... }, ...] } }
 
-  fragment: <><span /><span /></>,
+  fragment: (
+    <>
+      <span />
+      <span />
+    </>
+  ),
   // compiles to: { type: "Fragment", props: { children: [...] } }
 };
 ```
@@ -205,7 +332,7 @@ Spread attributes and key handling are supported:
 ```tsx
 /** @jsxImportSource @conf-ts/macro */
 
-const shared = { type: "text", name: "field" };
+const shared = { type: 'text', name: 'field' };
 
 export default {
   spreadWithOverride: <input {...shared} name="override" />,
@@ -217,7 +344,7 @@ JSX can be combined with macros when `--macro` is enabled:
 
 ```tsx
 /** @jsxImportSource @conf-ts/macro */
-import { String, env } from '@conf-ts/macro';
+import { env, String } from '@conf-ts/macro';
 
 export default {
   config: <service name={String(42)} env={env('API_ENV', 'development')} />,
@@ -300,7 +427,12 @@ const files = {
   '/index.conf.ts': "export default { foo: 'bar' }",
 };
 
-const { output, dependencies } = compileInMemory(files, '/index.conf.ts', 'json', false);
+const { output, dependencies } = compileInMemory(
+  files,
+  '/index.conf.ts',
+  'json',
+  false,
+);
 ```
 
 ### Options
@@ -319,7 +451,7 @@ compile('path/to/index.conf.tsx', 'json', {
 });
 
 compileInMemory(
-  { '/index.conf.ts': "export default { a: 1, b: 2, c: 3 }" },
+  { '/index.conf.ts': 'export default { a: 1, b: 2, c: 3 }' },
   '/index.conf.ts',
   'json',
   false,
@@ -328,7 +460,7 @@ compileInMemory(
 );
 
 compileInMemory(
-  { '/index.conf.ts': "export default { a: 1 }" },
+  { '/index.conf.ts': 'export default { a: 1 }' },
   '/index.conf.ts',
   'json',
   false,
@@ -349,16 +481,16 @@ module.exports = {
   plugins: [
     new ConfTsWebpackPlugin({
       // All options are optional.
-      test: /\.conf\.ts$/,            // default; use /\.conf\.tsx?$/ for TS + TSX
-      extensionToRemove: '.conf.ts',  // default; can also be ['.conf.ts', '.conf.tsx']
-      format: 'json',                 // 'json' | 'yaml'
-      name: '[path][name].generated.json',  // default; see template tokens below
+      test: /\.conf\.ts$/, // default; use /\.conf\.tsx?$/ for TS + TSX
+      extensionToRemove: '.conf.ts', // default; can also be ['.conf.ts', '.conf.tsx']
+      format: 'json', // 'json' | 'yaml'
+      name: '[path][name].generated.json', // default; see template tokens below
       jsxOutput: { type: '$type', props: false },
       macro: false,
       preserveKeyOrder: false,
-      check: false,                   // verify-only mode for CI; reads sidecar file next to source
-      useWorkers: true,               // off-thread compile via piscina; set false for small builds
-      compiler: 'auto',               // 'auto' | 'native' | 'js' — 'auto' prefers @conf-ts/compiler-native if available
+      check: false, // verify-only mode for CI; reads sidecar file next to source
+      useWorkers: true, // off-thread compile via piscina; set false for small builds
+      compiler: 'auto', // 'auto' | 'native' | 'js' — 'auto' prefers @conf-ts/compiler-native if available
     }),
   ],
 };
@@ -377,7 +509,7 @@ new ConfTsWebpackPlugin({
 
 With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
 
-## Supported TypeScript
+## Supported config TypeScript
 
 - JSX elements, fragments, spread attributes, and children (via `@jsxImportSource @conf-ts/macro`)
 - Literals: string, number, boolean, null
@@ -391,16 +523,16 @@ With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-nativ
 - Element access: `arr[i]`, `obj["key"]`, `obj[CONST]`
 - Default imports, namespace imports, and re-exports for constants
 - Optional chaining: `a?.b`, `a?.[i]`, `a?.()`
-- Binary operators (+ - * / % ** comparisons)
+- Arithmetic and comparison operators (+ - \* / % \*\*, equality, and ordering)
 - Bitwise operators (`& | ^ << >> >>>`)
-- Logical (`&& || ??`) and `in` operators
-- Unary prefix (+ - ! ~) and `typeof`
+- Logical (`&& || ??`), `in`, and `instanceof Array/Object` operators
+- Unary prefix (+ - ! ~), `typeof`, `void`, and `delete`
 - Non-null assertions (`!` postfix)
 - Conditional (ternary)
 - Sequence/comma expressions
 - Parenthesized and `as`/`satisfies` expressions
 
-## Not supported
+## Not supported in config values
 
 - Functions (arrow/function expressions) in values
 - `new Date()` and other `new` expressions
