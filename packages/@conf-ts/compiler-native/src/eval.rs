@@ -333,6 +333,9 @@ pub fn evaluate(
       for prop_kind in &obj.properties {
         match prop_kind {
           ObjectPropertyKind::ObjectProperty(prop) => {
+            if prop.method {
+              continue;
+            }
             if prop.shorthand {
               if let PropertyKey::StaticIdentifier(ident) = &prop.key {
                 let name = ident.name.as_str().to_string();
@@ -420,31 +423,55 @@ pub fn evaluate(
 
     Expression::StaticMemberExpression(member) => {
       let prop_name = member.property.name.as_str().to_string();
-      eval_member_access(
-        &member.object,
-        &prop_name,
-        false,
-        member.span.start,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )
+      if member.optional {
+        eval_optional_member_access(
+          &member.object,
+          &prop_name,
+          false,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )
+      } else {
+        eval_member_access(
+          &member.object,
+          &prop_name,
+          false,
+          member.span.start,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )
+      }
     }
 
     Expression::ComputedMemberExpression(member) => {
       let val = evaluate(&member.expression, file_ctx, ctx, local_context, options)?;
       let prop_name = val.to_display_string();
-      eval_member_access(
-        &member.object,
-        &prop_name,
-        true,
-        member.span.start,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )
+      if member.optional {
+        eval_optional_member_access(
+          &member.object,
+          &prop_name,
+          true,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )
+      } else {
+        eval_member_access(
+          &member.object,
+          &prop_name,
+          true,
+          member.span.start,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )
+      }
     }
 
     Expression::ChainExpression(chain) => {
@@ -1518,10 +1545,19 @@ fn resolve_object_pattern_value(
   };
   for prop in &obj_pat.properties {
     if prop.shorthand {
-      if let BindingPattern::BindingIdentifier(ident) = &prop.value {
-        let prop_name = ident.name.as_str();
-        if prop_name == name {
-          return Ok(Some(get_object_prop(&map, name)));
+      if let PropertyKey::StaticIdentifier(key_ident) = &prop.key {
+        let key = key_ident.name.as_str();
+        let value = get_object_prop(&map, key);
+        if let Some(resolved) = resolve_pattern_value(
+          name,
+          &prop.value,
+          value,
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )? {
+          return Ok(Some(resolved));
         }
       }
     } else {
@@ -1551,8 +1587,8 @@ fn resolve_object_pattern_value(
     let mut keys_to_remove = HashSet::new();
     for p in &obj_pat.properties {
       if p.shorthand {
-        if let BindingPattern::BindingIdentifier(ident) = &p.value {
-          keys_to_remove.insert(ident.name.as_str().to_string());
+        if let PropertyKey::StaticIdentifier(key_ident) = &p.key {
+          keys_to_remove.insert(key_ident.name.as_str().to_string());
         }
       } else {
         if let Ok(key) =

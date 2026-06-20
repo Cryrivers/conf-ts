@@ -745,7 +745,8 @@ fn collect_const_replacements(
           Ok(())
         }
         _ => {
-          let (line, character) = get_location(&file_ctx.line_index, member.expression.span().start);
+          let (line, character) =
+            get_location(&file_ctx.line_index, member.expression.span().start);
           Err(ConfTSError::new(
             "expr callback can only access context properties with identifier property names",
             &file_ctx.file_path,
@@ -765,7 +766,15 @@ fn collect_const_replacements(
       Ok(())
     }
 
-    _ => walk_const_children(expr, param_name, body_start, replacements, file_ctx, ctx, options),
+    _ => walk_const_children(
+      expr,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
   }
 }
 
@@ -780,27 +789,103 @@ fn walk_const_children(
 ) -> Result<(), ConfTSError> {
   match expr {
     Expression::BinaryExpression(bin) => {
-      collect_const_replacements(&bin.left, param_name, body_start, replacements, file_ctx, ctx, options)?;
-      collect_const_replacements(&bin.right, param_name, body_start, replacements, file_ctx, ctx, options)
+      collect_const_replacements(
+        &bin.left,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      collect_const_replacements(
+        &bin.right,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
     }
     Expression::LogicalExpression(log) => {
-      collect_const_replacements(&log.left, param_name, body_start, replacements, file_ctx, ctx, options)?;
-      collect_const_replacements(&log.right, param_name, body_start, replacements, file_ctx, ctx, options)
+      collect_const_replacements(
+        &log.left,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      collect_const_replacements(
+        &log.right,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
     }
-    Expression::UnaryExpression(unary) => {
-      collect_const_replacements(&unary.argument, param_name, body_start, replacements, file_ctx, ctx, options)
-    }
+    Expression::UnaryExpression(unary) => collect_const_replacements(
+      &unary.argument,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
     Expression::ConditionalExpression(cond) => {
-      collect_const_replacements(&cond.test, param_name, body_start, replacements, file_ctx, ctx, options)?;
-      collect_const_replacements(&cond.consequent, param_name, body_start, replacements, file_ctx, ctx, options)?;
-      collect_const_replacements(&cond.alternate, param_name, body_start, replacements, file_ctx, ctx, options)
+      collect_const_replacements(
+        &cond.test,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      collect_const_replacements(
+        &cond.consequent,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      collect_const_replacements(
+        &cond.alternate,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
     }
-    Expression::ParenthesizedExpression(paren) => {
-      collect_const_replacements(&paren.expression, param_name, body_start, replacements, file_ctx, ctx, options)
-    }
+    Expression::ParenthesizedExpression(paren) => collect_const_replacements(
+      &paren.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
     Expression::TemplateLiteral(tpl) => {
       for e in &tpl.expressions {
-        collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+        collect_const_replacements(
+          e,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )?;
       }
       Ok(())
     }
@@ -808,12 +893,28 @@ fn walk_const_children(
       for elem in &arr.elements {
         match elem {
           ArrayExpressionElement::SpreadElement(spread) => {
-            collect_const_replacements(&spread.argument, param_name, body_start, replacements, file_ctx, ctx, options)?;
+            collect_const_replacements(
+              &spread.argument,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+              ctx,
+              options,
+            )?;
           }
           ArrayExpressionElement::Elision(_) => {}
           other => {
             if let Some(e) = other.as_expression() {
-              collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+              collect_const_replacements(
+                e,
+                param_name,
+                body_start,
+                replacements,
+                file_ctx,
+                ctx,
+                options,
+              )?;
             }
           }
         }
@@ -825,41 +926,115 @@ fn walk_const_children(
         match prop_kind {
           ObjectPropertyKind::ObjectProperty(prop) => {
             if !prop.shorthand {
-              collect_const_replacements(&prop.value, param_name, body_start, replacements, file_ctx, ctx, options)?;
+              collect_const_replacements(
+                &prop.value,
+                param_name,
+                body_start,
+                replacements,
+                file_ctx,
+                ctx,
+                options,
+              )?;
             }
           }
           ObjectPropertyKind::SpreadProperty(spread) => {
-            collect_const_replacements(&spread.argument, param_name, body_start, replacements, file_ctx, ctx, options)?;
+            collect_const_replacements(
+              &spread.argument,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+              ctx,
+              options,
+            )?;
           }
         }
       }
       Ok(())
     }
     Expression::CallExpression(call) => {
-      collect_const_replacements(&call.callee, param_name, body_start, replacements, file_ctx, ctx, options)?;
+      collect_const_replacements(
+        &call.callee,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
       for arg in &call.arguments {
         if let Some(e) = arg.as_expression() {
-          collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+          collect_const_replacements(
+            e,
+            param_name,
+            body_start,
+            replacements,
+            file_ctx,
+            ctx,
+            options,
+          )?;
         }
       }
       Ok(())
     }
     Expression::ComputedMemberExpression(member) => {
-      collect_const_replacements(&member.object, param_name, body_start, replacements, file_ctx, ctx, options)?;
-      collect_const_replacements(&member.expression, param_name, body_start, replacements, file_ctx, ctx, options)
+      collect_const_replacements(
+        &member.object,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      collect_const_replacements(
+        &member.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
     }
-    Expression::TSAsExpression(ts_as) => {
-      collect_const_replacements(&ts_as.expression, param_name, body_start, replacements, file_ctx, ctx, options)
-    }
-    Expression::TSSatisfiesExpression(ts_sat) => {
-      collect_const_replacements(&ts_sat.expression, param_name, body_start, replacements, file_ctx, ctx, options)
-    }
-    Expression::TSNonNullExpression(ts_nn) => {
-      collect_const_replacements(&ts_nn.expression, param_name, body_start, replacements, file_ctx, ctx, options)
-    }
+    Expression::TSAsExpression(ts_as) => collect_const_replacements(
+      &ts_as.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::TSSatisfiesExpression(ts_sat) => collect_const_replacements(
+      &ts_sat.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::TSNonNullExpression(ts_nn) => collect_const_replacements(
+      &ts_nn.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
     Expression::SequenceExpression(seq) => {
       for e in &seq.expressions {
-        collect_const_replacements(e, param_name, body_start, replacements, file_ctx, ctx, options)?;
+        collect_const_replacements(
+          e,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )?;
       }
       Ok(())
     }
@@ -968,8 +1143,22 @@ fn evaluate_expr(
   let body_text = &source[body_start as usize..body_expr.span().end as usize];
 
   let mut replacements: Vec<(usize, usize, String)> = Vec::new();
-  collect_const_replacements(body_expr, &param_name, body_start, &mut replacements, file_ctx, ctx, options)?;
-  collect_context_replacements(body_expr, &param_name, body_start, &mut replacements, file_ctx)?;
+  collect_const_replacements(
+    body_expr,
+    &param_name,
+    body_start,
+    &mut replacements,
+    file_ctx,
+    ctx,
+    options,
+  )?;
+  collect_context_replacements(
+    body_expr,
+    &param_name,
+    body_start,
+    &mut replacements,
+    file_ctx,
+  )?;
 
   replacements.sort_by(|a, b| b.0.cmp(&a.0));
   let mut result = body_text.to_string();
@@ -999,8 +1188,7 @@ fn collect_context_replacements(
   file_ctx: &FileContext,
 ) -> Result<(), ConfTSError> {
   match expr {
-    Expression::StaticMemberExpression(member)
-      if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+    Expression::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
     {
       let ident_start = member.object.span().start;
       let prop_start = member.property.span.start;
@@ -1010,12 +1198,14 @@ fn collect_context_replacements(
       Ok(())
     }
 
-    Expression::ComputedMemberExpression(member)
-      if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+    Expression::ComputedMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
     {
       let relative_start = member.span.start as usize - body_start as usize;
       let relative_end = member.span.end as usize - body_start as usize;
-      if replacements.iter().any(|(s, e, _)| *s == relative_start && *e == relative_end) {
+      if replacements
+        .iter()
+        .any(|(s, e, _)| *s == relative_start && *e == relative_end)
+      {
         return Ok(());
       }
       match &member.expression {
@@ -1075,9 +1265,13 @@ fn walk_expr_children(
       collect_context_replacements(&log.left, param_name, body_start, replacements, file_ctx)?;
       collect_context_replacements(&log.right, param_name, body_start, replacements, file_ctx)
     }
-    Expression::UnaryExpression(unary) => {
-      collect_context_replacements(&unary.argument, param_name, body_start, replacements, file_ctx)
-    }
+    Expression::UnaryExpression(unary) => collect_context_replacements(
+      &unary.argument,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
     Expression::ConditionalExpression(cond) => {
       collect_context_replacements(&cond.test, param_name, body_start, replacements, file_ctx)?;
       collect_context_replacements(
@@ -1095,15 +1289,13 @@ fn walk_expr_children(
         file_ctx,
       )
     }
-    Expression::ParenthesizedExpression(paren) => {
-      collect_context_replacements(
-        &paren.expression,
-        param_name,
-        body_start,
-        replacements,
-        file_ctx,
-      )
-    }
+    Expression::ParenthesizedExpression(paren) => collect_context_replacements(
+      &paren.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
     Expression::TemplateLiteral(tpl) => {
       for e in &tpl.expressions {
         collect_context_replacements(e, param_name, body_start, replacements, file_ctx)?;
@@ -1168,15 +1360,13 @@ fn walk_expr_children(
       }
       Ok(())
     }
-    Expression::StaticMemberExpression(member) => {
-      collect_context_replacements(
-        &member.object,
-        param_name,
-        body_start,
-        replacements,
-        file_ctx,
-      )
-    }
+    Expression::StaticMemberExpression(member) => collect_context_replacements(
+      &member.object,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
     Expression::ComputedMemberExpression(member) => {
       collect_context_replacements(
         &member.object,
@@ -1194,8 +1384,7 @@ fn walk_expr_children(
       )
     }
     Expression::ChainExpression(chain) => match &chain.expression {
-      ChainElement::StaticMemberExpression(member)
-        if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
+      ChainElement::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
       {
         let ident_start = member.object.span().start;
         let prop_start = member.property.span.start;
@@ -1204,9 +1393,7 @@ fn walk_expr_children(
         replacements.push((relative_start, relative_end, String::new()));
         Ok(())
       }
-      ChainElement::ComputedMemberExpression(member)
-        if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
-      {
+      ChainElement::ComputedMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) => {
         match &member.expression {
           Expression::StringLiteral(s) => {
             let key = s.value.as_str();
@@ -1237,33 +1424,27 @@ fn walk_expr_children(
       }
       _ => Ok(()),
     },
-    Expression::TSAsExpression(ts_as) => {
-      collect_context_replacements(
-        &ts_as.expression,
-        param_name,
-        body_start,
-        replacements,
-        file_ctx,
-      )
-    }
-    Expression::TSSatisfiesExpression(ts_sat) => {
-      collect_context_replacements(
-        &ts_sat.expression,
-        param_name,
-        body_start,
-        replacements,
-        file_ctx,
-      )
-    }
-    Expression::TSNonNullExpression(ts_nn) => {
-      collect_context_replacements(
-        &ts_nn.expression,
-        param_name,
-        body_start,
-        replacements,
-        file_ctx,
-      )
-    }
+    Expression::TSAsExpression(ts_as) => collect_context_replacements(
+      &ts_as.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
+    Expression::TSSatisfiesExpression(ts_sat) => collect_context_replacements(
+      &ts_sat.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
+    Expression::TSNonNullExpression(ts_nn) => collect_context_replacements(
+      &ts_nn.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
     Expression::SequenceExpression(seq) => {
       for e in &seq.expressions {
         collect_context_replacements(e, param_name, body_start, replacements, file_ctx)?;
@@ -1305,7 +1486,10 @@ fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(),
     Expression::UnaryExpression(unary) => {
       if matches!(
         unary.operator,
-        UnaryOperator::BitwiseNot | UnaryOperator::Void | UnaryOperator::Delete | UnaryOperator::Typeof
+        UnaryOperator::BitwiseNot
+          | UnaryOperator::Void
+          | UnaryOperator::Delete
+          | UnaryOperator::Typeof
       ) {
         let source = file_ctx.parsed.source();
         let text = &source[unary.span.start as usize..unary.span.end as usize];
@@ -1328,12 +1512,8 @@ fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(),
       validate_expr_syntax(&cond.consequent, file_ctx)?;
       validate_expr_syntax(&cond.alternate, file_ctx)
     }
-    Expression::ParenthesizedExpression(paren) => {
-      validate_expr_syntax(&paren.expression, file_ctx)
-    }
-    Expression::StaticMemberExpression(member) => {
-      validate_expr_syntax(&member.object, file_ctx)
-    }
+    Expression::ParenthesizedExpression(paren) => validate_expr_syntax(&paren.expression, file_ctx),
+    Expression::StaticMemberExpression(member) => validate_expr_syntax(&member.object, file_ctx),
     Expression::ComputedMemberExpression(member) => {
       validate_expr_syntax(&member.object, file_ctx)?;
       validate_expr_syntax(&member.expression, file_ctx)
@@ -1375,9 +1555,7 @@ fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(),
       Ok(())
     }
     Expression::TSAsExpression(ts_as) => validate_expr_syntax(&ts_as.expression, file_ctx),
-    Expression::TSSatisfiesExpression(ts_sat) => {
-      validate_expr_syntax(&ts_sat.expression, file_ctx)
-    }
+    Expression::TSSatisfiesExpression(ts_sat) => validate_expr_syntax(&ts_sat.expression, file_ctx),
     Expression::TSNonNullExpression(ts_nn) => validate_expr_syntax(&ts_nn.expression, file_ctx),
     Expression::SequenceExpression(seq) => {
       for e in &seq.expressions {
