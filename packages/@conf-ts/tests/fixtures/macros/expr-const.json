@@ -1,0 +1,9 @@
+{
+  "numericEnum": "status === 1",
+  "stringEnum": "color === \"red\"",
+  "constNumber": "value > 100",
+  "constString": "name === \"hello\"",
+  "constBool": "active === true",
+  "mixed": "value >= 0 && value <= 100",
+  "computedKey": "a"
+}

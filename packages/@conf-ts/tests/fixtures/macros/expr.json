@@ -1,0 +1,5 @@
+{
+  "simple": "a > b",
+  "nested": "user.age >= limit",
+  "computed": "a"
+}

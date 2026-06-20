@@ -1,0 +1,4 @@
+{
+  "enumRule": "kind === \"multi-file\"",
+  "constRule": "prefix === \"hello from \""
+}
