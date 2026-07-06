@@ -44,12 +44,12 @@
     "@conf-ts/compiler": "workspace:*",
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@types/node": "^26.0.0",
-    "oxlint": "^1.70.0",
-    "prettier": "^3.8.4",
+    "@types/node": "^26.1.0",
+    "oxlint": "^1.72.0",
+    "prettier": "^3.9.4",
     "tinybench": "^6.0.2",
-    "tsx": "^4.22.4",
-    "vitest": "^4.1.9",
+    "tsx": "^4.23.0",
+    "vitest": "^4.1.10",
     "yaml": "^2.9.0"
   },
   "optionalDependencies": {
