@@ -8,7 +8,15 @@
     "build": "webpack --config webpack.config.js"
   },
   "keywords": [],
-  "author": "",
+  "author": {
+    "name": "Zhongliang Wang",
+    "email": "hello@zhongliang.wang",
+    "url": "https://zhongliang.wang"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cryrivers/conf-ts"
+  },
   "license": "MIT",
   "devDependencies": {
     "ts-loader": "^9.6.2",

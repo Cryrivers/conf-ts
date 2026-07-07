@@ -146,7 +146,7 @@ function contextProperty(tokens: Token[], index: number): [string, number] {
 
 function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
   const output: OutputToken[] = [];
-  for (let i = 0; i < tokens.length && tokens[i].kind !== 'eof'; ) {
+  for (let i = 0; i < tokens.length && tokens[i].kind !== 'eof';) {
     const token = tokens[i];
     if (token.kind === 'identifier' && token.value === contextName) {
       const [property, nextIndex] = contextProperty(tokens, i);

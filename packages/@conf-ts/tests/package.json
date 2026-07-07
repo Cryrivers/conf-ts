@@ -1,8 +1,17 @@
 {
   "name": "@conf-ts/tests",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "private": true,
   "description": "Shared tests and fixtures for conf-ts compilers",
+  "author": {
+    "name": "Zhongliang Wang",
+    "email": "hello@zhongliang.wang",
+    "url": "https://zhongliang.wang"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cryrivers/conf-ts"
+  },
   "scripts": {
     "test": "vitest run",
     "bench": "tsx benchmark.ts",

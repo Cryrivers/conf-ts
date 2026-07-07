@@ -26,13 +26,11 @@ type MonacoWithShikiSetup = Monaco & {
   [SHIKI_MONACO_SETUP_PROPERTY]?: Promise<void>;
 };
 
-const typescriptWithTsxSyntax = tsxLang.map(
-  (lang): LanguageRegistration => ({
-    ...lang,
-    name: 'typescript',
-    aliases: ['ts', 'tsx'],
-  }),
-);
+const typescriptWithTsxSyntax = tsxLang.map((lang): LanguageRegistration => ({
+  ...lang,
+  name: 'typescript',
+  aliases: ['ts', 'tsx'],
+}));
 
 function isMonacoCancellation(value: unknown) {
   const error = value as {

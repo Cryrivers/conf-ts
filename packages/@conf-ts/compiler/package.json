@@ -1,7 +1,12 @@
 {
   "name": "@conf-ts/compiler",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Compiler for conf-ts.",
+  "author": {
+    "name": "Zhongliang Wang",
+    "email": "hello@zhongliang.wang",
+    "url": "https://zhongliang.wang"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Cryrivers/conf-ts"
