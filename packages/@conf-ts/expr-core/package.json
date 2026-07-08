@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/expr-core",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Shared expression lexer, parser, and AST types for conf-ts",
   "keywords": [],
   "license": "MIT",

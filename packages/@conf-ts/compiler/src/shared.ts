@@ -46,8 +46,8 @@ export function validateCompileOptions(options?: CompileOptions): void {
       }
     }
   }
-  
-   if (options && Object.prototype.hasOwnProperty.call(options, 'quote')) {
+
+  if (options && Object.prototype.hasOwnProperty.call(options, 'quote')) {
     const v: any = options.quote;
     if (v !== undefined && v !== 'single' && v !== 'double') {
       throw new ConfTSError(INVALID_QUOTE_OPTION_MESSAGE, {
