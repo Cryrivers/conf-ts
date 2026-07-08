@@ -9,7 +9,7 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - webpack@5.107.1
-  - '@types/node@26.0.0'
+  - '@types/node@26.0.0 || 26.1.1'
   - '@vitest/coverage-v8@4.1.10'
   - '@vitest/expect@4.1.10'
   - '@vitest/mocker@4.1.10'
@@ -20,6 +20,7 @@ minimumReleaseAgeExclude:
   - '@vitest/ui@4.1.10'
   - '@vitest/utils@4.1.10'
   - vitest@4.1.10
+  - tsdown@0.22.4
 
 onlyBuiltDependencies:
   - esbuild

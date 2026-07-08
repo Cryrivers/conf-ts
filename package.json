@@ -9,6 +9,6 @@
   },
   "packageManager": "pnpm@11.10.0",
   "devDependencies": {
-    "turbo": "^2.10.3"
+    "turbo": "^2.10.4"
   }
 }
