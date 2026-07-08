@@ -5,7 +5,7 @@ use oxc_span::GetSpan;
 
 use crate::error::ConfTSError;
 use crate::eval::{EvalContext, call_expr_callee_name, evaluate, get_location};
-use crate::types::{CompileOptions, FileContext, Value};
+use crate::types::{CompileOptions, FileContext, QuoteStyle, Value};
 
 /// Evaluate a macro call expression.
 pub fn evaluate_macro(
@@ -669,10 +669,43 @@ const EXPR_CALLBACK_ERROR: &str =
 
 type ExprReplacement = (usize, usize, String);
 
+// Keep this in sync with @conf-ts/expression encodeStringLiteral in rewrite.ts.
+fn encode_string_literal(value: &str, quote: QuoteStyle) -> String {
+  let json = serde_json::to_string(value).unwrap();
+  match quote {
+    QuoteStyle::Double => json,
+    QuoteStyle::Single => {
+      let inner = json[1..json.len() - 1]
+        .replace("\\\"", "\"")
+        .replace('\'', "\\'");
+      format!("'{}'", inner)
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn encodes_string_literal_quote_styles() {
+    let value = "line\n\"quoted\"\\path it's";
+    assert_eq!(
+      encode_string_literal(value, QuoteStyle::Double),
+      serde_json::to_string(value).unwrap()
+    );
+    assert_eq!(
+      encode_string_literal(value, QuoteStyle::Single),
+      "'line\\n\"quoted\"\\\\path it\\'s'"
+    );
+  }
+}
+
 fn value_to_expr_literal(
   value: &Value,
   file_ctx: &FileContext,
   offset: u32,
+  quote: QuoteStyle,
 ) -> Result<String, ConfTSError> {
   match value {
     Value::Number(n) => {
@@ -694,7 +727,7 @@ fn value_to_expr_literal(
         Ok(format!("{}", n.value))
       }
     }
-    Value::String(s) => Ok(serde_json::to_string(s.as_str()).unwrap()),
+    Value::String(s) => Ok(encode_string_literal(s.as_str(), quote)),
     Value::Bool(b) => Ok(b.to_string()),
     Value::Null => Ok("null".to_string()),
     _ => {
@@ -748,7 +781,7 @@ fn collect_const_replacements(
         );
       }
       let value = evaluate(expr, file_ctx, ctx, None, options)?;
-      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start)?;
+      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
       let start = expr.span().start as usize - body_start as usize;
       let end = expr.span().end as usize - body_start as usize;
       replacements.push((start, end, literal));
@@ -783,7 +816,7 @@ fn collect_const_replacements(
 
     Expression::Identifier(ident) if ident.name.as_str() != param_name => {
       let value = evaluate(expr, file_ctx, ctx, None, options)?;
-      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start)?;
+      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
       let start = expr.span().start as usize - body_start as usize;
       let end = expr.span().end as usize - body_start as usize;
       replacements.push((start, end, literal));
@@ -1255,6 +1288,197 @@ fn collect_type_syntax_erasures(
   }
 }
 
+fn is_span_covered_by_prior(start: usize, end: usize, prior: &[ExprReplacement]) -> bool {
+  prior
+    .iter()
+    .any(|(prior_start, prior_end, _)| *prior_start <= start && end <= *prior_end)
+}
+
+fn collect_string_literal_requote(
+  string: &StringLiteral<'_>,
+  body_start: u32,
+  prior: &[ExprReplacement],
+  out: &mut Vec<ExprReplacement>,
+  quote: QuoteStyle,
+) {
+  let start = string.span.start as usize - body_start as usize;
+  let end = string.span.end as usize - body_start as usize;
+  if is_span_covered_by_prior(start, end, prior) {
+    return;
+  }
+  out.push((
+    start,
+    end,
+    encode_string_literal(string.value.as_str(), quote),
+  ));
+}
+
+fn collect_property_key_requotes(
+  key: &PropertyKey<'_>,
+  body_start: u32,
+  prior: &[ExprReplacement],
+  out: &mut Vec<ExprReplacement>,
+  quote: QuoteStyle,
+) {
+  match key {
+    PropertyKey::StringLiteral(string) => {
+      collect_string_literal_requote(string, body_start, prior, out, quote);
+    }
+    _ => {
+      if let Some(expr) = key.as_expression() {
+        collect_string_requotes(expr, body_start, prior, out, quote);
+      }
+    }
+  }
+}
+
+fn collect_argument_requotes(
+  argument: &Argument<'_>,
+  body_start: u32,
+  prior: &[ExprReplacement],
+  out: &mut Vec<ExprReplacement>,
+  quote: QuoteStyle,
+) {
+  match argument {
+    Argument::SpreadElement(spread) => {
+      collect_string_requotes(&spread.argument, body_start, prior, out, quote);
+    }
+    _ => {
+      if let Some(expr) = argument.as_expression() {
+        collect_string_requotes(expr, body_start, prior, out, quote);
+      }
+    }
+  }
+}
+
+fn collect_chain_element_requotes(
+  chain: &ChainElement<'_>,
+  body_start: u32,
+  prior: &[ExprReplacement],
+  out: &mut Vec<ExprReplacement>,
+  quote: QuoteStyle,
+) {
+  match chain {
+    ChainElement::StaticMemberExpression(member) => {
+      collect_string_requotes(&member.object, body_start, prior, out, quote);
+    }
+    ChainElement::ComputedMemberExpression(member) => {
+      collect_string_requotes(&member.object, body_start, prior, out, quote);
+      collect_string_requotes(&member.expression, body_start, prior, out, quote);
+    }
+    ChainElement::CallExpression(call) => {
+      collect_string_requotes(&call.callee, body_start, prior, out, quote);
+      for argument in &call.arguments {
+        collect_argument_requotes(argument, body_start, prior, out, quote);
+      }
+    }
+    ChainElement::TSNonNullExpression(ts_nn) => {
+      collect_string_requotes(&ts_nn.expression, body_start, prior, out, quote);
+    }
+    _ => {}
+  }
+}
+
+fn collect_string_requotes(
+  expr: &Expression,
+  body_start: u32,
+  prior: &[ExprReplacement],
+  out: &mut Vec<ExprReplacement>,
+  quote: QuoteStyle,
+) {
+  match expr {
+    Expression::StringLiteral(string) => {
+      collect_string_literal_requote(string, body_start, prior, out, quote);
+    }
+    Expression::TSAsExpression(ts_as) => {
+      collect_string_requotes(&ts_as.expression, body_start, prior, out, quote);
+    }
+    Expression::TSSatisfiesExpression(ts_satisfies) => {
+      collect_string_requotes(&ts_satisfies.expression, body_start, prior, out, quote);
+    }
+    Expression::TSNonNullExpression(ts_non_null) => {
+      collect_string_requotes(&ts_non_null.expression, body_start, prior, out, quote);
+    }
+    Expression::TSTypeAssertion(assertion) => {
+      collect_string_requotes(&assertion.expression, body_start, prior, out, quote);
+    }
+    Expression::BinaryExpression(binary) => {
+      collect_string_requotes(&binary.left, body_start, prior, out, quote);
+      collect_string_requotes(&binary.right, body_start, prior, out, quote);
+    }
+    Expression::LogicalExpression(logical) => {
+      collect_string_requotes(&logical.left, body_start, prior, out, quote);
+      collect_string_requotes(&logical.right, body_start, prior, out, quote);
+    }
+    Expression::UnaryExpression(unary) => {
+      collect_string_requotes(&unary.argument, body_start, prior, out, quote);
+    }
+    Expression::ConditionalExpression(conditional) => {
+      collect_string_requotes(&conditional.test, body_start, prior, out, quote);
+      collect_string_requotes(&conditional.consequent, body_start, prior, out, quote);
+      collect_string_requotes(&conditional.alternate, body_start, prior, out, quote);
+    }
+    Expression::ParenthesizedExpression(parenthesized) => {
+      collect_string_requotes(&parenthesized.expression, body_start, prior, out, quote);
+    }
+    Expression::StaticMemberExpression(member) => {
+      collect_string_requotes(&member.object, body_start, prior, out, quote);
+    }
+    Expression::ComputedMemberExpression(member) => {
+      collect_string_requotes(&member.object, body_start, prior, out, quote);
+      collect_string_requotes(&member.expression, body_start, prior, out, quote);
+    }
+    Expression::CallExpression(call) => {
+      collect_string_requotes(&call.callee, body_start, prior, out, quote);
+      for argument in &call.arguments {
+        collect_argument_requotes(argument, body_start, prior, out, quote);
+      }
+    }
+    Expression::ChainExpression(chain) => {
+      collect_chain_element_requotes(&chain.expression, body_start, prior, out, quote);
+    }
+    Expression::ArrayExpression(array) => {
+      for element in &array.elements {
+        match element {
+          ArrayExpressionElement::SpreadElement(spread) => {
+            collect_string_requotes(&spread.argument, body_start, prior, out, quote);
+          }
+          ArrayExpressionElement::Elision(_) => {}
+          other => {
+            if let Some(expression) = other.as_expression() {
+              collect_string_requotes(expression, body_start, prior, out, quote);
+            }
+          }
+        }
+      }
+    }
+    Expression::ObjectExpression(object) => {
+      for property in &object.properties {
+        match property {
+          ObjectPropertyKind::ObjectProperty(property) => {
+            collect_property_key_requotes(&property.key, body_start, prior, out, quote);
+            collect_string_requotes(&property.value, body_start, prior, out, quote);
+          }
+          ObjectPropertyKind::SpreadProperty(spread) => {
+            collect_string_requotes(&spread.argument, body_start, prior, out, quote);
+          }
+        }
+      }
+    }
+    Expression::TemplateLiteral(template) => {
+      for expression in &template.expressions {
+        collect_string_requotes(expression, body_start, prior, out, quote);
+      }
+    }
+    Expression::SequenceExpression(sequence) => {
+      for expression in &sequence.expressions {
+        collect_string_requotes(expression, body_start, prior, out, quote);
+      }
+    }
+    _ => {}
+  }
+}
+
 fn evaluate_expr(
   callee: &str,
   call: &CallExpression,
@@ -1373,6 +1597,14 @@ fn evaluate_expr(
     file_ctx,
   )?;
   collect_type_syntax_erasures(body_expr, body_start, &mut replacements);
+  let prior_replacements = replacements.clone();
+  collect_string_requotes(
+    body_expr,
+    body_start,
+    &prior_replacements,
+    &mut replacements,
+    options.quote,
+  );
 
   replacements.sort_by(|a, b| b.0.cmp(&a.0));
   let mut result = body_text.to_string();

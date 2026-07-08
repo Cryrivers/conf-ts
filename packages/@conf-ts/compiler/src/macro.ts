@@ -1,13 +1,17 @@
-import { rewriteContextExpression } from '@conf-ts/expression';
+import {
+  encodeStringLiteral,
+  rewriteContextExpression,
+} from '@conf-ts/expression';
 import ts from 'typescript';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
-import { FormattedNumber } from './shared';
+import { FormattedNumber, type QuoteStyle } from './shared';
 
 type MacroOptions = {
   preserveKeyOrder?: boolean;
   env?: Record<string, string>;
+  quote?: QuoteStyle;
 };
 
 type ExprReplacement = [start: number, end: number, value: string];
@@ -387,6 +391,7 @@ function valueToExprLiteral(
   value: any,
   sourceFile: ts.SourceFile,
   node: ts.Node,
+  quote: QuoteStyle = 'double',
 ): string {
   if (typeof value === 'number' || value instanceof FormattedNumber) {
     const number = Number(value);
@@ -399,7 +404,7 @@ function valueToExprLiteral(
     return Object.is(number, -0) ? '-0' : String(number);
   }
   if (typeof value === 'string') {
-    return JSON.stringify(value);
+    return encodeStringLiteral(value, quote);
   }
   if (typeof value === 'boolean') {
     return String(value);
@@ -478,7 +483,7 @@ function evaluateNodeLiteral(
     undefined,
     options,
   );
-  return valueToExprLiteral(value, sourceFile, node);
+  return valueToExprLiteral(value, sourceFile, node, options?.quote);
 }
 
 function collectContextComputedReplacements(
@@ -657,7 +662,9 @@ function evaluateExpr(
   }
 
   try {
-    return rewriteContextExpression(bodyText, paramName);
+    return rewriteContextExpression(bodyText, paramName, {
+      quote: options?.quote,
+    });
   } catch (error) {
     throw new ConfTSError(
       error instanceof Error ? error.message : String(error),
@@ -771,7 +778,7 @@ function evaluateTypeCasting(
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean },
+  options?: MacroOptions,
 ) {
   if (
     (callee === 'String' || callee === 'Number' || callee === 'Boolean') &&

@@ -3,7 +3,12 @@ import { stringify as yamlStringify } from 'yaml';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
-import { CompileOptions, orderedClone, validateMacroImports } from './shared';
+import {
+  CompileOptions,
+  INVALID_QUOTE_OPTION_MESSAGE,
+  orderedClone,
+  validateMacroImports,
+} from './shared';
 
 export type InMemoryFiles = { [fileName: string]: string };
 
@@ -159,6 +164,16 @@ export function compileInMemory(
     const v: any = options.macroMode;
     if (v !== undefined && typeof v !== 'boolean') {
       throw new ConfTSError('Invalid option: macroMode must be boolean', {
+        file: 'unknown',
+        line: 1,
+        character: 1,
+      });
+    }
+  }
+  if (options && Object.prototype.hasOwnProperty.call(options, 'quote')) {
+    const v: any = options.quote;
+    if (v !== undefined && v !== 'single' && v !== 'double') {
+      throw new ConfTSError(INVALID_QUOTE_OPTION_MESSAGE, {
         file: 'unknown',
         line: 1,
         character: 1,

@@ -123,6 +123,7 @@ export default async function (
     const compileOptions: CompileOptions = {
       macroMode: options.macro || false,
       preserveKeyOrder: options.preserveKeyOrder || false,
+      quote: options.quote,
       jsxOutput: options.jsxOutput,
     };
 

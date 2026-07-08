@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::types::{CompileOptions, JsxOutputField, JsxOutputOptions as NativeJsxOutputOptions};
+use crate::types::{
+  CompileOptions, JsxOutputField, JsxOutputOptions as NativeJsxOutputOptions, QuoteStyle,
+};
 
 #[napi(object)]
 pub struct CompileResult {
@@ -37,6 +39,8 @@ pub struct JsCompileOptions {
   pub macro_mode: Option<bool>,
   pub env: Option<HashMap<String, String>>,
   pub jsx_output: Option<JsxOutputOptions>,
+  #[napi(ts_type = "'single' | 'double'")]
+  pub quote: Option<String>,
 }
 
 fn convert_jsx_field(value: Option<Either<String, bool>>) -> Option<JsxOutputField> {
@@ -59,6 +63,17 @@ fn convert_jsx_output(value: Option<JsxOutputOptions>) -> Option<NativeJsxOutput
   })
 }
 
+fn parse_quote(value: Option<String>) -> Result<QuoteStyle> {
+  match value.as_deref() {
+    None | Some("double") => Ok(QuoteStyle::Double),
+    Some("single") => Ok(QuoteStyle::Single),
+    _ => Err(Error::new(
+      Status::GenericFailure,
+      "Invalid option: quote must be 'single' or 'double'",
+    )),
+  }
+}
+
 /// Compile a TypeScript config file to JSON or YAML.
 #[napi]
 pub fn compile(
@@ -66,14 +81,16 @@ pub fn compile(
   format: String,
   options: Option<JsCompileOptions>,
 ) -> Result<CompileResult> {
-  let opts = options
-    .map(|o| CompileOptions {
+  let opts = match options {
+    Some(o) => CompileOptions {
       preserve_key_order: o.preserve_key_order.unwrap_or(false),
       macro_mode: o.macro_mode.unwrap_or(false),
       env: o.env,
       jsx_output: convert_jsx_output(o.jsx_output),
-    })
-    .unwrap_or_default();
+      quote: parse_quote(o.quote)?,
+    },
+    None => CompileOptions::default(),
+  };
 
   let (output, dependencies) = compiler::compile(&input_file, &format, &opts)
     .map_err(|e| Error::new(Status::GenericFailure, e.message.clone()))?;
@@ -93,17 +110,19 @@ pub fn compile_in_memory(
   macro_mode: bool,
   options: Option<JsCompileOptions>,
 ) -> Result<CompileResult> {
-  let opts = options
-    .map(|o| CompileOptions {
+  let opts = match options {
+    Some(o) => CompileOptions {
       preserve_key_order: o.preserve_key_order.unwrap_or(false),
       macro_mode: o.macro_mode.unwrap_or(false) || macro_mode,
       env: o.env,
       jsx_output: convert_jsx_output(o.jsx_output),
-    })
-    .unwrap_or(CompileOptions {
+      quote: parse_quote(o.quote)?,
+    },
+    None => CompileOptions {
       macro_mode,
       ..Default::default()
-    });
+    },
+  };
 
   let (output, dependencies) =
     browser::compile_in_memory(&files, &entry_file, &format, macro_mode, &opts)

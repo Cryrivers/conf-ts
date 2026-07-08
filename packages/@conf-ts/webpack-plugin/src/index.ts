@@ -15,6 +15,7 @@ export interface ConfTsWebpackPluginOptions {
   extensionToRemove?: string | string[];
   macro?: boolean;
   preserveKeyOrder?: boolean;
+  quote?: CompileOptions['quote'];
   jsxOutput?: CompileOptions['jsxOutput'];
   check?: boolean;
   useWorkers?: boolean;
@@ -46,6 +47,15 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   ) {
     reject(
       `compiler must be 'auto', 'native', or 'js', got ${JSON.stringify(options.compiler)}`,
+    );
+  }
+  if (
+    options.quote !== undefined &&
+    options.quote !== 'single' &&
+    options.quote !== 'double'
+  ) {
+    reject(
+      `quote must be 'single' or 'double', got ${JSON.stringify(options.quote)}`,
     );
   }
   if (options.name !== undefined && typeof options.name !== 'string') {
@@ -98,6 +108,7 @@ export class ConfTsWebpackPlugin {
       extensionToRemove = '.conf.ts',
       macro,
       preserveKeyOrder,
+      quote,
       jsxOutput,
       check,
       useWorkers = true,
@@ -128,6 +139,7 @@ export class ConfTsWebpackPlugin {
             extensionToRemove,
             macro,
             preserveKeyOrder,
+            quote,
             jsxOutput,
             check,
             useWorkers,

@@ -358,6 +358,14 @@ pub struct CompileOptions {
   pub macro_mode: bool,
   pub env: Option<HashMap<String, String>>,
   pub jsx_output: Option<JsxOutputOptions>,
+  pub quote: QuoteStyle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum QuoteStyle {
+  #[default]
+  Double,
+  Single,
 }
 
 #[derive(Debug, Clone)]

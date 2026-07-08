@@ -5,11 +5,17 @@ import { MACRO_PACKAGE } from './constants';
 /**
  * Compile options for both filesystem and in-memory compilation.
  */
+export type QuoteStyle = 'single' | 'double';
+
+export const INVALID_QUOTE_OPTION_MESSAGE =
+  "Invalid option: quote must be 'single' or 'double'";
+
 export interface CompileOptions {
   preserveKeyOrder?: boolean;
   macroMode?: boolean;
   env?: Record<string, string>;
   jsxOutput?: JsxOutputOptions;
+  quote?: QuoteStyle;
 }
 
 export interface JsxOutputOptions {

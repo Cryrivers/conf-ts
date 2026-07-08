@@ -7,6 +7,7 @@ import { evaluate } from './eval';
 import {
   CompileOptions,
   FormattedNumber,
+  INVALID_QUOTE_OPTION_MESSAGE,
   jsonStringify,
   orderedClone,
   validateMacroImports,
@@ -189,6 +190,16 @@ export function compile(
     const v: any = options.macroMode;
     if (v !== undefined && typeof v !== 'boolean') {
       throw new ConfTSError('Invalid option: macroMode must be boolean', {
+        file: 'unknown',
+        line: 1,
+        character: 1,
+      });
+    }
+  }
+  if (options && Object.prototype.hasOwnProperty.call(options, 'quote')) {
+    const v: any = options.quote;
+    if (v !== undefined && v !== 'single' && v !== 'double') {
+      throw new ConfTSError(INVALID_QUOTE_OPTION_MESSAGE, {
         file: 'unknown',
         line: 1,
         character: 1,

@@ -16,6 +16,7 @@ export interface JsCompileOptions {
   macroMode?: boolean
   env?: Record<string, string>
   jsxOutput?: JsxOutputOptions
+  quote?: 'single' | 'double'
 }
 
 export interface JsxOutputOptions {

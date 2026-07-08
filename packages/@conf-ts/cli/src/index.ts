@@ -19,12 +19,13 @@ program
     false,
   )
   .option('-p, --preserve-order', 'Preserve object key order in output.', false)
+  .option('--quote <style>', 'String quote style for expr output.', 'double')
   .option(
     '--jsx-output <json>',
     'Configure JSX output fields as a JSON object.',
   )
   .action((fileEntry, options) => {
-    const { format, macro, preserveOrder, jsxOutput } = options;
+    const { format, macro, preserveOrder, quote, jsxOutput } = options;
 
     if (format !== 'json' && format !== 'yaml') {
       console.error(
@@ -47,6 +48,7 @@ program
       const { output: result } = compile(fileEntry, format, {
         macroMode: macro,
         preserveKeyOrder: preserveOrder,
+        quote,
         jsxOutput: parsedJsxOutput,
       });
       console.log(result);

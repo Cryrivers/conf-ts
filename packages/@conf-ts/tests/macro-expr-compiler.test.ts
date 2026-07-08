@@ -21,6 +21,17 @@ describe('Expr Macro', () => {
     assertMacroOutput('expr-operators');
   });
 
+  it('should normalize expr string quote output', () => {
+    assertMacroOutput('expr-quote');
+    assertMacroOutput('expr-quote-single', { quote: 'single' });
+  });
+
+  it('should reject invalid quote options', () => {
+    assertMacroError('expr', "quote must be 'single' or 'double'", {
+      quote: 'nope' as any,
+    });
+  });
+
   it('should return output consumable by @conf-ts/expression', () => {
     const result = compileJs(
       path.resolve(__dirname, 'fixtures/macros/expr-const.conf.ts'),

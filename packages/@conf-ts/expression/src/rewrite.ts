@@ -1,6 +1,7 @@
 import { tokenize } from './ast/lexer';
 import { parse } from './ast/parser';
 import type { ASTNode, Token } from './ast/types';
+import type { QuoteStyle, RewriteContextOptions } from './types';
 
 const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/;
 
@@ -144,7 +145,23 @@ function contextProperty(tokens: Token[], index: number): [string, number] {
   );
 }
 
-function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
+export function encodeStringLiteral(
+  value: string,
+  quote: QuoteStyle = 'double',
+): string {
+  const json = JSON.stringify(value);
+  if (quote === 'double') {
+    return json;
+  }
+  const inner = json.slice(1, -1).replaceAll('\\"', '"').replaceAll("'", "\\'");
+  return `'${inner}'`;
+}
+
+function rewriteContext(
+  tokens: Token[],
+  contextName: string,
+  options?: RewriteContextOptions,
+): OutputToken[] {
   const output: OutputToken[] = [];
   for (let i = 0; i < tokens.length && tokens[i].kind !== 'eof';) {
     const token = tokens[i];
@@ -164,6 +181,7 @@ function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
               ? `${raw}\${${rewriteContextExpression(
                   expressionsSrc[index],
                   contextName,
+                  options,
                 )}}`
               : raw,
           )
@@ -177,9 +195,9 @@ function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
   return output;
 }
 
-function renderTokenValue(token: OutputToken): string {
+function renderTokenValue(token: OutputToken, quote: QuoteStyle): string {
   if (token.kind === 'string') {
-    return JSON.stringify(token.value);
+    return encodeStringLiteral(token.value, quote);
   }
   return token.value;
 }
@@ -188,11 +206,11 @@ function trimRight(value: string): string {
   return value.replace(/\s+$/u, '');
 }
 
-function renderTokens(tokens: OutputToken[]): string {
+function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
   let output = '';
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    const value = renderTokenValue(token);
+    const value = renderTokenValue(token, quote);
     const previous = tokens[i - 1];
 
     if (token.kind === 'operator') {
@@ -245,9 +263,11 @@ function renderTokens(tokens: OutputToken[]): string {
 export function rewriteContextExpression(
   source: string,
   contextName: string,
+  options?: RewriteContextOptions,
 ): string {
-  const tokens = rewriteContext(validatedTokens(source), contextName);
-  const expressionSource = renderTokens(tokens);
+  const quote = options?.quote ?? 'double';
+  const tokens = rewriteContext(validatedTokens(source), contextName, options);
+  const expressionSource = renderTokens(tokens, quote);
   validatedTokens(expressionSource);
   return expressionSource;
 }

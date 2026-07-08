@@ -152,6 +152,8 @@ describe('expr runtime/compiler parity', () => {
   let runtimeExpressions: Record<string, Expr<Env, unknown>>;
   let jsExpressions: Record<string, string>;
   let nativeExpressions: Record<string, string>;
+  let singleQuoteJsExpressions: Record<string, string>;
+  let singleQuoteNativeExpressions: Record<string, string>;
 
   beforeAll(async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -169,6 +171,12 @@ describe('expr runtime/compiler parity', () => {
     nativeExpressions = JSON.parse(
       compileNative(file, 'json', { macroMode: true }).output,
     );
+    singleQuoteJsExpressions = JSON.parse(
+      compileJs(file, 'json', { macroMode: true, quote: 'single' }).output,
+    );
+    singleQuoteNativeExpressions = JSON.parse(
+      compileNative(file, 'json', { macroMode: true, quote: 'single' }).output,
+    );
   });
 
   it.each(cases)(
@@ -177,9 +185,19 @@ describe('expr runtime/compiler parity', () => {
       const runtime = execute(runtimeExpressions[testCase.name], testCase);
       const js = execute(jsExpressions[testCase.name], testCase);
       const native = execute(nativeExpressions[testCase.name], testCase);
+      const singleQuoteJs = execute(
+        singleQuoteJsExpressions[testCase.name],
+        testCase,
+      );
+      const singleQuoteNative = execute(
+        singleQuoteNativeExpressions[testCase.name],
+        testCase,
+      );
 
       expect(js).toEqual(runtime);
       expect(native).toEqual(runtime);
+      expect(singleQuoteJs).toEqual(runtime);
+      expect(singleQuoteNative).toEqual(runtime);
       if (testCase.error) {
         expect(runtime).toMatchObject({
           kind: 'error',

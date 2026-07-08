@@ -514,7 +514,7 @@ function getPropertyNameText(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): string {
   if (ts.isComputedPropertyName(name)) {
     return String(
@@ -549,7 +549,7 @@ function getBindingPropertyName(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): string {
   if (binding.propertyName) {
     return getPropertyNameText(
@@ -581,7 +581,7 @@ function resolveBindingName(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): EvalResult {
   if (ts.isIdentifier(bindingName)) {
     return bindingName.text === targetName
@@ -629,7 +629,7 @@ function resolveObjectBindingPattern(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): EvalResult {
   const obj = sourceObj && typeof sourceObj === 'object' ? sourceObj : {};
 
@@ -719,7 +719,7 @@ function resolveArrayBindingPattern(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): EvalResult {
   const arr = Array.isArray(sourceArr) ? sourceArr : [];
 
@@ -854,7 +854,7 @@ function evaluateEnumDeclaration(
   macroImportsMap: { [filePath: string]: Set<string> },
   macro: boolean,
   evaluatedFiles: Set<string>,
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): Record<string, any> {
   const declSourceFile = declaration.getSourceFile();
   const enumName = declaration.name.getText(declSourceFile);
@@ -898,7 +898,7 @@ export function evaluate(
   macro: boolean,
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
-  options?: { preserveKeyOrder?: boolean; env?: Record<string, string> },
+  options?: CompileOptions,
 ): any {
   evaluatedFiles.add(sourceFile.fileName);
   if (macro) {
