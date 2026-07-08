@@ -669,7 +669,7 @@ const EXPR_CALLBACK_ERROR: &str =
 
 type ExprReplacement = (usize, usize, String);
 
-// Keep this in sync with @conf-ts/expression encodeStringLiteral in rewrite.ts.
+// Keep this in sync with @conf-ts/compiler/src/expression-rewrite.ts encodeStringLiteral.
 fn encode_string_literal(value: &str, quote: QuoteStyle) -> String {
   let json = serde_json::to_string(value).unwrap();
   match quote {

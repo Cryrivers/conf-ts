@@ -18,7 +18,8 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/cli`: CLI to compile `.ts`/`.conf.ts` to JSON/YAML
 - `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
-- `@conf-ts/expression`: JavaScript-like expression parser and evaluator
+- `@conf-ts/expr-core`: Shared expression lexer, parser, AST types, and parse errors
+- `@conf-ts/expression`: JavaScript-like runtime expression evaluator
 - `@conf-ts/macro`: Macro functions and JSX runtime available in macro mode
 - `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
 
@@ -250,7 +251,7 @@ Constraints remain the same for array callbacks:
 - Nested macros are allowed both in the array argument and inside the callback body
 - `arrayFlatMap` flattens only one level, matching JavaScript `Array.prototype.flatMap`
 
-## Runtime expression parser
+## Runtime expression evaluator
 
 Install `@conf-ts/expression` when an application needs to evaluate expressions emitted by `expr()` or expressions supplied as strings:
 
@@ -270,7 +271,7 @@ calculate({ subtotal: 100, taxRate: 0.08 }); // 108
 
 Pass `expression(source, { optionalMemberAccess: true })` to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
 
-Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode. Callback expressions preserve their original identity. The package also exports `tokenize`, `parse`, AST/token types, `rewriteContextExpression`, and `validateContextExpression` for tooling.
+Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode. Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
 
 ### Runtime expression syntax
 

@@ -1,7 +1,11 @@
-import { tokenize } from './ast/lexer';
-import { parse } from './ast/parser';
-import type { ASTNode } from './ast/types';
-import { formatInvalid, formatParseError } from './errors';
+import {
+  formatInvalid,
+  formatParseError,
+  parse,
+  tokenize,
+  type ASTNode,
+} from '@conf-ts/expr-core';
+
 import { evaluate, type EvalOptions } from './eval';
 import type { Expr, ExpressionOptions, RuntimeEnv } from './types';
 
@@ -104,18 +108,4 @@ function expression<
 }
 
 export default expression;
-export { parse, tokenize };
-export {
-  encodeStringLiteral,
-  rewriteContextExpression,
-  validateContextExpression,
-} from './rewrite';
-export type * from './ast/types';
-export type { EvalOptions };
-export type {
-  ExpressionOptions,
-  Expr,
-  QuoteStyle,
-  RewriteContextOptions,
-  RuntimeEnv,
-};
+export type { ExpressionOptions, Expr, RuntimeEnv };

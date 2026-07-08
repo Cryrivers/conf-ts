@@ -36,9 +36,9 @@ importers:
 
   packages/@conf-ts/compiler:
     dependencies:
-      '@conf-ts/expression':
+      '@conf-ts/expr-core':
         specifier: workspace:*
-        version: link:../expression
+        version: link:../expr-core
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -115,7 +115,26 @@ importers:
         specifier: workspace:*
         version: link:npm/win32-x64-msvc
 
+  packages/@conf-ts/expr-core:
+    devDependencies:
+      '@ianvs/prettier-plugin-sort-imports':
+        specifier: ^4.7.1
+        version: 4.7.1(prettier@3.9.4)
+      prettier:
+        specifier: ^3.9.4
+        version: 3.9.4
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.3(tsx@4.23.0)(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/@conf-ts/expression:
+    dependencies:
+      '@conf-ts/expr-core':
+        specifier: workspace:*
+        version: link:../expr-core
     devDependencies:
       '@ianvs/prettier-plugin-sort-imports':
         specifier: ^4.7.1
@@ -141,6 +160,9 @@ importers:
 
   packages/@conf-ts/macro:
     dependencies:
+      '@conf-ts/expr-core':
+        specifier: workspace:*
+        version: link:../expr-core
       '@conf-ts/expression':
         specifier: workspace:*
         version: link:../expression

@@ -8,6 +8,8 @@
   "capturedDouble": "value === 'double'",
   "capturedQuote": "key === '\"'",
   "capturedBackslash": "key === '\\\\'",
+  "capturedControl": "key === '\\u0001'",
+  "capturedNonAscii": "key === '星'",
   "computedLiteral": "nested.key",
   "mixed": "value === 'double' && label !== 'it\\'s'"
 }

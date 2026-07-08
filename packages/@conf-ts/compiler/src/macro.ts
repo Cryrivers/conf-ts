@@ -1,11 +1,11 @@
-import {
-  encodeStringLiteral,
-  rewriteContextExpression,
-} from '@conf-ts/expression';
 import ts from 'typescript';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
+import {
+  encodeStringLiteral,
+  rewriteContextExpression,
+} from './expression-rewrite';
 import { FormattedNumber, type QuoteStyle } from './shared';
 
 type MacroOptions = {

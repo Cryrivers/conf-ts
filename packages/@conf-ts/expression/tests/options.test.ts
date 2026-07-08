@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import expression, {
-  encodeStringLiteral,
-  rewriteContextExpression,
-} from '../src';
+import expression from '../src';
+import * as expressionModule from '../src';
 
 describe('optionalMemberAccess', () => {
   it('short-circuits missing non-optional member access', () => {
@@ -84,53 +82,13 @@ describe('optionalMemberAccess', () => {
   });
 });
 
-describe('quote style', () => {
-  it('keeps double quotes as the default rewrite output', () => {
-    expect(rewriteContextExpression('ctx.label === "x"', 'ctx')).toBe(
-      'label === "x"',
-    );
-  });
-
-  it('rewrites string tokens with single quotes when requested', () => {
-    expect(
-      rewriteContextExpression('ctx.label === "it\'s"', 'ctx', {
-        quote: 'single',
-      }),
-    ).toBe("label === 'it\\'s'");
-  });
-
-  it('encodes string literal escapes consistently', () => {
-    const cases: Array<[string, string]> = [
-      ["it's", "'it\\'s'"],
-      ['"', `'"'`],
-      ['\\', "'\\\\'"],
-      ['\n', "'\\n'"],
-      ['\u0001', "'\\u0001'"],
-      ['星', "'星'"],
-      ['line\n"quoted"\\path', `'line\\n"quoted"\\\\path'`],
-    ];
-
-    for (const [value, single] of cases) {
-      expect(encodeStringLiteral(value)).toBe(JSON.stringify(value));
-      expect(encodeStringLiteral(value, 'double')).toBe(JSON.stringify(value));
-      expect(encodeStringLiteral(value, 'single')).toBe(single);
-    }
-  });
-
-  it('applies quote style inside template literal expressions', () => {
-    expect(
-      rewriteContextExpression('`value=${ctx.label === "x"}`', 'ctx', {
-        quote: 'single',
-      }),
-    ).toBe("`value=${label === 'x'}`");
-  });
-
-  it('round-trips single-quoted rewrite output through the parser and evaluator', () => {
-    const source = rewriteContextExpression('ctx.label === "it\'s"', 'ctx', {
-      quote: 'single',
-    });
-
-    expect(source).toBe("label === 'it\\'s'");
-    expect(expression(source)({ label: "it's" })).toBe(true);
+describe('public API', () => {
+  it('only exposes the evaluation entrypoint at runtime', () => {
+    expect(Object.keys(expressionModule).sort()).toEqual(['default']);
+    expect(expressionModule).not.toHaveProperty('parse');
+    expect(expressionModule).not.toHaveProperty('tokenize');
+    expect(expressionModule).not.toHaveProperty('encodeStringLiteral');
+    expect(expressionModule).not.toHaveProperty('rewriteContextExpression');
+    expect(expressionModule).not.toHaveProperty('validateContextExpression');
   });
 });

@@ -1,8 +1,6 @@
-import {
-  validateContextExpression,
-  type Expr,
-  type RuntimeEnv,
-} from '@conf-ts/expression';
+import type { Expr, RuntimeEnv } from '@conf-ts/expression';
+
+import { validateContextExpression } from './expression-validate';
 
 console.warn(
   '@conf-ts/macro has been imported. This package is intended for compile-time macro expansion and should not be directly imported into runtime code.',

@@ -1,11 +1,5 @@
 export type RuntimeEnv = Record<string, unknown>;
 
-export type QuoteStyle = 'single' | 'double';
-
-export type RewriteContextOptions = {
-  quote?: QuoteStyle;
-};
-
 export type ExpressionOptions = {
   optionalMemberAccess?: boolean;
 };

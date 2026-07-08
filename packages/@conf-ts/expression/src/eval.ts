@@ -11,7 +11,7 @@ import type {
   SpreadElement,
   TaggedTemplateNode,
   UnaryNode,
-} from './ast/types';
+} from '@conf-ts/expr-core';
 
 export type EvalOptions = {
   optionalMemberAccess?: boolean;
