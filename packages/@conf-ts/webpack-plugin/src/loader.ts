@@ -23,6 +23,15 @@ interface CompileResult {
   dependencies: string[];
 }
 
+export function createCompileOptions(options: LoaderOptions): CompileOptions {
+  return {
+    macroMode: options.macro || false,
+    preserveKeyOrder: options.preserveKeyOrder || false,
+    jsx: options.jsx,
+    jsxOutput: options.jsxOutput,
+  };
+}
+
 export function normalizeExtensionToRemove(
   extensionToRemove: string | string[],
 ): string[] {
@@ -120,11 +129,7 @@ export default async function (
   const compilerPref: CompilerPreference = options.compiler ?? 'auto';
 
   try {
-    const compileOptions: CompileOptions = {
-      macroMode: options.macro || false,
-      preserveKeyOrder: options.preserveKeyOrder || false,
-      jsxOutput: options.jsxOutput,
-    };
+    const compileOptions = createCompileOptions(options);
 
     let result: CompileResult;
     if (useWorkers) {

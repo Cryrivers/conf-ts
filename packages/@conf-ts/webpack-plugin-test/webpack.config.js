@@ -14,6 +14,7 @@ module.exports = {
   plugins: [
     new ConfTsWebpackPlugin({
       extensionToRemove: '.conf.ts',
+      jsx: true,
       jsxOutput: { type: '$type', props: false },
     }),
   ],

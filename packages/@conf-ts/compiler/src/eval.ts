@@ -34,6 +34,19 @@ function getNodeLocation(sourceFile: ts.SourceFile, node: ts.Node) {
   };
 }
 
+function assertJsxEnabled(
+  options: CompileOptions | undefined,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+) {
+  if (options?.jsx !== true) {
+    throw new ConfTSError(
+      'JSX is disabled. Enable it with compiler option jsx: true',
+      getNodeLocation(sourceFile, node),
+    );
+  }
+}
+
 function setObjectProp(
   obj: { [key: string]: any },
   key: string,
@@ -1835,6 +1848,7 @@ export function evaluate(
           options,
         );
   } else if (ts.isJsxElement(expression)) {
+    assertJsxEnabled(options, sourceFile, expression);
     const jsxOutput = normalizeJsxOutputOptions(
       options,
       sourceFile,
@@ -1876,6 +1890,7 @@ export function evaluate(
       options,
     );
   } else if (ts.isJsxSelfClosingElement(expression)) {
+    assertJsxEnabled(options, sourceFile, expression);
     const jsxOutput = normalizeJsxOutputOptions(
       options,
       sourceFile,
@@ -1905,6 +1920,7 @@ export function evaluate(
       options,
     );
   } else if (ts.isJsxFragment(expression)) {
+    assertJsxEnabled(options, sourceFile, expression);
     const jsxOutput = normalizeJsxOutputOptions(
       options,
       sourceFile,

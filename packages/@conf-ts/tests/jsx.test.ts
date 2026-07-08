@@ -2,7 +2,11 @@ import { compileInMemory as compileInMemoryNative } from '@conf-ts/compiler-nati
 import { compileInMemory as compileInMemoryJs } from '@conf-ts/compiler/browser';
 import { describe, expect, it } from 'vitest';
 
-import { assertJsxError, assertJsxOutput } from './test-utils';
+import {
+  assertJsxError,
+  assertJsxOutput,
+  assertSpecOutput,
+} from './test-utils';
 
 describe('JSX Test', () => {
   it('should handle intrinsic tags, attributes, children, fragments, and custom tags', () => {
@@ -45,12 +49,13 @@ describe('JSX Test', () => {
 
   it('should reject flat JSX props that collide with output fields', () => {
     assertJsxError('flat-props-conflict', 'conflicts with JSX output field', {
+      jsx: true,
       jsxOutput: { props: false },
     });
   });
 
   it('should reject JSX children when children output is disabled', () => {
-    const options = { jsxOutput: { children: false } } as const;
+    const options = { jsx: true, jsxOutput: { children: false } } as const;
     assertJsxError(
       'children-disabled-text',
       'JSX children are disabled',
@@ -73,12 +78,33 @@ describe('JSX Test', () => {
     );
   });
 
+  it('should reject JSX unless compiler JSX support is enabled', () => {
+    assertJsxError(
+      'basic',
+      'JSX is disabled. Enable it with compiler option jsx: true',
+    );
+    assertJsxError(
+      'basic',
+      'JSX is disabled. Enable it with compiler option jsx: true',
+      {
+        jsx: false,
+      },
+    );
+  });
+
+  it('should not reject non-JSX configs when compiler JSX support is not enabled', () => {
+    assertSpecOutput('basic-default-export');
+  });
+
   it('should support JSX output options in compileInMemory', () => {
     const files = {
       '/index.conf.tsx':
         'export default { field: <input type="text" name="email" /> }',
     };
-    const options = { jsxOutput: { type: '$type', props: false } } as const;
+    const options = {
+      jsx: true,
+      jsxOutput: { type: '$type', props: false },
+    } as const;
     const expected = {
       field: { $type: 'input', type: 'text', name: 'email' },
     };
@@ -96,5 +122,26 @@ describe('JSX Test', () => {
           .output,
       ),
     ).toEqual(expected);
+  });
+
+  it('should reject JSX in compileInMemory unless compiler JSX support is enabled', () => {
+    const files = {
+      '/index.conf.tsx': 'export default { field: <input /> }',
+    };
+    const options = { jsx: false } as const;
+
+    expect(() =>
+      compileInMemoryJs(
+        files,
+        '/index.conf.tsx',
+        'json',
+        false,
+        undefined,
+        options,
+      ),
+    ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
+    expect(() =>
+      compileInMemoryNative(files, '/index.conf.tsx', 'json', false, options),
+    ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
   });
 });

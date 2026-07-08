@@ -38,7 +38,7 @@
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@vitest/coverage-v8": "4.1.10",
-    "oxlint": "^1.72.0",
+    "oxlint": "^1.73.0",
     "prettier": "^3.9.4",
     "tsdown": "^0.22.3",
     "typescript": "^6.0.3",

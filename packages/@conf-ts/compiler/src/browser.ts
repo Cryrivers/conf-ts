@@ -3,7 +3,12 @@ import { stringify as yamlStringify } from 'yaml';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
-import { CompileOptions, orderedClone, validateMacroImports } from './shared';
+import {
+  CompileOptions,
+  orderedClone,
+  validateCompileOptions,
+  validateMacroImports,
+} from './shared';
 
 export type InMemoryFiles = { [fileName: string]: string };
 
@@ -155,16 +160,7 @@ export function compileInMemory(
   tsconfig?: { compilerOptions?: ts.CompilerOptions },
   options?: CompileOptions,
 ) {
-  if (options && Object.prototype.hasOwnProperty.call(options, 'macroMode')) {
-    const v: any = options.macroMode;
-    if (v !== undefined && typeof v !== 'boolean') {
-      throw new ConfTSError('Invalid option: macroMode must be boolean', {
-        file: 'unknown',
-        line: 1,
-        character: 1,
-      });
-    }
-  }
+  validateCompileOptions(options);
   const defaultOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
     module: ts.ModuleKind.ESNext,

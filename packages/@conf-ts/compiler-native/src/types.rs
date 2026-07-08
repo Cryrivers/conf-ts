@@ -356,6 +356,7 @@ impl Value {
 pub struct CompileOptions {
   pub preserve_key_order: bool,
   pub macro_mode: bool,
+  pub jsx: Option<bool>,
   pub env: Option<HashMap<String, String>>,
   pub jsx_output: Option<JsxOutputOptions>,
 }

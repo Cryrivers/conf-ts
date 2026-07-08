@@ -1,7 +1,9 @@
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
+import { ConfTsWebpackPlugin, shouldInjectJsxOutput } from '../src/index';
 import {
+  createCompileOptions,
   interpolate,
   normalizeExtensionToRemove,
   resolveGeneratedPath,
@@ -71,5 +73,33 @@ describe('loader generated file path interpolation', () => {
         normalizeExtensionToRemove('.conf.ts'),
       ),
     ).toBe(path.join('/project', 'src', 'nested', 'app.generated.json'));
+  });
+
+  it('passes jsx:true through to compiler options', () => {
+    expect(
+      createCompileOptions({
+        jsx: true,
+        macro: true,
+        preserveKeyOrder: true,
+        jsxOutput: { type: '$type', props: false },
+      }),
+    ).toEqual({
+      macroMode: true,
+      preserveKeyOrder: true,
+      jsx: true,
+      jsxOutput: { type: '$type', props: false },
+    });
+  });
+
+  it('validates jsx as a boolean plugin option', () => {
+    expect(() => new ConfTsWebpackPlugin({ jsx: 'false' as any })).toThrow(
+      'jsx must be a boolean',
+    );
+  });
+
+  it('injects JSX output banner only when jsx is enabled', () => {
+    expect(shouldInjectJsxOutput(undefined)).toBe(false);
+    expect(shouldInjectJsxOutput(true)).toBe(true);
+    expect(shouldInjectJsxOutput(false)).toBe(false);
   });
 });

@@ -102,7 +102,7 @@ function PageContent() {
         format,
         macro,
         undefined,
-        { env: { NODE_ENV: 'production' }, jsxOutput },
+        { env: { NODE_ENV: 'production' }, jsx: true, jsxOutput },
       );
 
       let parsedOutput = null;
@@ -117,7 +117,7 @@ function PageContent() {
             'json',
             macro,
             undefined,
-            { env: { NODE_ENV: 'production' }, jsxOutput },
+            { env: { NODE_ENV: 'production' }, jsx: true, jsxOutput },
           );
           parsedOutput = JSON.parse(jsonCompiled.output);
         }

@@ -9,6 +9,7 @@ import {
   FormattedNumber,
   jsonStringify,
   orderedClone,
+  validateCompileOptions,
   validateMacroImports,
 } from './shared';
 
@@ -185,16 +186,7 @@ export function compile(
   format: 'json' | 'yaml',
   options?: CompileOptions,
 ) {
-  if (options && Object.prototype.hasOwnProperty.call(options, 'macroMode')) {
-    const v: any = options.macroMode;
-    if (v !== undefined && typeof v !== 'boolean') {
-      throw new ConfTSError('Invalid option: macroMode must be boolean', {
-        file: 'unknown',
-        line: 1,
-        character: 1,
-      });
-    }
-  }
+  validateCompileOptions(options);
   const effectiveMacro = options?.macroMode ?? false;
   const { output, evaluatedFiles, tsConfigPath } = _compile(
     inputFile,

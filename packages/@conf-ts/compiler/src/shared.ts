@@ -1,6 +1,7 @@
 import ts from 'typescript';
 
 import { MACRO_PACKAGE } from './constants';
+import { ConfTSError } from './error';
 
 /**
  * Compile options for both filesystem and in-memory compilation.
@@ -8,6 +9,7 @@ import { MACRO_PACKAGE } from './constants';
 export interface CompileOptions {
   preserveKeyOrder?: boolean;
   macroMode?: boolean;
+  jsx?: boolean;
   env?: Record<string, string>;
   jsxOutput?: JsxOutputOptions;
 }
@@ -19,6 +21,25 @@ export interface JsxOutputOptions {
   key?: string;
   fragment?: string;
   typeFormat?: 'string' | 'descriptor';
+}
+
+export function validateCompileOptions(options?: CompileOptions): void {
+  if (!options) {
+    return;
+  }
+
+  for (const key of ['macroMode', 'jsx'] as const) {
+    if (Object.prototype.hasOwnProperty.call(options, key)) {
+      const value: any = options[key];
+      if (value !== undefined && typeof value !== 'boolean') {
+        throw new ConfTSError(`Invalid option: ${key} must be boolean`, {
+          file: 'unknown',
+          line: 1,
+          character: 1,
+        });
+      }
+    }
+  }
 }
 
 /**

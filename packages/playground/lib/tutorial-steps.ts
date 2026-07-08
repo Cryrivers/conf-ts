@@ -159,7 +159,7 @@ export default {
     id: 'jsx',
     title: 'JSX: Declarative Config',
     description:
-      'conf-ts supports JSX as a declarative syntax for nested structured data. By default, each element compiles to a plain `{ type, props }` object — no DOM or React involved.',
+      'conf-ts supports JSX as a declarative syntax for nested structured data. When JSX is enabled, each element compiles to a plain `{ type, props }` object — no DOM or React involved.',
     goal: 'Add a <button type="submit" label="Send" /> inside the <form>.',
     fileExtension: 'tsx',
     initialCode: `/** @jsxImportSource @conf-ts/macro */

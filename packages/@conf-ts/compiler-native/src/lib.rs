@@ -35,6 +35,7 @@ pub struct JsxOutputOptions {
 pub struct JsCompileOptions {
   pub preserve_key_order: Option<bool>,
   pub macro_mode: Option<bool>,
+  pub jsx: Option<bool>,
   pub env: Option<HashMap<String, String>>,
   pub jsx_output: Option<JsxOutputOptions>,
 }
@@ -70,6 +71,7 @@ pub fn compile(
     .map(|o| CompileOptions {
       preserve_key_order: o.preserve_key_order.unwrap_or(false),
       macro_mode: o.macro_mode.unwrap_or(false),
+      jsx: o.jsx,
       env: o.env,
       jsx_output: convert_jsx_output(o.jsx_output),
     })
@@ -97,6 +99,7 @@ pub fn compile_in_memory(
     .map(|o| CompileOptions {
       preserve_key_order: o.preserve_key_order.unwrap_or(false),
       macro_mode: o.macro_mode.unwrap_or(false) || macro_mode,
+      jsx: o.jsx,
       env: o.env,
       jsx_output: convert_jsx_output(o.jsx_output),
     })

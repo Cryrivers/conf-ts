@@ -25,6 +25,23 @@ pub fn get_location(li: &LineIndex, offset: u32) -> (usize, usize) {
   li.get_location(offset)
 }
 
+fn assert_jsx_enabled(
+  options: &CompileOptions,
+  file_ctx: &FileContext,
+  offset: u32,
+) -> Result<(), ConfTSError> {
+  if options.jsx != Some(true) {
+    let (line, character) = get_location(&file_ctx.line_index, offset);
+    return Err(ConfTSError::new(
+      "JSX is disabled. Enable it with compiler option jsx: true",
+      &file_ctx.file_path,
+      line,
+      character,
+    ));
+  }
+  Ok(())
+}
+
 pub fn module_export_name_to_string(name: &ModuleExportName) -> String {
   match name {
     ModuleExportName::IdentifierName(ident) => ident.name.as_str().to_string(),
@@ -677,10 +694,12 @@ pub fn evaluate(
     }
 
     Expression::JSXElement(jsx_element) => {
+      assert_jsx_enabled(options, file_ctx, jsx_element.opening_element.span.start)?;
       evaluate_jsx_element(jsx_element, file_ctx, ctx, local_context, options)
     }
 
     Expression::JSXFragment(jsx_fragment) => {
+      assert_jsx_enabled(options, file_ctx, jsx_fragment.span.start)?;
       let children = evaluate_jsx_children(
         &jsx_fragment.children,
         file_ctx,
@@ -2053,6 +2072,7 @@ fn evaluate_jsx_element(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
+  assert_jsx_enabled(options, file_ctx, element.opening_element.span.start)?;
   let type_info = get_jsx_element_type(&element.opening_element.name);
 
   let props = evaluate_jsx_attributes(
@@ -2114,6 +2134,7 @@ fn evaluate_jsx_attributes(
             evaluate_jsx_element(el, file_ctx, ctx, local_context, options)?
           }
           Some(JSXAttributeValue::Fragment(frag)) => {
+            assert_jsx_enabled(options, file_ctx, frag.span.start)?;
             let children =
               evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
             let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.start)?;
@@ -2211,6 +2232,7 @@ fn evaluate_jsx_children(
         )?);
       }
       JSXChild::Fragment(frag) => {
+        assert_jsx_enabled(options, file_ctx, frag.span.start)?;
         let children =
           evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
         let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.start)?;

@@ -103,7 +103,7 @@ export function assertMacroError(
 }
 
 export function assertJsxOutput(testName: string, options?: CompileOptions) {
-  assertOutput(JSX_DIR, testName, { ...options }, '.json.tsx');
+  assertOutput(JSX_DIR, testName, { jsx: true, ...options }, '.json.tsx');
 }
 
 export function assertJsxError(

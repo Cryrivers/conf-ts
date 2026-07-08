@@ -14,6 +14,7 @@ export interface CompileResult {
 export interface JsCompileOptions {
   preserveKeyOrder?: boolean
   macroMode?: boolean
+  jsx?: boolean
   env?: Record<string, string>
   jsxOutput?: JsxOutputOptions
 }

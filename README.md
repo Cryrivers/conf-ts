@@ -61,8 +61,11 @@ conf-ts -f yaml src/config.conf.ts
 # Macro mode
 conf-ts --macro src/config.conf.ts
 
+# Enable compiler JSX support
+conf-ts --jsx src/config.conf.tsx
+
 # JSX output fields
-conf-ts --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
+conf-ts --jsx --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
 ```
 
 The compiled output is printed to stdout.
@@ -349,12 +352,19 @@ export default {
 };
 ```
 
-By default, each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
+When JSX is enabled, each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
+
+JSX support is disabled by default. Set compiler option `jsx: true` (or CLI flag `--jsx`) to allow JSX elements and fragments when they are reached during compile-time evaluation:
+
+```ts
+compile('path/to/index.conf.tsx', 'json', { jsx: true });
+```
 
 The JSX output shape can be configured with `jsxOutput`:
 
 ```ts
 compile('path/to/index.conf.tsx', 'json', {
+  jsx: true,
   jsxOutput: {
     type: '$type',
     props: false,
@@ -373,7 +383,7 @@ With `props: false`, JSX attributes are written at the node root next to the typ
 // compiles to: { $type: "input", type: "text", name: "email" }
 ```
 
-In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `children: false` to reject JSX children entirely; whitespace-only children are ignored.
+In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `jsxOutput.children: false` to reject JSX children while still allowing childless JSX elements; whitespace-only children are ignored. Leave `jsx` unset or set `jsx: false` when JSX itself should stay disabled.
 
 Set `typeFormat: 'descriptor'` to emit a structured type descriptor instead of a string:
 
@@ -437,14 +447,16 @@ const { output, dependencies } = compileInMemory(
 
 `preserveKeyOrder` controls whether object keys are preserved in their original insertion order during object creation, JSON serialization/deserialization, and cloning/merging.
 
-`macro` enables macro mode programmatically using the same options dictionary. Must be a boolean.
+`macroMode` enables macro mode programmatically using the same options dictionary. `macroMode` and `jsx` must be booleans when provided.
 
 ```ts
 import { compile, compileInMemory } from '@conf-ts/compiler';
 
 compile('path/to/index.conf.ts', 'json', { preserveKeyOrder: true });
 compile('path/to/index.conf.ts', 'json', { macroMode: true });
+compile('path/to/index.conf.tsx', 'json', { jsx: true });
 compile('path/to/index.conf.tsx', 'json', {
+  jsx: true,
   jsxOutput: { type: '$type', props: false },
 });
 
@@ -469,7 +481,7 @@ compileInMemory(
 
 ## Webpack plugin
 
-`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file, writes the generated JSON/YAML next to the source file by default, and injects `globalThis.__CONF_TS_JSX_OUTPUT__` so any runtime JSX in the same bundle sees the same `jsxOutput`. Add the plugin once — no separate `module.rules` entry is needed.
+`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file and writes the generated JSON/YAML next to the source file by default. When `jsx: true`, it enables compiler JSX support and injects `globalThis.__CONF_TS_JSX_OUTPUT__` so any runtime JSX in the same bundle sees the same `jsxOutput`; otherwise JSX stays disabled and the runtime JSX banner is skipped. Add the plugin once — no separate `module.rules` entry is needed.
 
 ```js
 // webpack.config.js
@@ -483,6 +495,7 @@ module.exports = {
       extensionToRemove: '.conf.ts', // default; can also be ['.conf.ts', '.conf.tsx']
       format: 'json', // 'json' | 'yaml'
       name: '[path][name].generated.json', // default; see template tokens below
+      jsx: true, // opt in to JSX during compiler evaluation
       jsxOutput: { type: '$type', props: false },
       macro: false,
       preserveKeyOrder: false,

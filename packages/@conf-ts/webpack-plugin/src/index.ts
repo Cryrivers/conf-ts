@@ -15,6 +15,7 @@ export interface ConfTsWebpackPluginOptions {
   extensionToRemove?: string | string[];
   macro?: boolean;
   preserveKeyOrder?: boolean;
+  jsx?: CompileOptions['jsx'];
   jsxOutput?: CompileOptions['jsxOutput'];
   check?: boolean;
   useWorkers?: boolean;
@@ -76,8 +77,13 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   }
   expectBool('macro');
   expectBool('preserveKeyOrder');
+  expectBool('jsx');
   expectBool('check');
   expectBool('useWorkers');
+}
+
+export function shouldInjectJsxOutput(jsx: CompileOptions['jsx']): boolean {
+  return jsx === true;
 }
 
 export class ConfTsWebpackPlugin {
@@ -98,6 +104,7 @@ export class ConfTsWebpackPlugin {
       extensionToRemove = '.conf.ts',
       macro,
       preserveKeyOrder,
+      jsx,
       jsxOutput,
       check,
       useWorkers = true,
@@ -128,6 +135,7 @@ export class ConfTsWebpackPlugin {
             extensionToRemove,
             macro,
             preserveKeyOrder,
+            jsx,
             jsxOutput,
             check,
             useWorkers,
@@ -139,12 +147,14 @@ export class ConfTsWebpackPlugin {
 
     compiler.options.module.rules.push(rule);
 
-    new compiler.webpack.BannerPlugin({
-      banner: `globalThis.__CONF_TS_JSX_OUTPUT__ = ${JSON.stringify(
-        jsxOutput ?? {},
-      )};`,
-      raw: true,
-      entryOnly: true,
-    }).apply(compiler);
+    if (shouldInjectJsxOutput(jsx)) {
+      new compiler.webpack.BannerPlugin({
+        banner: `globalThis.__CONF_TS_JSX_OUTPUT__ = ${JSON.stringify(
+          jsxOutput ?? {},
+        )};`,
+        raw: true,
+        entryOnly: true,
+      }).apply(compiler);
+    }
   }
 }
