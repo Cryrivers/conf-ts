@@ -11,7 +11,11 @@ import type {
   SpreadElement,
   TaggedTemplateNode,
   UnaryNode,
-} from './ast/types';
+} from '@conf-ts/expr-core';
+
+export type EvalOptions = {
+  optionalMemberAccess?: boolean;
+};
 
 const CHAIN_SHORT_CIRCUIT = Symbol('chain-short-circuit');
 
@@ -25,9 +29,13 @@ type Reference = {
 const toKey = (key: unknown): PropertyKey =>
   typeof key === 'symbol' ? key : String(key);
 
-const propertyKey = (node: MemberNode, env: Env): PropertyKey =>
+const propertyKey = (
+  node: MemberNode,
+  env: Env,
+  options?: EvalOptions,
+): PropertyKey =>
   node.computed
-    ? toKey(evaluate(node.property, env))
+    ? toKey(evaluate(node.property, env, options))
     : String((node.property as LiteralNode).value);
 
 const nullishMemberError = (): never => {
@@ -42,20 +50,21 @@ const memberReference = (
   node: MemberNode,
   env: Env,
   chain: boolean,
+  options?: EvalOptions,
 ): Reference | typeof CHAIN_SHORT_CIRCUIT => {
   const object = chain
-    ? evaluateChainOperand(node.object, env)
-    : evaluate(node.object, env);
+    ? evaluateChainOperand(node.object, env, options)
+    : evaluate(node.object, env, options);
   if (object === CHAIN_SHORT_CIRCUIT) {
     return CHAIN_SHORT_CIRCUIT;
   }
   if (object === null || object === undefined) {
-    if (node.optional) {
+    if (node.optional || options?.optionalMemberAccess) {
       return CHAIN_SHORT_CIRCUIT;
     }
     return nullishMemberError();
   }
-  const key = propertyKey(node, env);
+  const key = propertyKey(node, env, options);
   return {
     value: (object as Record<PropertyKey, unknown>)[key],
     object,
@@ -63,27 +72,32 @@ const memberReference = (
   };
 };
 
-const evaluateChainOperand = (node: ASTNode, env: Env): ChainResult => {
+const evaluateChainOperand = (
+  node: ASTNode,
+  env: Env,
+  options?: EvalOptions,
+): ChainResult => {
   if (node.type === 'MemberExpression') {
-    const reference = memberReference(node, env, true);
+    const reference = memberReference(node, env, true, options);
     return reference === CHAIN_SHORT_CIRCUIT ? reference : reference.value;
   }
   if (node.type === 'CallExpression') {
-    return evaluateCall(node, env, true);
+    return evaluateCall(node, env, true, options);
   }
-  return evaluate(node, env);
+  return evaluate(node, env, options);
 };
 
 const evaluateCall = (
   node: CallNode,
   env: Env,
   chain: boolean,
+  options?: EvalOptions,
 ): ChainResult => {
   let value: unknown;
   let thisArg: unknown = undefined;
 
   if (node.callee.type === 'MemberExpression') {
-    const reference = memberReference(node.callee, env, chain);
+    const reference = memberReference(node.callee, env, chain, options);
     if (reference === CHAIN_SHORT_CIRCUIT) {
       return reference;
     }
@@ -91,8 +105,8 @@ const evaluateCall = (
     thisArg = reference.object;
   } else {
     const callee = chain
-      ? evaluateChainOperand(node.callee, env)
-      : evaluate(node.callee, env);
+      ? evaluateChainOperand(node.callee, env, options)
+      : evaluate(node.callee, env, options);
     if (callee === CHAIN_SHORT_CIRCUIT) {
       return callee;
     }
@@ -106,24 +120,28 @@ const evaluateCall = (
     return nonCallableError();
   }
 
-  const args = node.args.map(arg => evaluate(arg, env));
+  const args = node.args.map(arg => evaluate(arg, env, options));
   return Reflect.apply(value, thisArg, args);
 };
 
 const evaluateIdentifier = (node: IdentifierNode, env: Env): unknown =>
   env[node.name];
 
-const deleteExpression = (node: ASTNode, env: Env): boolean => {
+const deleteExpression = (
+  node: ASTNode,
+  env: Env,
+  options?: EvalOptions,
+): boolean => {
   if (node.type === 'ParenthesizedExpression') {
-    return deleteExpression(node.expression, env);
+    return deleteExpression(node.expression, env, options);
   }
   if (node.type === 'ChainExpression') {
     const expression = node.expression;
     if (expression.type !== 'MemberExpression') {
-      evaluate(expression, env);
+      evaluate(expression, env, options);
       return true;
     }
-    const reference = memberReference(expression, env, true);
+    const reference = memberReference(expression, env, true, options);
     if (reference === CHAIN_SHORT_CIRCUIT) {
       return true;
     }
@@ -135,7 +153,7 @@ const deleteExpression = (node: ASTNode, env: Env): boolean => {
     return delete env[node.name];
   }
   if (node.type === 'MemberExpression') {
-    const reference = memberReference(node, env, false);
+    const reference = memberReference(node, env, false, options);
     if (reference === CHAIN_SHORT_CIRCUIT) {
       return true;
     }
@@ -143,16 +161,20 @@ const deleteExpression = (node: ASTNode, env: Env): boolean => {
       reference.key
     ];
   }
-  evaluate(node, env);
+  evaluate(node, env, options);
   return true;
 };
 
-const evaluateUnary = (node: UnaryNode, env: Env): unknown => {
+const evaluateUnary = (
+  node: UnaryNode,
+  env: Env,
+  options?: EvalOptions,
+): unknown => {
   if (node.operator === 'delete') {
-    return deleteExpression(node.argument, env);
+    return deleteExpression(node.argument, env, options);
   }
 
-  const value = evaluate(node.argument, env);
+  const value = evaluate(node.argument, env, options);
   switch (node.operator) {
     case '!':
       return !value;
@@ -169,9 +191,13 @@ const evaluateUnary = (node: UnaryNode, env: Env): unknown => {
   }
 };
 
-const evaluateBinary = (node: BinaryNode, env: Env): unknown => {
-  const left = evaluate(node.left, env);
-  const right = evaluate(node.right, env);
+const evaluateBinary = (
+  node: BinaryNode,
+  env: Env,
+  options?: EvalOptions,
+): unknown => {
+  const left = evaluate(node.left, env, options);
+  const right = evaluate(node.right, env, options);
   switch (node.operator) {
     case '+':
       return (left as any) + (right as any);
@@ -220,15 +246,21 @@ const evaluateBinary = (node: BinaryNode, env: Env): unknown => {
   }
 };
 
-const evaluateLogical = (node: LogicalNode, env: Env): unknown => {
-  const left = evaluate(node.left, env);
+const evaluateLogical = (
+  node: LogicalNode,
+  env: Env,
+  options?: EvalOptions,
+): unknown => {
+  const left = evaluate(node.left, env, options);
   if (node.operator === '&&') {
-    return left ? evaluate(node.right, env) : left;
+    return left ? evaluate(node.right, env, options) : left;
   }
   if (node.operator === '||') {
-    return left ? left : evaluate(node.right, env);
+    return left ? left : evaluate(node.right, env, options);
   }
-  return left === null || left === undefined ? evaluate(node.right, env) : left;
+  return left === null || left === undefined
+    ? evaluate(node.right, env, options)
+    : left;
 };
 
 const copySpread = (target: object, source: unknown): void => {
@@ -253,18 +285,19 @@ const copySpread = (target: object, source: unknown): void => {
 const evaluateTaggedTemplate = (
   node: TaggedTemplateNode,
   env: Env,
+  options?: EvalOptions,
 ): unknown => {
   let tag: unknown;
   let thisArg: unknown;
   if (node.tag.type === 'MemberExpression') {
-    const reference = memberReference(node.tag, env, false);
+    const reference = memberReference(node.tag, env, false, options);
     if (reference === CHAIN_SHORT_CIRCUIT) {
       return undefined;
     }
     tag = reference.value;
     thisArg = reference.object;
   } else {
-    tag = evaluate(node.tag, env);
+    tag = evaluate(node.tag, env, options);
   }
   if (typeof tag !== 'function') {
     return nonCallableError();
@@ -281,11 +314,17 @@ const evaluateTaggedTemplate = (
 
   return Reflect.apply(tag, thisArg, [
     strings,
-    ...node.quasi.expressions.map(expression => evaluate(expression, env)),
+    ...node.quasi.expressions.map(expression =>
+      evaluate(expression, env, options),
+    ),
   ]);
 };
 
-export const evaluate = (node: ASTNode, env: Env): unknown => {
+export const evaluate = (
+  node: ASTNode,
+  env: Env,
+  options?: EvalOptions,
+): unknown => {
   switch (node.type) {
     case 'Literal':
       return node.value;
@@ -294,27 +333,27 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
     case 'Elision':
       return undefined;
     case 'ParenthesizedExpression':
-      return evaluate(node.expression, env);
+      return evaluate(node.expression, env, options);
     case 'ChainExpression': {
-      const result = evaluateChainOperand(node.expression, env);
+      const result = evaluateChainOperand(node.expression, env, options);
       return result === CHAIN_SHORT_CIRCUIT ? undefined : result;
     }
     case 'UnaryExpression':
-      return evaluateUnary(node, env);
+      return evaluateUnary(node, env, options);
     case 'BinaryExpression':
-      return evaluateBinary(node, env);
+      return evaluateBinary(node, env, options);
     case 'LogicalExpression':
-      return evaluateLogical(node, env);
+      return evaluateLogical(node, env, options);
     case 'ConditionalExpression':
-      return evaluate(node.test, env)
-        ? evaluate(node.consequent, env)
-        : evaluate(node.alternate, env);
+      return evaluate(node.test, env, options)
+        ? evaluate(node.consequent, env, options)
+        : evaluate(node.alternate, env, options);
     case 'MemberExpression': {
-      const reference = memberReference(node, env, false);
+      const reference = memberReference(node, env, false, options);
       return reference === CHAIN_SHORT_CIRCUIT ? undefined : reference.value;
     }
     case 'CallExpression': {
-      const result = evaluateCall(node, env, false);
+      const result = evaluateCall(node, env, false, options);
       return result === CHAIN_SHORT_CIRCUIT ? undefined : result;
     }
     case 'ArrayExpression': {
@@ -323,7 +362,7 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
         if (element.type === 'Elision') {
           array.length += 1;
         } else {
-          array.push(evaluate(element, env));
+          array.push(evaluate(element, env, options));
         }
       }
       return array;
@@ -334,11 +373,11 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
         if ((property as SpreadElement).type === 'SpreadElement') {
           copySpread(
             object,
-            evaluate((property as SpreadElement).argument, env),
+            evaluate((property as SpreadElement).argument, env, options),
           );
         } else {
           const item = property as ObjectProperty;
-          object[item.key] = evaluate(item.value, env);
+          object[item.key] = evaluate(item.value, env, options);
         }
       }
       return object;
@@ -347,12 +386,12 @@ export const evaluate = (node: ASTNode, env: Env): unknown => {
       let output = node.quasis[0] ?? '';
       for (let index = 0; index < node.expressions.length; index++) {
         output +=
-          String(evaluate(node.expressions[index], env)) +
+          String(evaluate(node.expressions[index], env, options)) +
           (node.quasis[index + 1] ?? '');
       }
       return output;
     }
     case 'TaggedTemplateExpression':
-      return evaluateTaggedTemplate(node, env);
+      return evaluateTaggedTemplate(node, env, options);
   }
 };

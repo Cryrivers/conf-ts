@@ -18,7 +18,8 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/cli`: CLI to compile `.ts`/`.conf.ts` to JSON/YAML
 - `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
-- `@conf-ts/expression`: JavaScript-like expression parser and evaluator
+- `@conf-ts/expr-core`: Shared expression lexer, parser, AST types, and parse errors
+- `@conf-ts/expression`: JavaScript-like runtime expression evaluator
 - `@conf-ts/macro`: Macro functions and JSX runtime available in macro mode
 - `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
 
@@ -63,6 +64,9 @@ conf-ts --macro src/config.conf.ts
 
 # Enable compiler JSX support
 conf-ts --jsx src/config.conf.tsx
+
+# Single-quoted expr macro output
+conf-ts --macro --quote single src/config.conf.ts
 
 # JSX output fields
 conf-ts --jsx --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
@@ -153,6 +157,8 @@ export default {
 ### Type-safe runtime expressions: `expr(ctx => expression)`
 
 `expr()` marks a typed arrow expression for configuration compilation. During normal runtime execution it preserves and returns the callback, including its closure. During JSON/YAML compilation it emits a portable expression string: accesses to the callback parameter become root identifiers, and serializable `const` and enum values are resolved.
+
+String literals in generated expression strings use double quotes by default. Set compile option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native compilers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
 
 ```ts
 import { expr } from '@conf-ts/macro';
@@ -248,7 +254,7 @@ Constraints remain the same for array callbacks:
 - Nested macros are allowed both in the array argument and inside the callback body
 - `arrayFlatMap` flattens only one level, matching JavaScript `Array.prototype.flatMap`
 
-## Runtime expression parser
+## Runtime expression evaluator
 
 Install `@conf-ts/expression` when an application needs to evaluate expressions emitted by `expr()` or expressions supplied as strings:
 
@@ -266,7 +272,9 @@ const calculate = expression('subtotal * (1 + taxRate)');
 calculate({ subtotal: 100, taxRate: 0.08 }); // 108
 ```
 
-Parsed string expressions are cached in a 1,000-entry LRU cache, so parsing the same source repeatedly returns the same function. Callback expressions preserve their original identity. The package also exports `tokenize`, `parse`, AST/token types, `rewriteContextExpression`, and `validateContextExpression` for tooling.
+Pass `expression(source, { optionalMemberAccess: true })` to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
+
+Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode. Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
 
 ### Runtime expression syntax
 
@@ -445,9 +453,13 @@ const { output, dependencies } = compileInMemory(
 
 ### Options
 
-`preserveKeyOrder` controls whether object keys are preserved in their original insertion order during object creation, JSON serialization/deserialization, and cloning/merging.
-
-`macroMode` enables macro mode programmatically using the same options dictionary. `macroMode` and `jsx` must be booleans when provided.
+| Option             | Description                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| `preserveKeyOrder` | Preserves object key insertion order during object creation, serialization, cloning, and merge |
+| `macroMode`        | Enables macro mode programmatically; must be a boolean                                        |
+| `quote`            | Controls generated `expr()` string literal quotes: `'double'` default, or `'single'`          |
+| `jsx`              | Enables JSX support programmatically; must be a boolean                                       |
+| `jsxOutput`        | Configures JSX output fields                                                                  |
 
 ```ts
 import { compile, compileInMemory } from '@conf-ts/compiler';
@@ -455,6 +467,10 @@ import { compile, compileInMemory } from '@conf-ts/compiler';
 compile('path/to/index.conf.ts', 'json', { preserveKeyOrder: true });
 compile('path/to/index.conf.ts', 'json', { macroMode: true });
 compile('path/to/index.conf.tsx', 'json', { jsx: true });
+compile('path/to/index.conf.ts', 'json', {
+  macroMode: true,
+  quote: 'single',
+});
 compile('path/to/index.conf.tsx', 'json', {
   jsx: true,
   jsxOutput: { type: '$type', props: false },
@@ -499,6 +515,7 @@ module.exports = {
       jsxOutput: { type: '$type', props: false },
       macro: false,
       preserveKeyOrder: false,
+      quote: 'double',
       check: false, // verify-only mode for CI; reads sidecar file next to source
       useWorkers: true, // off-thread compile via piscina; set false for small builds
       compiler: 'auto', // 'auto' | 'native' | 'js' — 'auto' prefers @conf-ts/compiler-native if available
@@ -519,6 +536,8 @@ new ConfTsWebpackPlugin({
 `name` supports the following tokens: `[name]` (source basename without the longest matching `extensionToRemove` value), `[ext]` (source extension), and `[path]` (directory relative to webpack/rspack `context`). The default is `[path][name].generated.${format}` so generated files are written beside their source files, not under `output.path`. `check` mode resolves the same path and verifies the generated file without writing it.
 
 With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
+
+The plugin passes compile options including `quote` through to the selected compiler, so `quote: 'single'` produces single-quoted `expr()` output in generated sidecar files.
 
 ## Supported config TypeScript
 

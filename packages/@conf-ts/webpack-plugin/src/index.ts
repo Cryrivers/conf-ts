@@ -16,6 +16,7 @@ export interface ConfTsWebpackPluginOptions {
   macro?: boolean;
   preserveKeyOrder?: boolean;
   jsx?: CompileOptions['jsx'];
+  quote?: CompileOptions['quote'];
   jsxOutput?: CompileOptions['jsxOutput'];
   check?: boolean;
   useWorkers?: boolean;
@@ -47,6 +48,15 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   ) {
     reject(
       `compiler must be 'auto', 'native', or 'js', got ${JSON.stringify(options.compiler)}`,
+    );
+  }
+  if (
+    options.quote !== undefined &&
+    options.quote !== 'single' &&
+    options.quote !== 'double'
+  ) {
+    reject(
+      `quote must be 'single' or 'double', got ${JSON.stringify(options.quote)}`,
     );
   }
   if (options.name !== undefined && typeof options.name !== 'string') {
@@ -105,6 +115,7 @@ export class ConfTsWebpackPlugin {
       macro,
       preserveKeyOrder,
       jsx,
+      quote,
       jsxOutput,
       check,
       useWorkers = true,
@@ -136,6 +147,7 @@ export class ConfTsWebpackPlugin {
             macro,
             preserveKeyOrder,
             jsx,
+            quote,
             jsxOutput,
             check,
             useWorkers,

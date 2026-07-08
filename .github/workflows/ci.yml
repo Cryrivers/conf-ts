@@ -341,8 +341,9 @@ jobs:
         shell: bash
         working-directory: packages/@conf-ts/compiler-native
 
-      - name: Build compiler and macro
+      - name: Build packages
         run: |
+          pnpm --filter @conf-ts/expr-core build
           pnpm --filter @conf-ts/expression build
           pnpm --filter @conf-ts/macro build
           pnpm --filter @conf-ts/compiler build
@@ -380,6 +381,7 @@ jobs:
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
           git status
           git diff
+          pnpm publish -r --filter "@conf-ts/expr-core" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/expression" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/compiler" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro" --access public ${{ steps.tag.outputs.tag }}

@@ -52,6 +52,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@conf-ts/expr-core": "workspace:*",
     "@conf-ts/expression": "workspace:*"
   },
   "devDependencies": {

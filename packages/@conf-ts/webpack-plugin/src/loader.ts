@@ -27,6 +27,7 @@ export function createCompileOptions(options: LoaderOptions): CompileOptions {
   return {
     macroMode: options.macro || false,
     preserveKeyOrder: options.preserveKeyOrder || false,
+    quote: options.quote,
     jsx: options.jsx,
     jsxOutput: options.jsxOutput,
   };

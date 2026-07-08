@@ -1,0 +1,15 @@
+{
+  "directDouble": "value === \"double\"",
+  "directSingle": "value === \"single\"",
+  "directEscaped": "label === \"it's\"",
+  "directLabel": "label === \"line\\n\\\"quoted\\\"\\\\path\"",
+  "capturedSingle": "label === \"it's\"",
+  "capturedLabel": "label === \"line\\n\\\"quoted\\\"\\\\path\"",
+  "capturedDouble": "value === \"double\"",
+  "capturedQuote": "key === \"\\\"\"",
+  "capturedBackslash": "key === \"\\\\\"",
+  "capturedControl": "key === \"\\u0001\"",
+  "capturedNonAscii": "key === \"星\"",
+  "computedLiteral": "nested.key",
+  "mixed": "value === \"double\" && label !== \"it's\""
+}

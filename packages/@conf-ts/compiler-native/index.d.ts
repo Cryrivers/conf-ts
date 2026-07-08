@@ -17,6 +17,7 @@ export interface JsCompileOptions {
   jsx?: boolean
   env?: Record<string, string>
   jsxOutput?: JsxOutputOptions
+  quote?: 'single' | 'double'
 }
 
 export interface JsxOutputOptions {

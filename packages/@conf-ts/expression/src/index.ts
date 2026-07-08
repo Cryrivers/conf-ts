@@ -1,9 +1,13 @@
-import { tokenize } from './ast/lexer';
-import { parse } from './ast/parser';
-import type { ASTNode } from './ast/types';
-import { formatInvalid, formatParseError } from './errors';
-import { evaluate } from './eval';
-import type { Expr, RuntimeEnv } from './types';
+import {
+  formatInvalid,
+  formatParseError,
+  parse,
+  tokenize,
+  type ASTNode,
+} from '@conf-ts/expr-core';
+
+import { evaluate, type EvalOptions } from './eval';
+import type { Expr, ExpressionOptions, RuntimeEnv } from './types';
 
 type Compiled<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown> = (
   env: Context,
@@ -37,15 +41,21 @@ function cacheGet(key: string): Compiled | undefined {
   return value;
 }
 
-function expression(expr: string): Compiled;
+function expression(expr: string, options?: ExpressionOptions): Compiled;
 function expression<
   Context extends RuntimeEnv = RuntimeEnv,
   ReturnType = unknown,
->(expr: Expr<Context, ReturnType>): Compiled<Context, ReturnType>;
+>(
+  expr: Expr<Context, ReturnType>,
+  options?: ExpressionOptions,
+): Compiled<Context, ReturnType>;
 function expression<
   Context extends RuntimeEnv = RuntimeEnv,
   ReturnType = unknown,
->(expr: Expr<Context, ReturnType> | string): Compiled<Context, ReturnType> {
+>(
+  expr: Expr<Context, ReturnType> | string,
+  options?: ExpressionOptions,
+): Compiled<Context, ReturnType> {
   if (typeof expr === 'function') {
     return expr as Compiled<Context, ReturnType>;
   }
@@ -54,7 +64,13 @@ function expression<
     throw new Error(formatInvalid());
   }
 
-  const cached = cacheGet(expr);
+  const optionalMemberAccess = options?.optionalMemberAccess === true;
+  const evalOptions: EvalOptions | undefined = optionalMemberAccess
+    ? { optionalMemberAccess: true }
+    : undefined;
+  const cacheKey = (optionalMemberAccess ? 'o' : 's') + expr;
+
+  const cached = cacheGet(cacheKey);
   if (cached) {
     return cached as Compiled<Context, ReturnType>;
   }
@@ -69,7 +85,7 @@ function expression<
       tokens[0].value === ']'
     ) {
       const fn: Compiled<Context, ReturnType> = () => undefined as ReturnType;
-      cacheSet(expr, fn);
+      cacheSet(cacheKey, fn);
       return fn;
     }
     ast = parse(tokens, expr);
@@ -86,13 +102,10 @@ function expression<
   }
 
   const fn: Compiled<Context, ReturnType> = (env: Context) =>
-    evaluate(ast, env) as ReturnType;
-  cacheSet(expr, fn);
+    evaluate(ast, env, evalOptions) as ReturnType;
+  cacheSet(cacheKey, fn);
   return fn;
 }
 
 export default expression;
-export { parse, tokenize };
-export { rewriteContextExpression, validateContextExpression } from './rewrite';
-export type * from './ast/types';
-export type { Expr, RuntimeEnv };
+export type { ExpressionOptions, Expr, RuntimeEnv };

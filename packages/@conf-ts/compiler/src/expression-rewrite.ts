@@ -1,8 +1,12 @@
-import { tokenize } from './ast/lexer';
-import { parse } from './ast/parser';
-import type { ASTNode, Token } from './ast/types';
+import { parse, tokenize, type Token } from '@conf-ts/expr-core';
+
+import type { QuoteStyle } from './shared';
 
 const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/;
+
+type RewriteContextOptions = {
+  quote?: QuoteStyle;
+};
 
 type OutputToken = Pick<Token, 'kind' | 'value'>;
 
@@ -10,101 +14,6 @@ function validatedTokens(source: string): Token[] {
   const tokens = tokenize(source);
   parse(tokens, source);
   return tokens;
-}
-
-function validateContextNode(
-  node: ASTNode,
-  contextName: string,
-  contextAccess = false,
-): void {
-  if (node.type === 'Identifier') {
-    if (node.name === contextName && !contextAccess) {
-      throw new Error(
-        'expr callback cannot use the context parameter directly',
-      );
-    }
-    return;
-  }
-
-  switch (node.type) {
-    case 'Literal':
-    case 'Elision':
-      return;
-    case 'ParenthesizedExpression':
-      validateContextNode(node.expression, contextName);
-      return;
-    case 'ChainExpression':
-      validateContextNode(node.expression, contextName, contextAccess);
-      return;
-    case 'MemberExpression': {
-      if (
-        node.object.type === 'Identifier' &&
-        node.object.name === contextName &&
-        node.computed &&
-        node.property.type === 'Literal' &&
-        (typeof node.property.value !== 'string' ||
-          !IDENTIFIER_RE.test(node.property.value))
-      ) {
-        throw new Error(
-          'expr callback can only access context properties with identifier property names',
-        );
-      }
-      validateContextNode(node.object, contextName, true);
-      validateContextNode(node.property, contextName);
-      return;
-    }
-    case 'UnaryExpression':
-      validateContextNode(node.argument, contextName);
-      return;
-    case 'BinaryExpression':
-    case 'LogicalExpression':
-      validateContextNode(node.left, contextName);
-      validateContextNode(node.right, contextName);
-      return;
-    case 'ConditionalExpression':
-      validateContextNode(node.test, contextName);
-      validateContextNode(node.consequent, contextName);
-      validateContextNode(node.alternate, contextName);
-      return;
-    case 'CallExpression':
-      validateContextNode(node.callee, contextName);
-      node.args.forEach(arg => validateContextNode(arg, contextName));
-      return;
-    case 'ArrayExpression':
-      node.elements.forEach(element =>
-        validateContextNode(element, contextName),
-      );
-      return;
-    case 'ObjectExpression':
-      node.properties.forEach(property =>
-        validateContextNode(
-          property.type === 'SpreadElement'
-            ? property.argument
-            : property.value,
-          contextName,
-        ),
-      );
-      return;
-    case 'TemplateLiteral':
-      node.expressions.forEach(expression =>
-        validateContextNode(expression, contextName),
-      );
-      return;
-    case 'TaggedTemplateExpression':
-      validateContextNode(node.tag, contextName);
-      validateContextNode(node.quasi, contextName);
-  }
-}
-
-export function validateContextExpression(
-  source: string,
-  contextName: string,
-): void {
-  const ast = parse(tokenize(source), source);
-  if (!ast) {
-    throw new Error('parse expression error: ' + source);
-  }
-  validateContextNode(ast, contextName);
 }
 
 function contextProperty(tokens: Token[], index: number): [string, number] {
@@ -144,7 +53,24 @@ function contextProperty(tokens: Token[], index: number): [string, number] {
   );
 }
 
-function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
+// Keep this in sync with compiler-native/src/macro_eval.rs encode_string_literal.
+export function encodeStringLiteral(
+  value: string,
+  quote: QuoteStyle = 'double',
+): string {
+  const json = JSON.stringify(value);
+  if (quote === 'double') {
+    return json;
+  }
+  const inner = json.slice(1, -1).replaceAll('\\"', '"').replaceAll("'", "\\'");
+  return `'${inner}'`;
+}
+
+function rewriteContext(
+  tokens: Token[],
+  contextName: string,
+  options?: RewriteContextOptions,
+): OutputToken[] {
   const output: OutputToken[] = [];
   for (let i = 0; i < tokens.length && tokens[i].kind !== 'eof';) {
     const token = tokens[i];
@@ -164,6 +90,7 @@ function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
               ? `${raw}\${${rewriteContextExpression(
                   expressionsSrc[index],
                   contextName,
+                  options,
                 )}}`
               : raw,
           )
@@ -177,9 +104,9 @@ function rewriteContext(tokens: Token[], contextName: string): OutputToken[] {
   return output;
 }
 
-function renderTokenValue(token: OutputToken): string {
+function renderTokenValue(token: OutputToken, quote: QuoteStyle): string {
   if (token.kind === 'string') {
-    return JSON.stringify(token.value);
+    return encodeStringLiteral(token.value, quote);
   }
   return token.value;
 }
@@ -188,11 +115,11 @@ function trimRight(value: string): string {
   return value.replace(/\s+$/u, '');
 }
 
-function renderTokens(tokens: OutputToken[]): string {
+function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
   let output = '';
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    const value = renderTokenValue(token);
+    const value = renderTokenValue(token, quote);
     const previous = tokens[i - 1];
 
     if (token.kind === 'operator') {
@@ -245,9 +172,11 @@ function renderTokens(tokens: OutputToken[]): string {
 export function rewriteContextExpression(
   source: string,
   contextName: string,
+  options?: RewriteContextOptions,
 ): string {
-  const tokens = rewriteContext(validatedTokens(source), contextName);
-  const expressionSource = renderTokens(tokens);
+  const quote = options?.quote ?? 'double';
+  const tokens = rewriteContext(validatedTokens(source), contextName, options);
+  const expressionSource = renderTokens(tokens, quote);
   validatedTokens(expressionSource);
   return expressionSource;
 }

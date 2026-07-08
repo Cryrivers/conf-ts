@@ -6,12 +6,18 @@ import { ConfTSError } from './error';
 /**
  * Compile options for both filesystem and in-memory compilation.
  */
+export type QuoteStyle = 'single' | 'double';
+
+export const INVALID_QUOTE_OPTION_MESSAGE =
+  "Invalid option: quote must be 'single' or 'double'";
+
 export interface CompileOptions {
   preserveKeyOrder?: boolean;
   macroMode?: boolean;
   jsx?: boolean;
   env?: Record<string, string>;
   jsxOutput?: JsxOutputOptions;
+  quote?: QuoteStyle;
 }
 
 export interface JsxOutputOptions {
@@ -38,6 +44,17 @@ export function validateCompileOptions(options?: CompileOptions): void {
           character: 1,
         });
       }
+    }
+  }
+  
+   if (options && Object.prototype.hasOwnProperty.call(options, 'quote')) {
+    const v: any = options.quote;
+    if (v !== undefined && v !== 'single' && v !== 'double') {
+      throw new ConfTSError(INVALID_QUOTE_OPTION_MESSAGE, {
+        file: 'unknown',
+        line: 1,
+        character: 1,
+      });
     }
   }
 }
