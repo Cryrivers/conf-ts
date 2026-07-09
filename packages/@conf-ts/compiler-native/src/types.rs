@@ -323,8 +323,35 @@ pub fn serialize_output(output: &Value, format: &str) -> Result<String, ConfTSEr
             new_line.replace_range(indent_len..indent_len + 1, "\"");
           }
         }
-        if (new_line.contains(": '") || new_line.contains("- '")) && new_line.ends_with('\'') {
-          new_line = new_line.replace('\'', "\"");
+        if new_line.ends_with('\'') {
+          // Use the FIRST occurrence of the marker, not the last: a YAML
+          // key (plain or already-double-quoted above) can never itself
+          // contain `: ` unescaped, but the single-quoted *value* can
+          // legitimately contain further `: '`-like substrings once its
+          // internal `'` characters are doubled for escaping (e.g. the
+          // value `Say: 'hi' now` serializes to `'Say: ''hi'' now'`), so
+          // searching from the end can land inside the value instead of at
+          // the real key/value boundary.
+          let marker = new_line.find(": '").or_else(|| new_line.find("- '"));
+          if let Some(marker_idx) = marker {
+            let value_start = marker_idx + 2;
+            let value_end = new_line.len() - 1;
+            if value_end > value_start {
+              // Decode YAML single-quote escaping (`''` -> `'`) before
+              // re-encoding, and only switch to double-quote style when
+              // that's lossless: single-quoted scalars never need to
+              // escape `"` or `\`, so if either is present, re-encoding
+              // as double-quoted would require adding escapes we don't
+              // perform here — keep the single-quoted form, which is
+              // exactly what the `yaml` npm package also picks in that
+              // case.
+              let inner = &new_line[value_start + 1..value_end];
+              let decoded = inner.replace("''", "'");
+              if !decoded.contains('"') && !decoded.contains('\\') {
+                new_line = format!("{}\"{}\"", &new_line[..value_start], decoded);
+              }
+            }
+          }
         }
         processed_lines.push_str(&new_line);
         processed_lines.push_str("\n");

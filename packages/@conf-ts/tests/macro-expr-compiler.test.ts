@@ -99,6 +99,55 @@ describe('Expr Macro', () => {
     expect(expression(output.capturedNonAscii)({ key: '星' })).toBe(true);
   });
 
+  it('should evaluate other @conf-ts/macro functions used inside an expr callback', () => {
+    delete process.env.CONF_TS_EXPR_MACRO_MODE;
+    assertMacroOutput('expr-macro');
+  });
+
+  it('should fold a call whose argument only coincidentally shares text with the context parameter', () => {
+    const result = compileJs(
+      path.resolve(__dirname, 'fixtures/macros/expr-macro.conf.ts'),
+      'json',
+      { macroMode: true },
+    );
+    const output = JSON.parse(result.output);
+    // An object key or property access spelled `ctx` isn't a reference to
+    // the context parameter, so these must fold to a literal instead of
+    // being kept as an unresolvable runtime call.
+    expect(output.objectKeyNamedCtx).toBe('1');
+    expect(output.propertyNamedCtx).toBe('41');
+  });
+
+  it('should keep String/Number/Boolean as a runtime call when they cannot be folded to a constant', () => {
+    assertMacroOutput('expr-macro-runtime');
+
+    const result = compileJs(
+      path.resolve(__dirname, 'fixtures/macros/expr-macro-runtime.conf.ts'),
+      'json',
+      { macroMode: true },
+    );
+    const output = JSON.parse(result.output);
+    expect(expression(output.runtimeString)({ a: '5', n: 5 })).toBe(true);
+    expect(expression(output.runtimeString)({ a: '5', n: 6 })).toBe(false);
+    expect(expression(output.mixedFold)({ n: 1 })).toBe(42);
+    expect(expression(output.nestedRuntime)({ a: '3' })).toBe(true);
+    expect(expression(output.nestedRuntime)({ a: '' })).toBe(false);
+  });
+
+  it('should reject macro calls referencing an identifier that is neither a constant nor sourced from the context', () => {
+    assertMacroError(
+      'expr-invalid-macro-context',
+      'Unsupported variable type for identifier: someUndeclaredVar',
+    );
+  });
+
+  it('should reject a type-casting macro call with the wrong number of arguments even when it touches the context', () => {
+    assertMacroError(
+      'expr-invalid-macro-arity',
+      'Unsupported call expression in macro mode: String',
+    );
+  });
+
   it('should reject block bodies', () => {
     assertMacroError('expr-invalid-block', callbackError);
   });

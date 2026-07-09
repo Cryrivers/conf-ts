@@ -1,5 +1,6 @@
 import ts from 'typescript';
 
+import { MACRO_FUNCTIONS } from './constants';
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
 import {
@@ -7,6 +8,82 @@ import {
   rewriteContextExpression,
 } from './expression-rewrite';
 import { FormattedNumber, type QuoteStyle } from './shared';
+
+// Macro functions (other than `expr` itself) that can be called inside an
+// expr() callback body. A call to one of these is only inlineable when it
+// doesn't touch the context parameter, since it must be resolvable entirely
+// at compile time.
+const EXPR_INLINEABLE_MACROS = new Set<string>(
+  MACRO_FUNCTIONS.filter(name => name !== 'expr'),
+);
+
+function isInlineableMacroCall(
+  node: ts.CallExpression,
+  context: ExprReplacementContext,
+): boolean {
+  const callee = node.expression;
+  if (!ts.isIdentifier(callee) || !EXPR_INLINEABLE_MACROS.has(callee.text)) {
+    return false;
+  }
+  const allowedMacroImports =
+    context.macroImportsMap[context.sourceFile.fileName] || new Set();
+  return allowedMacroImports.has(callee.text);
+}
+
+// Type-casting macros have a direct runtime equivalent in the expr DSL, so
+// when a call to one of them can't be fully resolved to a compile-time
+// constant (because it touches the context parameter), it's kept in the
+// output text as a runtime call instead of failing to compile. The other
+// inlineable macros (arrayMap/arrayFilter/arrayFlatMap/env) have no runtime
+// equivalent, so they must always resolve to a compile-time constant or fail.
+//
+// This set must stay in sync with its two counterparts, since nothing
+// enforces agreement across the language/package boundary between them:
+//   - compiler-native/src/macro_eval.rs: EXPR_RUNTIME_FALLBACK_MACROS
+//   - expression/src/eval.ts: GLOBAL_BUILTINS (the runtime side backing
+//     these names — the compiler emits e.g. `Number(x)` as literal runtime
+//     call text, so @conf-ts/expression's evaluator must know how to
+//     resolve `Number` as a callable, or the compiled output throws
+//     "Expression value is not callable" at request time instead of
+//     compile time)
+const EXPR_RUNTIME_FALLBACK_MACROS = new Set(['String', 'Number', 'Boolean']);
+
+function referencesContextParam(node: ts.Node, paramName: string): boolean {
+  if (ts.isIdentifier(node)) {
+    return node.text === paramName;
+  }
+  // Property names/keys are text labels, not value references: `foo.bar` or
+  // `{ bar: 1 }` never "reference" a variable named `bar`, even if it's
+  // spelled the same as paramName. A generic ts.forEachChild walk would
+  // still visit those identifiers as children and false-positive on them,
+  // so member/property access is special-cased to only recurse into the
+  // actual value-position subtrees (mirroring how collectConstReplacements
+  // itself already distinguishes value vs. label positions elsewhere in
+  // this file).
+  if (ts.isPropertyAccessExpression(node)) {
+    return referencesContextParam(node.expression, paramName);
+  }
+  if (ts.isElementAccessExpression(node)) {
+    return (
+      referencesContextParam(node.expression, paramName) ||
+      referencesContextParam(node.argumentExpression, paramName)
+    );
+  }
+  if (ts.isPropertyAssignment(node)) {
+    const keyReferences =
+      ts.isComputedPropertyName(node.name) &&
+      referencesContextParam(node.name.expression, paramName);
+    return keyReferences || referencesContextParam(node.initializer, paramName);
+  }
+  if (ts.isShorthandPropertyAssignment(node)) {
+    return node.name.text === paramName;
+  }
+  return (
+    ts.forEachChild(node, child =>
+      referencesContextParam(child, paramName) ? true : undefined,
+    ) === true
+  );
+}
 
 type MacroOptions = {
   preserveKeyOrder?: boolean;
@@ -521,6 +598,20 @@ function collectConstReplacements(
     ts.isPropertyAccessExpression(node) ||
     ts.isElementAccessExpression(node)
   ) {
+    addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
+    return;
+  }
+
+  if (ts.isCallExpression(node) && isInlineableMacroCall(node, context)) {
+    const calleeName = (node.expression as ts.Identifier).text;
+    if (
+      EXPR_RUNTIME_FALLBACK_MACROS.has(calleeName) &&
+      node.arguments.length === 1 &&
+      referencesContextParam(node, paramName)
+    ) {
+      node.arguments.forEach(arg => collectConstReplacements(arg, context));
+      return;
+    }
     addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
     return;
   }

@@ -9,7 +9,7 @@ use crate::types::{
   CompileOptions, FileContext, JsxOutputField, LineIndex, Value, normalize_number_raw,
 };
 
-const MACRO_FUNCTIONS: &[&str] = &[
+pub(crate) const MACRO_FUNCTIONS: &[&str] = &[
   "String",
   "Number",
   "Boolean",

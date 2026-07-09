@@ -1,0 +1,5 @@
+{
+  "runtimeString": "a === String(n)",
+  "mixedFold": "Number(n + 41)",
+  "nestedRuntime": "Boolean(Number(a))"
+}

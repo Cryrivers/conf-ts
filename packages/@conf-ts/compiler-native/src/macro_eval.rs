@@ -53,6 +53,167 @@ fn check_macro_import(callee: &str, ctx: &EvalContext, file_path: &str) -> bool 
     .is_some_and(|imports| imports.contains(callee))
 }
 
+/// Extract a plain expression from a call argument, returning a compile
+/// error (instead of panicking) if the argument isn't a plain expression —
+/// e.g. a spread element (`fn(...[a])`), which no macro function supports.
+fn expect_expression_argument<'a>(
+  argument: &'a Argument<'a>,
+  file_ctx: &FileContext,
+  callee: &str,
+) -> Result<&'a Expression<'a>, ConfTSError> {
+  argument.as_expression().ok_or_else(|| {
+    let (line, character) = get_location(&file_ctx.line_index, argument.span().start);
+    ConfTSError::new(
+      format!("{}: spread arguments are not supported", callee),
+      &file_ctx.file_path,
+      line,
+      character,
+    )
+  })
+}
+
+// A call to one of the macro functions in crate::eval::MACRO_FUNCTIONS is
+// inlineable inside an expr() callback body — except `expr` itself, since a
+// nested `expr(...)` call isn't a value expression — and only when it
+// doesn't touch the context parameter, since it must be resolvable entirely
+// at compile time.
+fn is_inlineable_macro_call(
+  call: &CallExpression,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+) -> bool {
+  match &call.callee {
+    Expression::Identifier(ident) => {
+      let name = ident.name.as_str();
+      name != "expr"
+        && crate::eval::MACRO_FUNCTIONS.contains(&name)
+        && check_macro_import(name, ctx, &file_ctx.file_path)
+    }
+    _ => false,
+  }
+}
+
+// Type-casting macros have a direct runtime equivalent in the expr DSL, so
+// when a call to one of them can't be fully resolved to a compile-time
+// constant (because it touches the context parameter), it's kept in the
+// output text as a runtime call instead of failing to compile. The other
+// inlineable macros (arrayMap/arrayFilter/arrayFlatMap/env) have no runtime
+// equivalent, so they must always resolve to a compile-time constant or fail.
+//
+// This must stay in sync with its two counterparts, since nothing enforces
+// agreement across the language/package boundary between them:
+//   - compiler/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
+//   - expression/src/eval.ts: GLOBAL_BUILTINS (the runtime side backing
+//     these names — this compiler emits e.g. `Number(x)` as literal runtime
+//     call text, so @conf-ts/expression's evaluator must know how to
+//     resolve `Number` as a callable, or the compiled output throws
+//     "Expression value is not callable" at request time instead of
+//     compile time)
+const EXPR_RUNTIME_FALLBACK_MACROS: &[&str] = &["String", "Number", "Boolean"];
+
+fn references_context_param(expr: &Expression, param_name: &str) -> bool {
+  match expr {
+    Expression::Identifier(ident) => ident.name.as_str() == param_name,
+    Expression::BinaryExpression(bin) => {
+      references_context_param(&bin.left, param_name)
+        || references_context_param(&bin.right, param_name)
+    }
+    Expression::LogicalExpression(log) => {
+      references_context_param(&log.left, param_name)
+        || references_context_param(&log.right, param_name)
+    }
+    Expression::UnaryExpression(unary) => references_context_param(&unary.argument, param_name),
+    Expression::ConditionalExpression(cond) => {
+      references_context_param(&cond.test, param_name)
+        || references_context_param(&cond.consequent, param_name)
+        || references_context_param(&cond.alternate, param_name)
+    }
+    Expression::ParenthesizedExpression(paren) => {
+      references_context_param(&paren.expression, param_name)
+    }
+    Expression::TemplateLiteral(tpl) => tpl
+      .expressions
+      .iter()
+      .any(|e| references_context_param(e, param_name)),
+    Expression::ArrayExpression(arr) => arr.elements.iter().any(|elem| match elem {
+      ArrayExpressionElement::SpreadElement(spread) => {
+        references_context_param(&spread.argument, param_name)
+      }
+      ArrayExpressionElement::Elision(_) => false,
+      other => other
+        .as_expression()
+        .is_some_and(|e| references_context_param(e, param_name)),
+    }),
+    Expression::ObjectExpression(obj) => obj.properties.iter().any(|prop| match prop {
+      ObjectPropertyKind::ObjectProperty(p) => {
+        let key_references = p.computed
+          && p
+            .key
+            .as_expression()
+            .is_some_and(|e| references_context_param(e, param_name));
+        key_references || references_context_param(&p.value, param_name)
+      }
+      ObjectPropertyKind::SpreadProperty(spread) => {
+        references_context_param(&spread.argument, param_name)
+      }
+    }),
+    Expression::TaggedTemplateExpression(tagged) => {
+      references_context_param(&tagged.tag, param_name)
+        || tagged
+          .quasi
+          .expressions
+          .iter()
+          .any(|e| references_context_param(e, param_name))
+    }
+    Expression::CallExpression(call) => call_references_context_param(call, param_name),
+    Expression::StaticMemberExpression(member) => {
+      references_context_param(&member.object, param_name)
+    }
+    Expression::ComputedMemberExpression(member) => {
+      references_context_param(&member.object, param_name)
+        || references_context_param(&member.expression, param_name)
+    }
+    Expression::ChainExpression(chain) => match &chain.expression {
+      ChainElement::StaticMemberExpression(member) => {
+        references_context_param(&member.object, param_name)
+      }
+      ChainElement::ComputedMemberExpression(member) => {
+        references_context_param(&member.object, param_name)
+          || references_context_param(&member.expression, param_name)
+      }
+      ChainElement::CallExpression(call) => call_references_context_param(call, param_name),
+      ChainElement::TSNonNullExpression(ts_nn) => {
+        references_context_param(&ts_nn.expression, param_name)
+      }
+      _ => false,
+    },
+    Expression::TSAsExpression(ts_as) => references_context_param(&ts_as.expression, param_name),
+    Expression::TSSatisfiesExpression(ts_sat) => {
+      references_context_param(&ts_sat.expression, param_name)
+    }
+    Expression::TSNonNullExpression(ts_nn) => {
+      references_context_param(&ts_nn.expression, param_name)
+    }
+    Expression::TSTypeAssertion(assertion) => {
+      references_context_param(&assertion.expression, param_name)
+    }
+    Expression::SequenceExpression(seq) => seq
+      .expressions
+      .iter()
+      .any(|e| references_context_param(e, param_name)),
+    _ => false,
+  }
+}
+
+fn call_references_context_param(call: &CallExpression, param_name: &str) -> bool {
+  references_context_param(&call.callee, param_name)
+    || call.arguments.iter().any(|arg| {
+      arg
+        .as_expression()
+        .is_some_and(|e| references_context_param(e, param_name))
+    })
+}
+
 fn evaluate_type_casting(
   callee: &str,
   call: &CallExpression,
@@ -81,7 +242,7 @@ fn evaluate_type_casting(
     ));
   }
 
-  let arg_expr = call.arguments[0].as_expression().unwrap();
+  let arg_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
   let arg = evaluate(arg_expr, file_ctx, ctx, local_context, options)?;
   match callee {
     "String" => Ok(Some(Value::String(arg.to_display_string()))),
@@ -119,7 +280,7 @@ fn evaluate_env(
     ));
   }
 
-  let arg0_expr = call.arguments[0].as_expression().unwrap();
+  let arg0_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
   let arg = evaluate(arg0_expr, file_ctx, ctx, local_context, options)?;
   let env_key = match &arg {
     Value::String(s) => s.clone(),
@@ -135,7 +296,7 @@ fn evaluate_env(
   };
 
   let default_value = if call.arguments.len() == 2 {
-    let arg1_expr = call.arguments[1].as_expression().unwrap();
+    let arg1_expr = expect_expression_argument(&call.arguments[1], file_ctx, callee)?;
     let val = evaluate(arg1_expr, file_ctx, ctx, local_context, options)?;
     match &val {
       Value::String(_) | Value::Undefined => Some(val),
@@ -193,9 +354,9 @@ fn evaluate_array_map(
     ));
   }
 
-  let arr_expr = call.arguments[0].as_expression().unwrap();
+  let arr_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
   let arr = evaluate(arr_expr, file_ctx, ctx, local_context, options)?;
-  let callback = call.arguments[1].as_expression().unwrap();
+  let callback = expect_expression_argument(&call.arguments[1], file_ctx, callee)?;
   let arrow = match callback {
     Expression::ArrowFunctionExpression(arrow) => arrow,
     _ => {
@@ -270,9 +431,9 @@ fn evaluate_array_flat_map(
     ));
   }
 
-  let arr_expr = call.arguments[0].as_expression().unwrap();
+  let arr_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
   let arr = evaluate(arr_expr, file_ctx, ctx, local_context, options)?;
-  let callback = call.arguments[1].as_expression().unwrap();
+  let callback = expect_expression_argument(&call.arguments[1], file_ctx, callee)?;
   let arrow = match callback {
     Expression::ArrowFunctionExpression(arrow) => arrow,
     _ => {
@@ -350,9 +511,9 @@ fn evaluate_array_filter(
     ));
   }
 
-  let arr_expr = call.arguments[0].as_expression().unwrap();
+  let arr_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
   let arr = evaluate(arr_expr, file_ctx, ctx, local_context, options)?;
-  let callback = call.arguments[1].as_expression().unwrap();
+  let callback = expect_expression_argument(&call.arguments[1], file_ctx, callee)?;
   let arrow = match callback {
     Expression::ArrowFunctionExpression(arrow) => arrow,
     _ => {
@@ -821,6 +982,53 @@ fn collect_const_replacements(
       let end = expr.span().end as usize - body_start as usize;
       replacements.push((start, end, literal));
       Ok(())
+    }
+
+    Expression::CallExpression(call) => {
+      if is_inlineable_macro_call(call, file_ctx, ctx) {
+        let callee_name = call_expr_callee_name(call);
+        // Only take the runtime-fallback path for a single, plain-expression
+        // argument: this must match the arity/shape evaluate_type_casting
+        // requires, so a malformed call (wrong arg count, or a spread
+        // argument the expr DSL doesn't support) falls through to the eager
+        // path below and gets a proper compile error there instead of
+        // silently compiling or being mishandled here.
+        if EXPR_RUNTIME_FALLBACK_MACROS.contains(&callee_name.as_str())
+          && call.arguments.len() == 1
+          && call.arguments[0].as_expression().is_some()
+          && references_context_param(expr, param_name)
+        {
+          for arg in &call.arguments {
+            if let Some(e) = arg.as_expression() {
+              collect_const_replacements(
+                e,
+                param_name,
+                body_start,
+                replacements,
+                file_ctx,
+                ctx,
+                options,
+              )?;
+            }
+          }
+          return Ok(());
+        }
+        let value = evaluate(expr, file_ctx, ctx, None, options)?;
+        let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
+        let start = expr.span().start as usize - body_start as usize;
+        let end = expr.span().end as usize - body_start as usize;
+        replacements.push((start, end, literal));
+        return Ok(());
+      }
+      walk_const_children(
+        expr,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
     }
 
     _ => walk_const_children(
@@ -1513,7 +1721,7 @@ fn evaluate_expr(
     ));
   }
 
-  let callback = call.arguments[0].as_expression().unwrap();
+  let callback = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
   let arrow = match callback {
     Expression::ArrowFunctionExpression(arrow) if !arrow.r#async => arrow,
     _ => {

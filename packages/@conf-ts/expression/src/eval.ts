@@ -124,8 +124,45 @@ const evaluateCall = (
   return Reflect.apply(value, thisArg, args);
 };
 
+// Globals available to compiled expr text even when absent from env. These
+// back the @conf-ts/macro type-casting macros (String/Number/Boolean) that
+// the compiler keeps as runtime calls (e.g. `Number(a + 1)`) when they
+// can't be folded to a compile-time constant. An env value of the same name
+// always takes precedence.
+//
+// This must stay in sync with its two counterparts, since nothing enforces
+// agreement across the package boundary between them (@conf-ts/expression
+// has no dependency on the compiler packages):
+//   - compiler/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
+//   - compiler-native/src/macro_eval.rs: EXPR_RUNTIME_FALLBACK_MACROS
+// If a name is added to those two but not here, the compiler emits runtime
+// call text for it that this evaluator can't resolve, and it throws
+// "Expression value is not callable" at request time instead of compile time.
+const GLOBAL_BUILTINS: Env = {
+  String,
+  Number,
+  Boolean,
+};
+
+// Both env and GLOBAL_BUILTINS are looked up by own-property only, never via
+// the prototype chain. Every plain JS object inherits Object.prototype, so an
+// unguarded lookup (`env[name]`) lets a compiled or hand-written expr string
+// resolve names like `constructor`/`toString` to real Object.prototype
+// members — `constructor.constructor(...)` reaches the Function constructor,
+// letting arbitrary expr text execute arbitrary JS. Own-property-only lookup
+// closes that off for both env and the new builtins object.
+//
+// Uses Object.prototype.hasOwnProperty.call rather than the newer
+// Object.hasOwn for wider runtime compatibility.
+const hasOwn = (obj: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
+
 const evaluateIdentifier = (node: IdentifierNode, env: Env): unknown =>
-  env[node.name];
+  hasOwn(env, node.name)
+    ? env[node.name]
+    : hasOwn(GLOBAL_BUILTINS, node.name)
+      ? GLOBAL_BUILTINS[node.name]
+      : undefined;
 
 const deleteExpression = (
   node: ASTNode,

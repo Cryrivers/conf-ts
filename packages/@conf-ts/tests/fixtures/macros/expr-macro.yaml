@@ -1,0 +1,8 @@
+stringLiteral: '"1"'
+mixedWithContext: a === "1"
+numberCast: n === 42
+booleanCast: b === true
+nestedArithmetic: a === "42"
+envDefault: mode === "dev"
+objectKeyNamedCtx: "1"
+propertyNamedCtx: "41"
