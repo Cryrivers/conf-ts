@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Native Rust compiler for conf-ts.",
   "author": {
     "name": "Zhongliang Wang",

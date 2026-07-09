@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/expression",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "JavaScript expression evaluator",
   "keywords": [],
   "license": "MIT",
