@@ -158,7 +158,7 @@ export default {
 
 `expr()` marks a typed arrow expression for configuration compilation. During normal runtime execution it preserves and returns the callback, including its closure. During JSON/YAML compilation it emits a portable expression string: accesses to the callback parameter become root identifiers, and serializable `const` and enum values are resolved.
 
-String literals in generated expression strings use double quotes by default. Set compile option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native compilers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
+Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set compile option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native compilers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
 
 ```ts
 import { expr } from '@conf-ts/macro';

@@ -1,0 +1,9 @@
+{
+  "spaces": "a && b",
+  "tabs": "a && b",
+  "newlines": "a && b",
+  "mixed": "a && b",
+  "literalSpaces": "label === \"a    b\"",
+  "literalTabs": "label === \"a\\t\\tb\"",
+  "template": "`first\t\t  second:${a && b}`"
+}

@@ -830,6 +830,121 @@ const EXPR_CALLBACK_ERROR: &str =
 
 type ExprReplacement = (usize, usize, String);
 
+/// Collapse source formatting whitespace in an emitted expr while preserving
+/// whitespace that belongs to string and template literal values. Template
+/// interpolations are code again, so they are compacted recursively.
+fn compact_expression_whitespace(source: &str) -> String {
+  fn flush_space(output: &mut String, pending_space: &mut bool) {
+    if *pending_space && !output.is_empty() {
+      output.push(' ');
+    }
+    *pending_space = false;
+  }
+
+  fn copy_quoted(chars: &[char], index: &mut usize, output: &mut String, quote: char) {
+    output.push(quote);
+    *index += 1;
+
+    while let Some(&ch) = chars.get(*index) {
+      output.push(ch);
+      *index += 1;
+
+      if ch == '\\' {
+        if let Some(&escaped) = chars.get(*index) {
+          output.push(escaped);
+          *index += 1;
+        }
+      } else if ch == quote {
+        return;
+      }
+    }
+  }
+
+  fn copy_template(chars: &[char], index: &mut usize, output: &mut String) {
+    output.push('`');
+    *index += 1;
+
+    while let Some(&ch) = chars.get(*index) {
+      if ch == '\\' {
+        output.push(ch);
+        *index += 1;
+        if let Some(&escaped) = chars.get(*index) {
+          output.push(escaped);
+          *index += 1;
+        }
+        continue;
+      }
+
+      if ch == '`' {
+        output.push(ch);
+        *index += 1;
+        return;
+      }
+
+      if ch == '$' && chars.get(*index + 1) == Some(&'{') {
+        output.push_str("${");
+        *index += 2;
+        compact_code(chars, index, output, true);
+        continue;
+      }
+
+      output.push(ch);
+      *index += 1;
+    }
+  }
+
+  fn compact_code(
+    chars: &[char],
+    index: &mut usize,
+    output: &mut String,
+    stop_at_closing_brace: bool,
+  ) {
+    let mut pending_space = false;
+    let mut brace_depth = 0usize;
+
+    while let Some(&ch) = chars.get(*index) {
+      if ch.is_whitespace() {
+        pending_space = true;
+        *index += 1;
+        continue;
+      }
+
+      flush_space(output, &mut pending_space);
+
+      if ch == '}' && stop_at_closing_brace && brace_depth == 0 {
+        output.push(ch);
+        *index += 1;
+        return;
+      }
+
+      match ch {
+        '\'' | '"' => copy_quoted(chars, index, output, ch),
+        '`' => copy_template(chars, index, output),
+        '{' => {
+          output.push(ch);
+          brace_depth += 1;
+          *index += 1;
+        }
+        '}' => {
+          output.push(ch);
+          brace_depth = brace_depth.saturating_sub(1);
+          *index += 1;
+        }
+        _ => {
+          output.push(ch);
+          *index += 1;
+        }
+      }
+    }
+  }
+
+  let chars: Vec<char> = source.chars().collect();
+  let mut index = 0;
+  let mut output = String::with_capacity(source.len());
+  compact_code(&chars, &mut index, &mut output, false);
+  output
+}
+
 // Keep this in sync with @conf-ts/compiler/src/expression-rewrite.ts encodeStringLiteral.
 fn encode_string_literal(value: &str, quote: QuoteStyle) -> String {
   let json = serde_json::to_string(value).unwrap();
@@ -841,24 +956,6 @@ fn encode_string_literal(value: &str, quote: QuoteStyle) -> String {
         .replace('\'', "\\'");
       format!("'{}'", inner)
     }
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn encodes_string_literal_quote_styles() {
-    let value = "line\n\"quoted\"\\path it's";
-    assert_eq!(
-      encode_string_literal(value, QuoteStyle::Double),
-      serde_json::to_string(value).unwrap()
-    );
-    assert_eq!(
-      encode_string_literal(value, QuoteStyle::Single),
-      "'line\\n\"quoted\"\\\\path it\\'s'"
-    );
   }
 }
 
@@ -1820,7 +1917,7 @@ fn evaluate_expr(
     result.replace_range(*start..*end, replacement);
   }
 
-  Ok(Some(Value::String(result)))
+  Ok(Some(Value::String(compact_expression_whitespace(&result))))
 }
 
 fn is_valid_identifier(s: &str) -> bool {

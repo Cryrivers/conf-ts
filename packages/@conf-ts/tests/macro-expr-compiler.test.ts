@@ -69,6 +69,10 @@ describe('Expr Macro', () => {
     expect(expression(source)({ label: "it's" })).toBe(true);
   });
 
+  it('should compact formatting whitespace without changing literal whitespace', () => {
+    assertMacroOutput('expr-compact');
+  });
+
   it('should reject invalid quote options', () => {
     assertMacroError('expr', "quote must be 'single' or 'double'", {
       quote: 'nope' as any,
