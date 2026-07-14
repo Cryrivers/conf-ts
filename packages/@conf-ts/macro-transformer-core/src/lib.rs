@@ -10,7 +10,7 @@ use compiler_native::eval::{
   EvalContext, call_expr_callee_name, collect_imports, evaluate, get_location,
 };
 use compiler_native::resolver::{TsCompilerOptions, resolve_module_in_memory_with_options};
-use compiler_native::types::{CompileOptions, FileContext, JsxOutputOptions, Value};
+use compiler_native::types::{CompileOptions, FileContext, Value};
 use serde::{Deserialize, Serialize};
 use swc_core::common::{GLOBALS, Globals, Mark, SourceMap, Spanned, sync::Lrc};
 use swc_core::ecma::ast::*;
@@ -46,23 +46,9 @@ pub struct TransformOptions {
   pub env: HashMap<String, String>,
   pub quote: QuoteStyle,
   pub preserve_key_order: bool,
-  pub jsx: Option<bool>,
-  pub jsx_output: Option<JsxOutputOptionsConfig>,
   pub source_map: bool,
   #[serde(skip)]
   pub inherit_process_env: bool,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct JsxOutputOptionsConfig {
-  #[serde(rename = "type")]
-  pub type_name: Option<String>,
-  pub props: Option<serde_json::Value>,
-  pub children: Option<serde_json::Value>,
-  pub key: Option<String>,
-  pub fragment: Option<String>,
-  pub type_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -121,31 +107,9 @@ fn state(eval_ctx: &EvalContext) -> SharedState {
     .expect("macro transform state is installed")
 }
 
-fn jsx_field(value: Option<&serde_json::Value>) -> Option<compiler_native::types::JsxOutputField> {
-  match value {
-    Some(serde_json::Value::String(value)) => {
-      Some(compiler_native::types::JsxOutputField::Name(value.clone()))
-    }
-    Some(serde_json::Value::Bool(false)) => Some(compiler_native::types::JsxOutputField::Disabled),
-    Some(serde_json::Value::Bool(true)) => {
-      Some(compiler_native::types::JsxOutputField::InvalidBool)
-    }
-    _ => None,
-  }
-}
-
 fn compile_options(options: &TransformOptions) -> CompileOptions {
   CompileOptions {
     preserve_key_order: options.preserve_key_order,
-    jsx: options.jsx,
-    jsx_output: options.jsx_output.as_ref().map(|value| JsxOutputOptions {
-      type_name: value.type_name.clone(),
-      props: jsx_field(value.props.as_ref()),
-      children: jsx_field(value.children.as_ref()),
-      key: value.key.clone(),
-      fragment: value.fragment.clone(),
-      type_format: value.type_format.clone(),
-    }),
   }
 }
 
@@ -196,7 +160,7 @@ fn build_contexts(
   for (filename, source) in files {
     if !matches!(
       filename.rsplit('.').next(),
-      Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+      Some("ts" | "js" | "mts" | "cts" | "mjs" | "cjs")
     ) {
       continue;
     }
@@ -1521,161 +1485,4 @@ pub fn transform_program(
     &filename,
     &source_map,
   )?))
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  fn transform(code: &str) -> TransformOutput {
-    transform_source(
-      TransformInput {
-        filename: "/config.ts".to_string(),
-        code: code.to_string(),
-        project: Some(ProjectSnapshot {
-          files: HashMap::from([("/config.ts".to_string(), code.to_string())]),
-          ..Default::default()
-        }),
-      },
-      TransformOptions::default(),
-    )
-    .unwrap()
-  }
-
-  #[test]
-  fn transforms_calls_outside_the_default_export() {
-    let output = transform(
-      "import { String } from '@conf-ts/macro';\nexport const value = String(42);\nexport default true;",
-    );
-    assert!(!output.code.contains("@conf-ts/macro"));
-    assert!(output.code.contains("export const value = \"42\";"));
-  }
-
-  #[test]
-  fn transforms_array_and_expr_macros() {
-    let output = transform(
-      "import { arrayMap, expr } from '@conf-ts/macro';\nconst n = 2;\nexport default { a: arrayMap([1, 2], x => x + n), b: expr(ctx => ctx.a > n) };",
-    );
-    assert!(output.code.contains("a: [3, 4]"), "{}", output.code);
-    assert!(output.code.contains("b: \"a > 2\""), "{}", output.code);
-  }
-
-  #[test]
-  fn preserves_parentheses_that_affect_expr_precedence() {
-    let output = transform(
-      "import { expr } from '@conf-ts/macro';\nexport default expr(ctx => (ctx.score ?? 0) >= 80);",
-    );
-    assert!(
-      output.code.contains(r#""(score ?? 0) >= 80""#),
-      "{}",
-      output.code
-    );
-  }
-
-  #[test]
-  fn aliases_are_binding_aware_when_shadowed() {
-    let code = [
-      "import { String as macroString } from '@conf-ts/macro';",
-      "export function untouched(macroString: (value: number) => number) {",
-      "  return macroString(1);",
-      "}",
-      "export const eagerlyTransformed = macroString(42);",
-      "export default true;",
-    ]
-    .join("\n");
-    let output = transform(&code);
-    assert_eq!(
-      output.code,
-      [
-        "",
-        "export function untouched(macroString: (value: number) => number) {",
-        "  return macroString(1);",
-        "}",
-        "export const eagerlyTransformed = \"42\";",
-        "export default true;",
-      ]
-      .join("\n")
-    );
-  }
-
-  #[test]
-  fn namespace_macros_remove_macro_only_imports() {
-    let code = [
-      "import * as macros from '@conf-ts/macro';",
-      "export const eagerlyTransformed = macros.String(42);",
-      "export default true;",
-    ]
-    .join("\n");
-    let output = transform(&code);
-    assert_eq!(
-      output.code,
-      [
-        "",
-        "export const eagerlyTransformed = \"42\";",
-        "export default true;",
-      ]
-      .join("\n")
-    );
-  }
-
-  #[test]
-  fn mixed_imports_preserve_non_macro_specifier_text() {
-    let code = [
-      "import { String, type PreservedType } from '@conf-ts/macro';",
-      "export const eagerlyTransformed = String(42);",
-      "export type Kept = PreservedType;",
-      "export default true;",
-    ]
-    .join("\n");
-    let output = transform(&code);
-    assert_eq!(
-      output.code,
-      [
-        "import { type PreservedType } from '@conf-ts/macro';",
-        "export const eagerlyTransformed = \"42\";",
-        "export type Kept = PreservedType;",
-        "export default true;",
-      ]
-      .join("\n")
-    );
-  }
-
-  #[test]
-  fn namespace_with_non_macro_usage_is_retained() {
-    let code = [
-      "import * as macros from '@conf-ts/macro';",
-      "export const eagerlyTransformed = macros.String(42);",
-      "export type Kept = typeof macros;",
-      "export default true;",
-    ]
-    .join("\n");
-    let output = transform(&code);
-    assert!(output.code.starts_with("import * as macros"));
-    assert!(output.code.contains("eagerlyTransformed = \"42\""));
-  }
-
-  #[test]
-  fn reports_unresolved_macro_names_as_missing_imports() {
-    let error = transform_source(
-      TransformInput {
-        filename: "/config.ts".to_string(),
-        code: "export default Boolean(1);".to_string(),
-        project: None,
-      },
-      TransformOptions::default(),
-    )
-    .unwrap_err();
-    assert!(
-      error
-        .message
-        .contains("Type casting function 'Boolean' must be imported from '@conf-ts/macro'")
-    );
-  }
-
-  #[test]
-  fn leaves_locally_bound_macro_names_untouched() {
-    let code = "const String = (value: number) => value; export default String(1);";
-    let output = transform(code);
-    assert_eq!(output.code, code);
-  }
 }

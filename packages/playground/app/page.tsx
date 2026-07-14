@@ -21,7 +21,6 @@ import { Tutorial } from '../components/Tutorial';
 import { tutorialSteps } from '../lib/tutorial-steps';
 
 type CompileResult = { output: string; dependencies: string[] };
-type JsxOutputMode = 'default' | 'flat' | 'no-children';
 
 // Custom parser that clamps step index to valid range
 const parseAsStepIndex = createParser({
@@ -43,7 +42,6 @@ function PageContent() {
   );
   const [format, setFormat] = useState<'json' | 'yaml'>('json');
   const [macro, setMacro] = useState(true);
-  const [jsxOutputMode, setJsxOutputMode] = useState<JsxOutputMode>('default');
   const [result, setResult] = useState<CompileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isStepComplete, setIsStepComplete] = useState(false);
@@ -62,7 +60,7 @@ function PageContent() {
   }, [currentStepIndex]);
 
   const currentStep = tutorialSteps[currentStepIndex];
-  const filePath = `/index.conf.${currentStep.fileExtension ?? 'ts'}`;
+  const filePath = `/index.conf.ts`;
 
   const files = useMemo(() => {
     return {
@@ -75,22 +73,10 @@ function PageContent() {
           strict: true,
           skipLibCheck: true,
           resolveJsonModule: true,
-          jsx: 'react-jsx',
-          jsxImportSource: '@conf-ts/macro',
         },
       }),
     } as Record<string, string>;
   }, [input, filePath]);
-
-  const jsxOutput = useMemo(() => {
-    if (jsxOutputMode === 'flat') {
-      return { type: '$type', props: false } as const;
-    }
-    if (jsxOutputMode === 'no-children') {
-      return { children: false } as const;
-    }
-    return undefined;
-  }, [jsxOutputMode]);
 
   const compile = useCallback(async () => {
     setError(null);
@@ -114,17 +100,12 @@ function PageContent() {
               },
               {
                 env: { NODE_ENV: 'production' },
-                jsx: true,
-                jsxOutput,
               },
             ).code,
           }
         : files;
       const compileFormat = (outputFormat: 'json' | 'yaml') =>
-        compileInMemory(compileFiles, filePath, outputFormat, undefined, {
-          jsx: true,
-          jsxOutput,
-        });
+        compileInMemory(compileFiles, filePath, outputFormat, undefined, {});
       const compiled = compileFormat(format);
 
       let parsedOutput = null;
@@ -152,7 +133,7 @@ function PageContent() {
       setError(e?.toString?.() ?? String(e));
       setIsStepComplete(false);
     }
-  }, [files, filePath, format, macro, jsxOutput, currentStep, input]);
+  }, [files, filePath, format, macro, currentStep, input]);
 
   useEffect(() => {
     void compile();
@@ -250,29 +231,6 @@ function PageContent() {
                     )}
                   >
                     {f.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-
-              <div className="h-4 w-px bg-white/5" />
-
-              <div className="flex items-center gap-1">
-                {[
-                  ['default', 'JSX'],
-                  ['flat', 'Flat'],
-                  ['no-children', 'No child'],
-                ].map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    onClick={() => setJsxOutputMode(mode as JsxOutputMode)}
-                    className={clsx(
-                      'px-2.5 py-1.5 text-xs font-medium rounded transition-all duration-200',
-                      jsxOutputMode === mode
-                        ? 'text-white bg-white/10'
-                        : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/5',
-                    )}
-                  >
-                    {label}
                   </button>
                 ))}
               </div>

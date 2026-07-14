@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
 import expression from '../src';
-import type { Expr } from '../src';
 
 describe('boundary cases', () => {
   test('extreme numbers', () => {
@@ -28,17 +27,6 @@ describe('boundary cases', () => {
     expect(e1).toBe(e2);
     expect(e1({ a: 1, b: 3 })).toBe(7);
     expect(e2({ a: 1, b: 3 })).toBe(7);
-  });
-
-  test('callback expressions preserve identity and closures', () => {
-    const offset = 3;
-    const callback = ((ctx: { value: number }) => ctx.value + offset) as Expr<
-      { value: number },
-      number
-    >;
-
-    expect(expression(callback)).toBe(callback);
-    expect(expression(callback)({ value: 4 })).toBe(7);
   });
 
   test('array elisions preserve length and holes', () => {

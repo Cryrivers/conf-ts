@@ -1,14 +1,5 @@
 import config from './config.conf';
 
-const runtimeJsxOutput = globalThis.__CONF_TS_JSX_OUTPUT__;
-if (
-  !runtimeJsxOutput ||
-  runtimeJsxOutput.type !== '$type' ||
-  runtimeJsxOutput.props !== false
-) {
-  throw new Error('ConfTsWebpackPlugin did not inject jsxOutput');
-}
-
 const expected = {
   name: 'test-config',
   version: '1.0.0',
@@ -36,4 +27,4 @@ if (JSON.stringify(config) !== JSON.stringify(expected)) {
   );
 }
 
-console.log(JSON.stringify({ config, runtimeJsxOutput }, null, 2));
+console.log(JSON.stringify({ config }, null, 2));

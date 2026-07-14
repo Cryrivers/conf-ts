@@ -18,8 +18,6 @@ export interface JsTransformOptions {
   env?: Record<string, string>
   quote?: 'single' | 'double'
   preserveKeyOrder?: boolean
-  jsx?: boolean
-  jsxOutput?: any
   sourceMap?: boolean
 }
 

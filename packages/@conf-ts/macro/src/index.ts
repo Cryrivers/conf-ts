@@ -1,93 +1,56 @@
 import type { Expr, RuntimeEnv } from '@conf-ts/expression';
 
-import { validateContextExpression } from './expression-validate';
-
 console.warn(
   '@conf-ts/macro has been imported. This package is intended for compile-time macro expansion and should not be directly imported into runtime code.',
 );
 
-export { createElement, type JsxOutputOptions } from './jsx-runtime';
 export type { Expr, RuntimeEnv } from '@conf-ts/expression';
 
-const EXPR_CALLBACK_ERROR =
-  'expr callback must be an arrow function with a single identifier parameter and expression body';
-
-type ParsedCallback = {
-  paramName: string;
-  body: string;
-};
-
-function parseCallback(callback: Function): ParsedCallback {
-  const source = Function.prototype.toString.call(callback).trim();
-  const arrowIndex = source.indexOf('=>');
-  if (arrowIndex === -1) {
-    throw new Error(EXPR_CALLBACK_ERROR);
-  }
-
-  if (/^async\b\s*(?:\(|[A-Za-z_$])/.test(source)) {
-    throw new Error(EXPR_CALLBACK_ERROR);
-  }
-
-  const params = source.slice(0, arrowIndex).trim();
-  const body = source.slice(arrowIndex + 2).trim();
-  if (!body || body.startsWith('{')) {
-    throw new Error(EXPR_CALLBACK_ERROR);
-  }
-
-  const parenthesized = params.match(/^\(\s*([A-Za-z_$][0-9A-Za-z_$]*)\s*\)$/);
-  if (parenthesized) {
-    return { paramName: parenthesized[1], body };
-  }
-
-  const bare = params.match(/^([A-Za-z_$][0-9A-Za-z_$]*)$/);
-  if (bare) {
-    return { paramName: bare[1], body };
-  }
-
-  throw new Error(EXPR_CALLBACK_ERROR);
+function macroNotTransformed(name: string): never {
+  throw new Error(
+    `'${name}' is a compile-time macro from '@conf-ts/macro' and must be expanded by the conf-ts macro transformer; it cannot run at runtime.`,
+  );
 }
 
 export function expr<
   Context extends RuntimeEnv = RuntimeEnv,
   ReturnType = unknown,
->(callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType> {
-  const { paramName, body } = parseCallback(callback);
-  validateContextExpression(body, paramName);
-  return callback as Expr<Context, ReturnType>;
+>(_callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType> {
+  return macroNotTransformed('expr');
 }
 
-export function String(value: any): string {
-  return globalThis.String(value);
+export function String(_value: any): string {
+  return macroNotTransformed('String');
 }
 
-export function Number(value: any): number {
-  return globalThis.Number(value);
+export function Number(_value: any): number {
+  return macroNotTransformed('Number');
 }
 
-export function Boolean(value: any): boolean {
-  return globalThis.Boolean(value);
+export function Boolean(_value: any): boolean {
+  return macroNotTransformed('Boolean');
 }
 
-export function arrayMap<T, U>(array: T[], callback: (item: T) => U): U[] {
-  return array.map(callback);
+export function arrayMap<T, U>(_array: T[], _callback: (item: T) => U): U[] {
+  return macroNotTransformed('arrayMap');
 }
 
 export function arrayFlatMap<T, U>(
-  array: T[],
-  callback: (item: T) => U | U[],
+  _array: T[],
+  _callback: (item: T) => U | U[],
 ): U[] {
-  return array.flatMap(callback);
+  return macroNotTransformed('arrayFlatMap');
 }
 
 export function arrayFilter<T>(
-  array: T[],
-  predicate: (item: T) => boolean,
+  _array: T[],
+  _predicate: (item: T) => boolean,
 ): T[] {
-  return array.filter(predicate);
+  return macroNotTransformed('arrayFilter');
 }
 
 export function env(key: string): string | undefined;
 export function env(key: string, defaultValue: string): string;
-export function env(key: string, defaultValue?: string): string | undefined {
-  return process.env[key] ?? defaultValue;
+export function env(_key: string, _defaultValue?: string): string | undefined {
+  return macroNotTransformed('env');
 }

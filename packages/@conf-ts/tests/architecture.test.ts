@@ -50,6 +50,28 @@ describe('source-oriented architecture', () => {
     }
   });
 
+  it('resolves baseUrl/paths aliases from an inline source project in both compilers', () => {
+    const filename = '/virtual/index.ts';
+    const dependency = '/virtual/answer.ts';
+    const code =
+      "import { answer } from '@/answer'; export default { answer };";
+    const project = {
+      files: { [filename]: code, [dependency]: 'export const answer = 42;' },
+      compilerOptions: {
+        baseUrl: '/virtual',
+        paths: { '@/*': ['*'] },
+      },
+    };
+
+    for (const compile of [compiler.compile, nativeCompiler.compile]) {
+      const result = compile({ filename, code, project }, 'json');
+      expect(JSON.parse(result.output)).toEqual({ answer: 42 });
+      expect(result.dependencies).toEqual(
+        expect.arrayContaining([filename, dependency]),
+      );
+    }
+  });
+
   it('resolves in-memory aliases from compilerOptions in both compilers', () => {
     const files = {
       '/virtual/index.ts':
@@ -155,6 +177,71 @@ describe('source-oriented architecture', () => {
     );
     expect(typescriptResult.code).not.toContain('@conf-ts/macro');
     expect(typescriptResult.code).not.toContain('macros.String');
+  });
+
+  // KNOWN DIVERGENCE: arrayMap's callback here closes over the outer `n` const.
+  // The native transformer evaluates callback bodies with the general expression
+  // evaluator and resolves it; the TypeScript transformer's array-macro callback
+  // validator (macro.ts's `isAllowedIdentifier`) only permits the callback's own
+  // parameter, enum references, and nested macro calls, so it throws. `it.fails`
+  // documents this as an expected failure until the two are reconciled — flip
+  // back to a plain `it` once the JS transformer accepts outer-const capture (or
+  // the native one is tightened to match).
+  it.fails(
+    'transforms combined arrayMap and expr macros in a single pass',
+    () => {
+      const filename = '/virtual/config.ts';
+      const code = [
+        "import { arrayMap, expr } from '@conf-ts/macro';",
+        'const n = 2;',
+        'export default { a: arrayMap([1, 2], x => x + n), b: expr(ctx => ctx.a > n) };',
+      ].join('\n');
+      const project = { files: { [filename]: code } };
+      const input = { filename, code, project };
+
+      const typescriptResult = macroTransformer.transform(input);
+      const nativeResult = nativeMacroTransform(input);
+
+      expect(nativeResult.code).toBe(typescriptResult.code);
+      expect(typescriptResult.code).toContain('a: [3, 4]');
+      expect(typescriptResult.code).toContain('b: "a > 2"');
+    },
+  );
+
+  it('retains a namespace import that is also used as a type', () => {
+    const filename = path.resolve(
+      __dirname,
+      'fixtures/macros/type-casting.conf.ts',
+    );
+    const code = [
+      "import * as macros from '@conf-ts/macro';",
+      'export const eagerlyTransformed = macros.String(42);',
+      'export type Kept = typeof macros;',
+      'export default { untouched: true };',
+    ].join('\n');
+    const project = macroTransformer.createMacroProjectSnapshot([filename]);
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toMatch(/^import \* as macros/);
+    expect(typescriptResult.code).toContain('eagerlyTransformed = "42"');
+  });
+
+  it('leaves a locally bound macro name entirely untouched', () => {
+    const filename = '/virtual/config.ts';
+    const code =
+      'const String = (value: number) => value; export default String(1);';
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(typescriptResult.code).toBe(code);
+    expect(nativeResult.code).toBe(code);
   });
 
   it('removes only macro specifiers from mixed imports', () => {

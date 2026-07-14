@@ -194,31 +194,13 @@ fn match_path_pattern<'a>(pattern: &str, specifier: &'a str) -> Option<&'a str> 
 }
 
 fn is_supported_source_path(path: &str) -> bool {
-  let extensions = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".json.ts",
-    ".json.tsx",
-    ".json.js",
-    ".json.jsx",
-  ];
+  let extensions = [".ts", ".js", ".json.ts", ".json.js"];
   extensions.iter().any(|ext| path.ends_with(ext))
 }
 
 /// Try to resolve a path by appending common extensions.
 fn resolve_file_path(base: &Path) -> Option<PathBuf> {
-  let extensions = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".json.ts",
-    ".json.tsx",
-    ".json.js",
-    ".json.jsx",
-  ];
+  let extensions = [".ts", ".js", ".json.ts", ".json.js"];
 
   // Try exact path
   if base.is_file() {
@@ -311,16 +293,7 @@ fn resolve_virtual_file(base: &Path, files: &HashMap<String, String>) -> Option<
     return Some(base_str);
   }
 
-  let extensions = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".json.ts",
-    ".json.tsx",
-    ".json.js",
-    ".json.jsx",
-  ];
+  let extensions = [".ts", ".js", ".json.ts", ".json.js"];
   for ext in &extensions {
     let with_ext = format!("{}{}", base_str, ext);
     if files.contains_key(&with_ext) {

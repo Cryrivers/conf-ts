@@ -1,8 +1,4 @@
-import type {
-  CompileOptions,
-  JsxOutputOptions,
-  SourceProject,
-} from '@conf-ts/compiler';
+import type { CompileOptions, SourceProject } from '@conf-ts/compiler';
 
 export type QuoteStyle = 'single' | 'double';
 
@@ -37,8 +33,6 @@ export interface MacroTransformOptions {
   env?: Record<string, string>;
   quote?: QuoteStyle;
   preserveKeyOrder?: boolean;
-  jsx?: boolean;
-  jsxOutput?: JsxOutputOptions;
   sourceMap?: boolean;
 }
 

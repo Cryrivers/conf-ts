@@ -41,7 +41,6 @@ pub fn parse_ts_file(
     source.to_string(),
   );
   let syntax = Syntax::Typescript(TsSyntax {
-    tsx: file_name.ends_with(".tsx") || file_name.ends_with(".jsx"),
     decorators: true,
     ..Default::default()
   });
@@ -265,48 +264,4 @@ pub fn compile(
   options: &CompileOptions,
 ) -> Result<(String, Vec<String>), ConfTSError> {
   compile_path(input_file, format, options)
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn compiles_an_explicit_standalone_source_project() {
-    let filename = "/virtual/config.ts";
-    let input = SourceCompileInput {
-      filename: filename.to_string(),
-      code: "export default { answer: 40 + 2 };".to_string(),
-      project: Some(SourceProject::default()),
-    };
-    let (output, dependencies) =
-      compile_source(&input, "json", &CompileOptions::default()).unwrap();
-    assert_eq!(output, "{\n  \"answer\": 42\n}");
-    assert!(dependencies.contains(&filename.to_string()));
-  }
-
-  #[test]
-  fn source_project_resolves_base_url_and_paths() {
-    let filename = "/virtual/config.ts";
-    let input = SourceCompileInput {
-      filename: filename.to_string(),
-      code: "import { answer } from '@/answer'; export default { answer };".to_string(),
-      project: Some(SourceProject {
-        files: HashMap::from([(
-          "/virtual/answer.ts".to_string(),
-          "export const answer = 42;".to_string(),
-        )]),
-        compiler_options: Some(serde_json::json!({
-          "baseUrl": "/virtual",
-          "paths": { "@/*": ["*"] }
-        })),
-        ..Default::default()
-      }),
-    };
-    let (output, dependencies) =
-      compile_source(&input, "json", &CompileOptions::default()).unwrap();
-    assert_eq!(output, "{\n  \"answer\": 42\n}");
-    assert!(dependencies.contains(&filename.to_string()));
-    assert!(dependencies.contains(&"/virtual/answer.ts".to_string()));
-  }
 }

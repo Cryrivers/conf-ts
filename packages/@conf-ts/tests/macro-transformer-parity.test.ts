@@ -68,8 +68,6 @@ describe('macro-transformer / macro-transformer-native parity', () => {
 
     const compileOptions: CompileOptions = {
       preserveKeyOrder: options.preserveKeyOrder,
-      jsx: options.jsx,
-      jsxOutput: options.jsxOutput,
     };
     const { output: fromJsTransform } = compile(
       { filename: inputFile, code: jsResult.code, project },

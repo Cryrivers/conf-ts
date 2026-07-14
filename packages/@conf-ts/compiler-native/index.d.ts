@@ -13,8 +13,6 @@ export interface CompileResult {
 
 export interface JsCompileOptions {
   preserveKeyOrder?: boolean
-  jsx?: boolean
-  jsxOutput?: JsxOutputOptions
 }
 
 export interface JsSourceCompileInput {
@@ -31,13 +29,4 @@ export interface JsSourceProject {
 
 export interface JsTsConfig {
   compilerOptions?: any
-}
-
-export interface JsxOutputOptions {
-  type?: string
-  props?: string | false
-  children?: string | false
-  key?: string
-  fragment?: string
-  typeFormat?: 'string' | 'descriptor'
 }

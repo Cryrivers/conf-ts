@@ -20,7 +20,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
 - `@conf-ts/expr-core`: Shared expression lexer, parser, AST types, and parse errors
 - `@conf-ts/expression`: JavaScript-like runtime expression evaluator
-- `@conf-ts/macro`: Macro functions and JSX runtime consumed by the transform
+- `@conf-ts/macro`: Macro functions consumed by the transform
 - `@conf-ts/macro-transformer`: TypeScript source transformer for macros
 - `@conf-ts/macro-transformer-native`: SWC-backed native source transformer
 - `@conf-ts/swc-plugin`: Standard SWC WASM macro transform plugin
@@ -65,14 +65,8 @@ conf-ts -f yaml src/config.conf.ts
 # Macro transform
 conf-ts --macro src/config.conf.ts
 
-# Enable compiler JSX support
-conf-ts --jsx src/config.conf.tsx
-
 # Single-quoted expr macro output
 conf-ts --macro --quote single src/config.conf.ts
-
-# JSX output fields
-conf-ts --jsx --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
 ```
 
 The compiled output is printed to stdout.
@@ -310,121 +304,6 @@ This package is an evaluator, not a security sandbox. Expressions can read objec
 
 The runtime grammar does not support assignments, `++`/`--`, array spread, object shorthand/computed keys, arrow or function expressions, `new`, classes, regular expressions, comments, or statements.
 
-## JSX support
-
-conf-ts can compile JSX/TSX files to structured `{ type, props }` objects. Use `@conf-ts/macro` as the JSX runtime by adding the pragma at the top of your file.
-
-```tsx
-/** @jsxImportSource @conf-ts/macro */
-
-export default {
-  button: <button id="submit" disabled />,
-  // compiles to: { type: "button", props: { id: "submit", disabled: true } }
-
-  withChildren: (
-    <ul>
-      <li>a</li>
-      <li>b</li>
-    </ul>
-  ),
-  // compiles to: { type: "ul", props: { children: [{ type: "li", ... }, ...] } }
-
-  fragment: (
-    <>
-      <span />
-      <span />
-    </>
-  ),
-  // compiles to: { type: "Fragment", props: { children: [...] } }
-};
-```
-
-Spread attributes and key handling are supported:
-
-```tsx
-/** @jsxImportSource @conf-ts/macro */
-
-const shared = { type: 'text', name: 'field' };
-
-export default {
-  spreadWithOverride: <input {...shared} name="override" />,
-  withKey: <div {...shared} key="k1" />,
-};
-```
-
-JSX can be combined with macros when `--macro` is enabled:
-
-```tsx
-/** @jsxImportSource @conf-ts/macro */
-import { env, String } from '@conf-ts/macro';
-
-export default {
-  config: <service name={String(42)} env={env('API_ENV', 'development')} />,
-};
-```
-
-When JSX is enabled, each JSX element compiles to `{ type: string; props: Record<string, any> }`. A single child is inlined as `props.children`; multiple children become an array. Fragments use `"Fragment"` as the type.
-
-JSX support is disabled by default. Set compiler option `jsx: true` (or CLI flag `--jsx`) to allow JSX elements and fragments when they are reached during compile-time evaluation:
-
-```ts
-compile('path/to/index.conf.tsx', 'json', { jsx: true });
-```
-
-The JSX output shape can be configured with `jsxOutput`:
-
-```ts
-compile('path/to/index.conf.tsx', 'json', {
-  jsx: true,
-  jsxOutput: {
-    type: '$type',
-    props: false,
-    children: 'children',
-    key: 'key',
-    fragment: 'Fragment',
-    typeFormat: 'string',
-  },
-});
-```
-
-With `props: false`, JSX attributes are written at the node root next to the type field:
-
-```tsx
-<input type="text" name="email" />
-// compiles to: { $type: "input", type: "text", name: "email" }
-```
-
-In flat mode, structural fields such as `type`, `children`, and `key` are reserved. If an attribute or spread property collides with an enabled structural field, compilation fails. Set `jsxOutput.children: false` to reject JSX children while still allowing childless JSX elements; whitespace-only children are ignored. Leave `jsx` unset or set `jsx: false` when JSX itself should stay disabled.
-
-Set `typeFormat: 'descriptor'` to emit a structured type descriptor instead of a string:
-
-```tsx
-<Button />
-// compiles to: { type: { kind: "component", name: "Button" }, props: {} }
-
-<svg:path />
-// compiles to: { type: { kind: "intrinsic", name: "svg:path" }, props: {} }
-
-<>
-  <span />
-</>
-// compiles to: { type: { kind: "fragment", name: "Fragment" }, props: { children: ... } }
-```
-
-Intrinsic tags use their literal JSX name, component tags use the identifier or member path such as `"Button"` or `"UI.Button"`, and fragments use `jsxOutput.fragment` when configured.
-
-The runtime in `@conf-ts/macro/jsx-runtime` reads the same option shape from `globalThis.__CONF_TS_JSX_OUTPUT__` when JSX is executed as JavaScript:
-
-```ts
-globalThis.__CONF_TS_JSX_OUTPUT__ = {
-  type: '$type',
-  props: false,
-  typeFormat: 'descriptor',
-};
-```
-
-When using the automatic JSX transform, TypeScript emits JSX children as `props.children`; the runtime treats that field as JSX children and applies the configured `children` name or `children: false` behavior. Runtime component values are not executed; functions, classes, and component-like objects serialize from `displayName` first and then `name`, and anonymous component values fail. TypeScript types are exported from `@conf-ts/macro/jsx-runtime` under the `JSX` namespace (for automatic resolution via `@jsxImportSource`).
-
 ## Programmatic API
 
 ### Node (compile files on disk)
@@ -478,18 +357,11 @@ access there.
 | Option             | Description                                                                                    |
 | ------------------ | ---------------------------------------------------------------------------------------------- |
 | `preserveKeyOrder` | Preserves object key insertion order during object creation, serialization, cloning, and merge |
-| `jsx`              | Enables JSX support programmatically; must be a boolean                                        |
-| `jsxOutput`        | Configures JSX output fields                                                                   |
 
 ```ts
 import { compile, compileInMemory } from '@conf-ts/compiler';
 
 compile('path/to/index.conf.ts', 'json', { preserveKeyOrder: true });
-compile('path/to/index.conf.tsx', 'json', { jsx: true });
-compile('path/to/index.conf.tsx', 'json', {
-  jsx: true,
-  jsxOutput: { type: '$type', props: false },
-});
 
 compileInMemory(
   { '/index.conf.ts': 'export default { a: 1, b: 2, c: 3 }' },
@@ -530,7 +402,7 @@ The compiler only receives ordinary TypeScript and never expands macros.
 
 ## Webpack plugin
 
-`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file and writes the generated JSON/YAML next to the source file by default. When `jsx: true`, it enables compiler JSX support and injects `globalThis.__CONF_TS_JSX_OUTPUT__` so any runtime JSX in the same bundle sees the same `jsxOutput`; otherwise JSX stays disabled and the runtime JSX banner is skipped. Add the plugin once — no separate `module.rules` entry is needed.
+`ConfTsWebpackPlugin` compiles each matching `.conf.ts` file and writes the generated JSON/YAML next to the source file by default. Add the plugin once — no separate `module.rules` entry is needed.
 
 ```js
 // webpack.config.js
@@ -547,12 +419,10 @@ module.exports = {
     }),
     new ConfTsWebpackPlugin({
       // All options are optional.
-      test: /\.conf\.ts$/, // default; use /\.conf\.tsx?$/ for TS + TSX
-      extensionToRemove: '.conf.ts', // default; can also be ['.conf.ts', '.conf.tsx']
+      test: /\.conf\.ts$/, // default
+      extensionToRemove: '.conf.ts', // default; can also be an array of strings
       format: 'json', // 'json' | 'yaml'
       name: '[path][name].generated.json', // default; see template tokens below
-      jsx: true, // opt in to JSX during compiler evaluation
-      jsxOutput: { type: '$type', props: false },
       preserveKeyOrder: false,
       check: false, // verify-only mode for CI; reads sidecar file next to source
       useWorkers: true, // off-thread compile via piscina; set false for small builds
@@ -566,8 +436,8 @@ module.exports = {
 
 ```js
 new ConfTsWebpackPlugin({
-  test: /\.conf\.tsx?$/,
-  extensionToRemove: ['.conf.ts', '.conf.tsx'],
+  test: /\.conf\.(ts|mts|cts)$/,
+  extensionToRemove: ['.conf.ts', '.conf.mts', '.conf.cts'],
 });
 ```
 
@@ -583,7 +453,6 @@ The same plugins are available from
 
 ## Supported config TypeScript
 
-- JSX elements, fragments, spread attributes, and children (via `@jsxImportSource @conf-ts/macro`)
 - Literals: string, number, boolean, null
 - `undefined` with JS serialization semantics
 - String template literals

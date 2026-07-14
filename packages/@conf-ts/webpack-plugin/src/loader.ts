@@ -29,8 +29,6 @@ interface CompileResult {
 export function createCompileOptions(options: LoaderOptions): CompileOptions {
   return {
     preserveKeyOrder: options.preserveKeyOrder || false,
-    jsx: options.jsx,
-    jsxOutput: options.jsxOutput,
   };
 }
 

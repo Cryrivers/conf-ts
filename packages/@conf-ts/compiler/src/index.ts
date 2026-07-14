@@ -6,7 +6,6 @@ export type {
   CompileInput,
   CompileOptions,
   InMemoryFiles,
-  JsxOutputOptions,
   SourceCompileInput,
   SourceProject,
 } from './shared';

@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use macro_transformer_core::{
-  JsxOutputOptionsConfig, ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions,
-  transform_source,
+  ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions, transform_source,
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -29,8 +28,6 @@ pub struct JsTransformOptions {
   #[napi(ts_type = "'single' | 'double'")]
   pub quote: Option<String>,
   pub preserve_key_order: Option<bool>,
-  pub jsx: Option<bool>,
-  pub jsx_output: Option<serde_json::Value>,
   pub source_map: Option<bool>,
 }
 
@@ -68,21 +65,12 @@ fn options(value: Option<JsTransformOptions>) -> Result<TransformOptions> {
     env: None,
     quote: None,
     preserve_key_order: None,
-    jsx: None,
-    jsx_output: None,
     source_map: None,
   });
-  let jsx_output = value
-    .jsx_output
-    .map(serde_json::from_value::<JsxOutputOptionsConfig>)
-    .transpose()
-    .map_err(|error| Error::new(Status::InvalidArg, error.to_string()))?;
   Ok(TransformOptions {
     env: value.env.unwrap_or_default(),
     quote: quote(value.quote)?,
     preserve_key_order: value.preserve_key_order.unwrap_or(false),
-    jsx: value.jsx,
-    jsx_output,
     source_map: value.source_map.unwrap_or(false),
     inherit_process_env: true,
   })

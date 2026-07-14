@@ -6,7 +6,6 @@ import webpack from 'webpack';
 
 import {
   ConfTsWebpackPlugin,
-  shouldInjectJsxOutput,
   SwcMacroTransformPlugin,
   TypeScriptMacroTransformPlugin,
 } from '../src/index';
@@ -89,27 +88,11 @@ describe('loader generated file path interpolation', () => {
   it('only passes ordinary compiler options to the worker', () => {
     expect(
       createCompileOptions({
-        jsx: true,
         preserveKeyOrder: true,
-        jsxOutput: { type: '$type', props: false },
       }),
     ).toEqual({
       preserveKeyOrder: true,
-      jsx: true,
-      jsxOutput: { type: '$type', props: false },
     });
-  });
-
-  it('validates jsx as a boolean plugin option', () => {
-    expect(() => new ConfTsWebpackPlugin({ jsx: 'false' as any })).toThrow(
-      'jsx must be a boolean',
-    );
-  });
-
-  it('injects JSX output banner only when jsx is enabled', () => {
-    expect(shouldInjectJsxOutput(undefined)).toBe(false);
-    expect(shouldInjectJsxOutput(true)).toBe(true);
-    expect(shouldInjectJsxOutput(false)).toBe(false);
   });
 
   it('rejects legacy macro and quote options with migration guidance', () => {
@@ -134,7 +117,7 @@ describe('loader generated file path interpolation', () => {
       expect(rules).toHaveLength(1);
       expect(rules[0].enforce).toBe('pre');
       expect(rules[0].test.test('config.mts')).toBe(true);
-      expect(rules[0].test.test('config.jsx')).toBe(true);
+      expect(rules[0].test.test('config.js')).toBe(true);
       expect(rules[0].exclude.test('/project/node_modules/pkg/index.ts')).toBe(
         true,
       );

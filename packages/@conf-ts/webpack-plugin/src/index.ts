@@ -1,5 +1,4 @@
 import path from 'path';
-import { type CompileOptions } from '@conf-ts/compiler';
 import Piscina from 'piscina';
 import type { Compiler, RuleSetCondition, RuleSetRule } from 'webpack';
 
@@ -14,8 +13,6 @@ export interface ConfTsWebpackPluginOptions {
   name?: string;
   extensionToRemove?: string | string[];
   preserveKeyOrder?: boolean;
-  jsx?: CompileOptions['jsx'];
-  jsxOutput?: CompileOptions['jsxOutput'];
   check?: boolean;
   useWorkers?: boolean;
   compiler?: CompilerPreference;
@@ -80,22 +77,9 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   ) {
     reject('extensionToRemove must be a string or an array of strings');
   }
-  if (
-    options.jsxOutput !== undefined &&
-    (typeof options.jsxOutput !== 'object' ||
-      options.jsxOutput === null ||
-      Array.isArray(options.jsxOutput))
-  ) {
-    reject('jsxOutput must be a plain object');
-  }
   expectBool('preserveKeyOrder');
-  expectBool('jsx');
   expectBool('check');
   expectBool('useWorkers');
-}
-
-export function shouldInjectJsxOutput(jsx: CompileOptions['jsx']): boolean {
-  return jsx === true;
 }
 
 export class ConfTsWebpackPlugin {
@@ -115,8 +99,6 @@ export class ConfTsWebpackPlugin {
       name,
       extensionToRemove = '.conf.ts',
       preserveKeyOrder,
-      jsx,
-      jsxOutput,
       check,
       useWorkers = true,
       compiler: compilerPref = 'auto',
@@ -145,8 +127,6 @@ export class ConfTsWebpackPlugin {
             name,
             extensionToRemove,
             preserveKeyOrder,
-            jsx,
-            jsxOutput,
             check,
             useWorkers,
             compiler: compilerPref,
@@ -156,16 +136,6 @@ export class ConfTsWebpackPlugin {
     };
 
     compiler.options.module.rules.push(rule);
-
-    if (shouldInjectJsxOutput(jsx)) {
-      new compiler.webpack.BannerPlugin({
-        banner: `globalThis.__CONF_TS_JSX_OUTPUT__ = ${JSON.stringify(
-          jsxOutput ?? {},
-        )};`,
-        raw: true,
-        entryOnly: true,
-      }).apply(compiler);
-    }
   }
 }
 

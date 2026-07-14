@@ -10,7 +10,6 @@ import {
   FormattedNumber,
   jsonStringify,
   orderedClone,
-  validateCompileOptions,
   type CompileInput,
   type SourceCompileInput,
 } from './shared';
@@ -120,7 +119,6 @@ function projectCompilerOptions(input: SourceCompileInput): ts.CompilerOptions {
     noLib: true,
     allowJs: true,
     resolveJsonModule: true,
-    jsx: ts.JsxEmit.ReactJSX,
     ...(input.project?.compilerOptions as ts.CompilerOptions | undefined),
   };
 }
@@ -139,8 +137,6 @@ function createProjectCompilerHost(
     );
   const extensionFromFileName = (fileName: string): ts.Extension => {
     if (/\.d\.ts$/i.test(fileName)) return ts.Extension.Dts;
-    if (/\.tsx$/i.test(fileName)) return ts.Extension.Tsx;
-    if (/\.jsx$/i.test(fileName)) return ts.Extension.Jsx;
     if (/\.[cm]?js$/i.test(fileName)) return ts.Extension.Js;
     if (/\.json$/i.test(fileName)) return ts.Extension.Json;
     return ts.Extension.Ts;
@@ -379,7 +375,6 @@ export function compile(
   format: 'json' | 'yaml',
   options?: CompileOptions,
 ) {
-  validateCompileOptions(options);
   const inputFile = typeof input === 'string' ? input : input.filename;
   let program: ts.Program;
   let tsConfigPath: string | undefined;

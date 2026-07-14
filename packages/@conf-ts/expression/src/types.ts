@@ -8,6 +8,7 @@ declare const EXPR_CALLBACK: unique symbol;
 
 export type Expr<Context extends RuntimeEnv, ReturnType> = ((
   ctx: Context,
-) => ReturnType) & {
-  readonly [EXPR_CALLBACK]: true;
-};
+) => ReturnType) &
+  string & {
+    readonly [EXPR_CALLBACK]: true;
+  };

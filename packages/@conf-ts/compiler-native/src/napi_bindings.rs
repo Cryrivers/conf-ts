@@ -4,7 +4,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::compiler::{SourceCompileInput, SourceProject};
-use crate::types::{CompileOptions, JsxOutputField, JsxOutputOptions as NativeJsxOutputOptions};
+use crate::types::CompileOptions;
 
 #[napi(object)]
 pub struct CompileResult {
@@ -13,24 +13,8 @@ pub struct CompileResult {
 }
 
 #[napi(object)]
-pub struct JsxOutputOptions {
-  #[napi(js_name = "type")]
-  pub type_name: Option<String>,
-  #[napi(ts_type = "string | false")]
-  pub props: Option<Either<String, bool>>,
-  #[napi(ts_type = "string | false")]
-  pub children: Option<Either<String, bool>>,
-  pub key: Option<String>,
-  pub fragment: Option<String>,
-  #[napi(js_name = "typeFormat", ts_type = "'string' | 'descriptor'")]
-  pub type_format: Option<String>,
-}
-
-#[napi(object)]
 pub struct JsCompileOptions {
   pub preserve_key_order: Option<bool>,
-  pub jsx: Option<bool>,
-  pub jsx_output: Option<JsxOutputOptions>,
 }
 
 #[napi(object)]
@@ -52,31 +36,9 @@ pub struct JsTsConfig {
   pub compiler_options: Option<serde_json::Value>,
 }
 
-fn convert_jsx_field(value: Option<Either<String, bool>>) -> Option<JsxOutputField> {
-  match value {
-    Some(Either::A(name)) => Some(JsxOutputField::Name(name)),
-    Some(Either::B(false)) => Some(JsxOutputField::Disabled),
-    Some(Either::B(true)) => Some(JsxOutputField::InvalidBool),
-    None => None,
-  }
-}
-
-fn convert_jsx_output(value: Option<JsxOutputOptions>) -> Option<NativeJsxOutputOptions> {
-  value.map(|options| NativeJsxOutputOptions {
-    type_name: options.type_name,
-    props: convert_jsx_field(options.props),
-    children: convert_jsx_field(options.children),
-    key: options.key,
-    fragment: options.fragment,
-    type_format: options.type_format,
-  })
-}
-
 fn convert_options(options: Option<JsCompileOptions>) -> CompileOptions {
   options.map_or_else(CompileOptions::default, |options| CompileOptions {
     preserve_key_order: options.preserve_key_order.unwrap_or(false),
-    jsx: options.jsx,
-    jsx_output: convert_jsx_output(options.jsx_output),
   })
 }
 

@@ -37,8 +37,6 @@ module.exports = {
       compiler: 'native',
       extensionToRemove: '.conf.ts',
       name: 'dist/native/[name].generated.json',
-      jsx: true,
-      jsxOutput: { type: '$type', props: false },
     }),
   ],
 };

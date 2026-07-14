@@ -97,7 +97,6 @@ const FIXTURES_DIR = path.resolve(__dirname, 'fixtures');
 const SPEC_DIR = path.join(FIXTURES_DIR, 'specs');
 const MACRO_DIR = path.join(FIXTURES_DIR, 'macros');
 const EDGE_CASES_DIR = path.join(FIXTURES_DIR, 'edge-cases');
-const JSX_DIR = path.join(FIXTURES_DIR, 'jsx');
 
 function assertOutput(
   inputFolder: string,
@@ -200,19 +199,4 @@ export function assertMacroError(
     ...options,
     macro: true,
   });
-}
-
-export function assertJsxOutput(
-  testName: string,
-  options?: TestCompileOptions,
-) {
-  assertOutput(JSX_DIR, testName, { jsx: true, ...options }, '.json.tsx');
-}
-
-export function assertJsxError(
-  testName: string,
-  expectedError: string,
-  options?: TestCompileOptions,
-) {
-  assertError(JSX_DIR, testName, expectedError, { ...options }, '.json.tsx');
 }

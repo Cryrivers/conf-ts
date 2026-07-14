@@ -1,12 +1,8 @@
-import { ConfTSError } from './error';
-
 /**
  * Compile options for both filesystem and in-memory compilation.
  */
 export interface CompileOptions {
   preserveKeyOrder?: boolean;
-  jsx?: boolean;
-  jsxOutput?: JsxOutputOptions;
 }
 
 export type InMemoryFiles = { [fileName: string]: string };
@@ -26,34 +22,6 @@ export interface SourceCompileInput {
 }
 
 export type CompileInput = string | SourceCompileInput;
-
-export interface JsxOutputOptions {
-  type?: string;
-  props?: string | false;
-  children?: string | false;
-  key?: string;
-  fragment?: string;
-  typeFormat?: 'string' | 'descriptor';
-}
-
-export function validateCompileOptions(options?: CompileOptions): void {
-  if (!options) {
-    return;
-  }
-
-  for (const key of ['jsx'] as const) {
-    if (Object.prototype.hasOwnProperty.call(options, key)) {
-      const value: any = options[key];
-      if (value !== undefined && typeof value !== 'boolean') {
-        throw new ConfTSError(`Invalid option: ${key} must be boolean`, {
-          file: 'unknown',
-          line: 1,
-          character: 1,
-        });
-      }
-    }
-  }
-}
 
 /**
  * A wrapper for numbers that preserves their original string representation from the source code.

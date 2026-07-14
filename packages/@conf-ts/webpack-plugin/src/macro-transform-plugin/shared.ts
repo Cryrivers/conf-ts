@@ -25,7 +25,7 @@ export function applyMacroTransformPlugin(
   options: MacroTransformPluginOptions,
 ): void {
   const {
-    test = /\.[cm]?[jt]sx?$/,
+    test = /\.[cm]?[jt]s$/,
     include,
     exclude = /node_modules/,
     ...transformOptions

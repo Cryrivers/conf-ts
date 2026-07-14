@@ -3,12 +3,7 @@ import { stringify as yamlStringify } from 'yaml';
 
 import { createEvaluationState, evaluateDefaultExport } from './compiler';
 import { ConfTSError } from './error';
-import {
-  CompileOptions,
-  orderedClone,
-  validateCompileOptions,
-  type InMemoryFiles,
-} from './shared';
+import { CompileOptions, orderedClone, type InMemoryFiles } from './shared';
 
 export type { InMemoryFiles };
 
@@ -52,7 +47,6 @@ function resolveInMemoryCompilerOptions(tsconfig?: {
     noLib: true,
     allowJs: true,
     resolveJsonModule: true,
-    jsx: ts.JsxEmit.ReactJSX,
   };
 
   return {
@@ -70,7 +64,7 @@ export function createInMemoryProgram(
   const optionsTs = resolveInMemoryCompilerOptions(tsconfig);
   const host = createInMemoryCompilerHost(files, optionsTs);
 
-  const isTsLike = (name: string) => /\.(tsx?|jsx?)$/i.test(name);
+  const isTsLike = (name: string) => /\.(ts|js)$/i.test(name);
   const rootNames = Array.from(
     new Set<string>([...Object.keys(files).filter(isTsLike), entryFile]),
   );
@@ -110,7 +104,6 @@ export function compileInMemory(
   tsconfig?: { compilerOptions?: ts.CompilerOptions },
   options?: CompileOptions,
 ) {
-  validateCompileOptions(options);
   const program = createInMemoryProgram(files, entryFile, tsconfig);
   const state = createEvaluationState(program, options);
   const output = evaluateDefaultExport(program, entryFile, state, options);

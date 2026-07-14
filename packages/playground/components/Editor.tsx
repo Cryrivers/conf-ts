@@ -194,8 +194,6 @@ export function Editor({
             module: monaco.languages.typescript.ModuleKind.CommonJS,
             noEmit: true,
             esModuleInterop: true,
-            jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
-            jsxImportSource: '@conf-ts/macro',
           });
 
           // Add @conf-ts/macro types
@@ -203,9 +201,13 @@ export function Editor({
             `
             declare module '@conf-ts/macro' {
               export type RuntimeEnv = Record<string, unknown>;
-              export type Expr<Context extends RuntimeEnv, ReturnType> = (
+              const EXPR_CALLBACK: unique symbol;
+              export type Expr<Context extends RuntimeEnv, ReturnType> = ((
                 ctx: Context
-              ) => ReturnType;
+              ) => ReturnType) &
+                string & {
+                  readonly [EXPR_CALLBACK]: true;
+                };
               export function expr<
                 Context extends RuntimeEnv = RuntimeEnv,
                 ReturnType = unknown,
@@ -223,38 +225,10 @@ export function Editor({
                 predicate: (item: T) => boolean,
               ): T[];
               export function env(key: string): string | undefined;
+              export function env(key: string, defaultValue: string): string;
             }
             `,
             'file:///node_modules/@conf-ts/macro/index.d.ts',
-          );
-
-          // Add @conf-ts/macro/jsx-runtime types
-          monaco.languages.typescript.typescriptDefaults.addExtraLib(
-            `
-            declare module '@conf-ts/macro/jsx-runtime' {
-              export interface JsxOutputOptions {
-                type?: string;
-                props?: string | false;
-                children?: string | false;
-                key?: string;
-                fragment?: string;
-              }
-              export const Fragment: string;
-              export function jsx(
-                type: string,
-                props: Record<string, any> | null | undefined,
-                key?: string,
-              ): Record<string, any>;
-              export const jsxs: typeof jsx;
-              export namespace JSX {
-                type Element = Record<string, any>;
-                interface IntrinsicElements { [elemName: string]: Record<string, any>; }
-                interface ElementChildrenAttribute { children: {}; }
-              }
-            }
-            declare var __CONF_TS_JSX_OUTPUT__: import('@conf-ts/macro/jsx-runtime').JsxOutputOptions | undefined;
-            `,
-            'file:///node_modules/@conf-ts/macro/jsx-runtime.d.ts',
           );
         }}
       />

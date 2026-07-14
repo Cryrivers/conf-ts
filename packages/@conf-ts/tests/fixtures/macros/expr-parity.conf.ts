@@ -24,6 +24,7 @@ type Context = {
   extra: Record<string, unknown>;
   object: { removable?: number; present?: number };
   key: string;
+  score?: number | null;
   Constructor: abstract new (...args: any[]) => object;
   instance: object;
   counter: {
@@ -105,4 +106,7 @@ export default {
   shiftRight: expr<Context, number>(ctx => ctx.number >> 1),
   shiftRightZeroFill: expr<Context, number>(ctx => ctx.number >>> 1),
   bitwiseXor: expr<Context, number>(ctx => ctx.number ^ ctx.increment),
+  parenthesizedNullishComparison: expr<Context, boolean>(
+    ctx => (ctx.score ?? 0) >= 80,
+  ),
 };

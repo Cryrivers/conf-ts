@@ -36,14 +36,9 @@ program
     false,
   )
   .option('-p, --preserve-order', 'Preserve object key order in output.', false)
-  .option('--jsx', 'Enable JSX support.', false)
   .option('--quote <style>', 'String quote style for expr output.', 'double')
-  .option(
-    '--jsx-output <json>',
-    'Configure JSX output fields as a JSON object.',
-  )
   .action((fileEntry, options) => {
-    const { format, macro, preserveOrder, quote, jsx, jsxOutput } = options;
+    const { format, macro, preserveOrder, quote } = options;
 
     if (format !== 'json' && format !== 'yaml') {
       console.error(
@@ -53,20 +48,8 @@ program
     }
 
     try {
-      const parsedJsxOutput =
-        jsxOutput === undefined ? undefined : JSON.parse(jsxOutput);
-      if (
-        parsedJsxOutput !== undefined &&
-        (parsedJsxOutput === null ||
-          typeof parsedJsxOutput !== 'object' ||
-          Array.isArray(parsedJsxOutput))
-      ) {
-        throw new Error('jsx-output must be a JSON object.');
-      }
       const compileOptions = {
         preserveKeyOrder: preserveOrder,
-        jsx,
-        jsxOutput: parsedJsxOutput,
       };
       let result: string;
       if (macro) {
@@ -83,9 +66,7 @@ program
         const transformOptions = {
           env: snapshotEnvironment(),
           preserveKeyOrder: preserveOrder,
-          jsx,
           quote,
-          jsxOutput: parsedJsxOutput,
         };
         let transformedEntry = code;
         const files = Object.entries(transformedProject.files).sort(

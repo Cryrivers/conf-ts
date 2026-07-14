@@ -56,10 +56,6 @@ function expression<
   expr: Expr<Context, ReturnType> | string,
   options?: ExpressionOptions,
 ): Compiled<Context, ReturnType> {
-  if (typeof expr === 'function') {
-    return expr as Compiled<Context, ReturnType>;
-  }
-
   if (typeof expr !== 'string') {
     throw new Error(formatInvalid());
   }

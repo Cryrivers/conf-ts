@@ -30,8 +30,6 @@ module.exports = {
     new TypeScriptMacroTransformPlugin(),
     new ConfTsWebpackPlugin({
       extensionToRemove: '.conf.ts',
-      jsx: true,
-      jsxOutput: { type: '$type', props: false },
     }),
   ],
 };

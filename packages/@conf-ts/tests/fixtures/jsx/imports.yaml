@@ -1,4 +1,0 @@
-type: app
-props:
-  name: My App
-  version: 2
