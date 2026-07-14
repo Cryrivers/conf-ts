@@ -179,34 +179,23 @@ describe('source-oriented architecture', () => {
     expect(typescriptResult.code).not.toContain('macros.String');
   });
 
-  // KNOWN DIVERGENCE: arrayMap's callback here closes over the outer `n` const.
-  // The native transformer evaluates callback bodies with the general expression
-  // evaluator and resolves it; the TypeScript transformer's array-macro callback
-  // validator (macro.ts's `isAllowedIdentifier`) only permits the callback's own
-  // parameter, enum references, and nested macro calls, so it throws. `it.fails`
-  // documents this as an expected failure until the two are reconciled — flip
-  // back to a plain `it` once the JS transformer accepts outer-const capture (or
-  // the native one is tightened to match).
-  it.fails(
-    'transforms combined arrayMap and expr macros in a single pass',
-    () => {
-      const filename = '/virtual/config.ts';
-      const code = [
-        "import { arrayMap, expr } from '@conf-ts/macro';",
-        'const n = 2;',
-        'export default { a: arrayMap([1, 2], x => x + n), b: expr(ctx => ctx.a > n) };',
-      ].join('\n');
-      const project = { files: { [filename]: code } };
-      const input = { filename, code, project };
+  it('transforms combined arrayMap and expr macros in a single pass', () => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { arrayMap, expr } from '@conf-ts/macro';",
+      'const n = 2;',
+      'export default { a: arrayMap([1, 2], x => x + n), b: expr(ctx => ctx.a > n) };',
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
 
-      const typescriptResult = macroTransformer.transform(input);
-      const nativeResult = nativeMacroTransform(input);
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
 
-      expect(nativeResult.code).toBe(typescriptResult.code);
-      expect(typescriptResult.code).toContain('a: [3, 4]');
-      expect(typescriptResult.code).toContain('b: "a > 2"');
-    },
-  );
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toContain('a: [3, 4]');
+    expect(typescriptResult.code).toContain('b: "a > 2"');
+  });
 
   it('retains a namespace import that is also used as a type', () => {
     const filename = path.resolve(

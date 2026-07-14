@@ -220,6 +220,33 @@ function isEnumIdentifier(
   );
 }
 
+// An identifier that resolves to an outer variable/binding declaration is
+// allowed through the gate here and left for `evaluate()` to actually
+// resolve: `evaluate()` already knows how to fold a `const` (including
+// destructured bindings) to a compile-time value, and will throw its own
+// descriptive error if the declaration turns out to be a `let`/`var`. This
+// mirrors the native (Rust) transformer, which resolves callback bodies with
+// the same general-purpose expression evaluator rather than a separate
+// allowlist, so both transformers accept the same outer-const captures.
+function isVariableReferenceIdentifier(
+  node: ts.Identifier,
+  typeChecker: ts.TypeChecker,
+): boolean {
+  const symbol = typeChecker.getSymbolAtLocation(node);
+  if (!symbol) {
+    return false;
+  }
+  let resolvedSymbol = symbol;
+  if (symbol.flags & ts.SymbolFlags.Alias) {
+    resolvedSymbol = typeChecker.getAliasedSymbol(symbol);
+  }
+  const declaration = resolvedSymbol.valueDeclaration;
+  return (
+    !!declaration &&
+    (ts.isVariableDeclaration(declaration) || ts.isBindingElement(declaration))
+  );
+}
+
 function createArrayCallbackChecker(params: {
   sourceFile: ts.SourceFile;
   typeChecker: ts.TypeChecker;
@@ -268,6 +295,9 @@ function createArrayCallbackChecker(params: {
         return true;
       }
       if (node.text === paramName) {
+        return true;
+      }
+      if (isVariableReferenceIdentifier(node, typeChecker)) {
         return true;
       }
       if (
