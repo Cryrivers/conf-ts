@@ -16,6 +16,9 @@ function fakeExpr<
 
 type DeeplyOptionalContext = { a?: { b?: { c?: number } } };
 type ArrayOptionalContext = { a?: { b?: { c?: number } }[] };
+type OptionalAncestorRequiredLeafContext = {
+  a?: { b?: { c?: { d: string } } };
+};
 
 describe('optionalMemberAccess', () => {
   it('short-circuits missing non-optional member access', () => {
@@ -166,6 +169,22 @@ describe('LooseExpr type', () => {
       // @ts-expect-error without the option, Compiled requires 'a' to be present
       compiledStrict({});
     }).toThrow(); // fakeExpr returns the raw callback, not a compiled string
+  });
+
+  it('types a leaf as possibly undefined when only its ancestors are optional', () => {
+    // `d` itself is a required field of `c`, but `a`/`b`/`c` are all optional,
+    // so at runtime `ctx.a.b.c.d` short-circuits to undefined whenever any of
+    // them is missing — the type must reflect that even though `d: string`
+    // has no `?` of its own.
+    const looseExpr: LooseExpr<OptionalAncestorRequiredLeafContext, string> =
+      fakeExpr(ctx => {
+        const d = ctx.a.b.c.d;
+        // @ts-expect-error `d` is `string | undefined` here, not a bare `string`
+        const asString: string = d;
+        return asString;
+      });
+
+    expect(typeof looseExpr).toBe('function');
   });
 
   it('lets a callback skip `?.` through an array of optional-field elements', () => {

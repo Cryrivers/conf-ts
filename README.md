@@ -288,6 +288,8 @@ const check: LooseExpr<Context, number | boolean> = expr(
 );
 ```
 
+Only container types (nested objects, arrays) are made non-optional so that navigation type-checks without `?.`; the value ultimately read at the end of a path is still unioned with `undefined` whenever that path crossed an optional level, even if the leaf field itself isn't declared optional. For `{ a?: { b?: { c?: { d: string } } } }`, `ctx.a.b.c.d` type-checks without any `?.`, but its type is `string | undefined` (not `string`), since `a`/`b`/`c` being missing at runtime makes `d`'s read short-circuit to `undefined` too.
+
 `LooseContext` also recurses into array element types, so indexed access through an array of optional-field objects (`ctx.a[0].b.c`) works the same way — both at the type level and at runtime, since `optionalMemberAccess`/`loose: true` already short-circuits `a[b][c]`-style bracket access exactly like `a.b.c` (bracket vs. dot access aren't distinguished). Tuple element positions aren't preserved through `LooseContext`, since indexed access can't recover which tuple slot was read anyway.
 
 `expr()`'s compile-time behavior is unchanged — the macro already treats `ctx.a.b.c` as a plain property chain, which is exactly what `optionalMemberAccess`/`loose: true` needs at runtime. Because of that, `LooseExpr` values must be evaluated with `optionalMemberAccess: true` (or `loose: true`); `expression()` only accepts a `LooseExpr` argument when one of those is set, and otherwise falls back to a `Compiled` function that requires the deeply-required shape (matching the fact that, without the option, a missing property really does throw):

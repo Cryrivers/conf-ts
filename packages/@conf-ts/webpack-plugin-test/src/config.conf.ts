@@ -10,6 +10,7 @@ import {
   expr,
   Number,
   String,
+  type LooseExpr,
 } from '@conf-ts/macro';
 
 const services = [
@@ -26,6 +27,10 @@ type RequestContext = {
   retries: number;
   primary?: string;
   fallback: string;
+};
+
+const x: { a: LooseExpr<RequestContext, string> } = {
+  a: expr<RequestContext, string>(ctx => ctx.user?.score.toString() ?? '0'),
 };
 
 export const d = c.value + 1;
