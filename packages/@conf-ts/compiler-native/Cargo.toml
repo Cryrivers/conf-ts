@@ -4,11 +4,26 @@ version = "0.0.12"
 edition = "2024"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# napi-rs's #[napi] items self-register into a process-global ctor table at
+# link time, not a crate-scoped one. When another NAPI addon (e.g.
+# macro-transformer-native) links this crate in as an ordinary `rlib` Cargo
+# dependency, that global table would otherwise pick up compiler-native's
+# OWN #[napi]-exported `compile`/`compileInMemory` too, colliding with (and
+# non-deterministically shadowing) the dependent addon's own functions of
+# the same name in its generated bindings. Gating the NAPI surface behind a
+# default-on feature lets a dependent crate opt out with
+# `default-features = false` while compiler-native's own standalone addon
+# build (which always requests default features for itself) keeps working
+# unchanged.
+default = ["napi-bindings"]
+napi-bindings = ["dep:napi", "dep:napi-derive"]
 
 [dependencies]
-napi = "3.8.5"
-napi-derive = "3.5.4"
+napi = { version = "3.8.5", optional = true }
+napi-derive = { version = "3.5.4", optional = true }
 oxc_allocator = "0.139.0"
 oxc_parser = "0.139.0"
 oxc_ast = "0.139.0"
@@ -20,7 +35,3 @@ serde_yaml = "0.9.34"
 
 [build-dependencies]
 napi-build = "2.3.1"
-
-[profile.release]
-lto = true
-strip = "symbols"

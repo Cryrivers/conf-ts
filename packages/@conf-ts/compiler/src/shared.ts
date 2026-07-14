@@ -20,6 +20,46 @@ export interface CompileOptions {
   quote?: QuoteStyle;
 }
 
+export type InMemoryFiles = { [fileName: string]: string };
+
+/**
+ * The result of a macro pre-evaluation pass: the subset of files that had
+ * macro calls rewritten to literal source, plus every file that was read
+ * while resolving them (for build-system dependency tracking).
+ */
+export interface TransformResult {
+  files: Record<string, string>;
+  dependencies: string[];
+}
+
+export interface EvaluationState {
+  typeChecker: ts.TypeChecker;
+  enumMap: { [filePath: string]: { [key: string]: any } };
+  macroImportsMap: { [filePath: string]: Set<string> };
+  evaluatedFiles: Set<string>;
+}
+
+/**
+ * @internal
+ * Extends the public CompileOptions with a hook used exclusively by
+ * @conf-ts/macro-transformer to intercept call-expression evaluation during
+ * the constant-expansion walk, so it can record source-text replacements
+ * instead of inlining values. Not part of the public API contract.
+ */
+export interface InternalEvaluationOptions extends CompileOptions {
+  /** @internal */
+  evaluateCallExpression?: (
+    expression: ts.CallExpression,
+    sourceFile: ts.SourceFile,
+    typeChecker: ts.TypeChecker,
+    enumMap: { [filePath: string]: { [key: string]: any } },
+    macroImportsMap: { [filePath: string]: Set<string> },
+    evaluatedFiles: Set<string>,
+    context: { [name: string]: any } | undefined,
+    options?: CompileOptions,
+  ) => any;
+}
+
 export interface JsxOutputOptions {
   type?: string;
   props?: string | false;

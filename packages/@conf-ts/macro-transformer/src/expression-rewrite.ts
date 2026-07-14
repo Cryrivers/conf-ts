@@ -1,6 +1,5 @@
+import type { QuoteStyle } from '@conf-ts/compiler';
 import { parse, tokenize, type Token } from '@conf-ts/expr-core';
-
-import type { QuoteStyle } from './shared';
 
 const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/;
 
@@ -53,7 +52,7 @@ function contextProperty(tokens: Token[], index: number): [string, number] {
   );
 }
 
-// Keep this in sync with compiler-native/src/macro_eval.rs encode_string_literal.
+// Keep this in sync with macro-transformer-native/src/macro_eval.rs encode_string_literal.
 export function encodeStringLiteral(
   value: string,
   quote: QuoteStyle = 'double',

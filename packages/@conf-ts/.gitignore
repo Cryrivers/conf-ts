@@ -1,0 +1,5 @@
+# Shared Cargo workspace build output for compiler-native + macro-transformer-native
+# (see ./Cargo.toml). Matches the existing convention in each crate's own
+# .gitignore, which also excludes /target and Cargo.lock.
+/target
+/Cargo.lock

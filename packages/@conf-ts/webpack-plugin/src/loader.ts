@@ -4,7 +4,7 @@ import { type CompileOptions } from '@conf-ts/compiler';
 import type Piscina from 'piscina';
 import type { Compiler, LoaderContext } from 'webpack';
 
-import { resolveCompile, type CompilerPreference } from './worker';
+import compileTask, { type CompilerPreference } from './worker';
 
 export interface LoaderOptions extends CompileOptions {
   name?: string;
@@ -149,11 +149,12 @@ export default async function (
         compiler: compilerPref,
       })) as CompileResult;
     } else {
-      result = resolveCompile(compilerPref).fn(
-        this.resourcePath,
+      result = compileTask({
+        resourcePath: this.resourcePath,
         format,
-        compileOptions,
-      );
+        options: compileOptions,
+        compiler: compilerPref,
+      });
     }
 
     for (const dep of result.dependencies) {

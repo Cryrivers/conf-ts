@@ -1,15 +1,17 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 
 use crate::error::ConfTSError;
-use crate::macro_eval::evaluate_macro;
 use crate::types::{
-  CompileOptions, FileContext, JsxOutputField, LineIndex, Value, normalize_number_raw,
+  CompileOptions, FileContext, JsxOutputField, LineIndex, TransformState, Value,
+  normalize_number_raw,
 };
 
-pub(crate) const MACRO_FUNCTIONS: &[&str] = &[
+pub const MACRO_FUNCTIONS: &[&str] = &[
   "String",
   "Number",
   "Boolean",
@@ -310,7 +312,7 @@ pub fn evaluate(
     ctx.evaluated_files.insert(file_ctx.file_path.clone());
   }
 
-  if options.macro_mode && !ctx.macro_imports_map.contains_key(&file_ctx.file_path) {
+  if ctx.macro_evaluator.is_some() && !ctx.macro_imports_map.contains_key(&file_ctx.file_path) {
     let imports = collect_macro_imports(file_ctx.program(), &file_ctx.file_path);
     ctx
       .macro_imports_map
@@ -756,8 +758,8 @@ fn eval_call_expr(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  if options.macro_mode {
-    return evaluate_macro(call, file_ctx, ctx, local_context, options);
+  if let Some(evaluator) = ctx.macro_evaluator {
+    return evaluator(call, file_ctx, ctx, local_context, options);
   }
   let callee = call_expr_callee_name(call);
   let (line, character) = get_location(&file_ctx.line_index, call.span.start);
@@ -1792,6 +1794,29 @@ pub struct EvalContext {
   pub evaluated_files: HashSet<String>,
   pub file_contexts: HashMap<String, FileContext>,
   pub resolver: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
+  /// Set only by a macro pre-evaluation pass (see @conf-ts/macro-transformer-native)
+  /// to intercept call-expression evaluation instead of the default
+  /// "only allowed in macro mode" error. compiler-native's own compile
+  /// paths never set this — macro evaluation lives entirely in the
+  /// transformer crate. A bare `fn` pointer (not a capturing closure) is
+  /// used deliberately: reading it out of `ctx.macro_evaluator` is a
+  /// value copy, not a borrow, so `eval_call_expr` can pass `ctx` on to it
+  /// mutably with no aliasing conflict, at any recursion depth.
+  pub macro_evaluator: Option<
+    fn(
+      &CallExpression,
+      &FileContext,
+      &mut EvalContext,
+      Option<&HashMap<String, Value>>,
+      &CompileOptions,
+    ) -> Result<Value, ConfTSError>,
+  >,
+  /// Accumulator used by the macro evaluator above to track nesting depth
+  /// and record source-text replacements. `Rc<RefCell<_>>` so it can be
+  /// cheaply cloned out of `ctx` (never borrowed) and mutated only in
+  /// brief scopes that are always closed before any recursive evaluation
+  /// call, which is what keeps nested macro calls reentrant-safe.
+  pub transform_state: Option<Rc<RefCell<TransformState>>>,
 }
 
 fn is_strictly_nullish_expr(expr: &Expression, file_ctx: &FileContext) -> bool {
@@ -2270,6 +2295,8 @@ impl EvalContext {
       evaluated_files: HashSet::new(),
       file_contexts: HashMap::new(),
       resolver: None,
+      macro_evaluator: None,
+      transform_state: None,
     }
   }
 }

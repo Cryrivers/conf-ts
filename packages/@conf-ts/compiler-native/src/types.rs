@@ -382,11 +382,30 @@ impl Value {
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
   pub preserve_key_order: bool,
-  pub macro_mode: bool,
   pub jsx: Option<bool>,
   pub env: Option<HashMap<String, String>>,
   pub jsx_output: Option<JsxOutputOptions>,
   pub quote: QuoteStyle,
+}
+
+/// The result of a macro pre-evaluation pass (see @conf-ts/macro-transformer-native):
+/// the subset of files that had macro calls rewritten to literal source, plus
+/// every file that was read while resolving them.
+#[derive(Debug, Clone, Default)]
+pub struct TransformResult {
+  pub files: HashMap<String, String>,
+  pub dependencies: Vec<String>,
+}
+
+/// Accumulator threaded through `EvalContext` while a macro evaluator is
+/// active: tracks call-expression nesting depth (so only the outermost
+/// macro call in a nested expression gets a source-text replacement
+/// recorded) and the replacements themselves, as `(start, end, source)`
+/// byte-offset spans per file.
+#[derive(Debug, Clone, Default)]
+pub struct TransformState {
+  pub depth: u32,
+  pub replacements: HashMap<String, Vec<(u32, u32, String)>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

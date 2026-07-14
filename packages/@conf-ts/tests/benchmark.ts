@@ -1,7 +1,7 @@
 import * as path from 'path';
-import { compile as compileJs } from '@conf-ts/compiler';
-import { compile as compileNative } from '@conf-ts/compiler-native';
 import { Bench } from 'tinybench';
+
+import { compileJsWithMacro, compileNativeWithMacro } from './test-utils';
 
 const configPath = path.resolve(
   __dirname,
@@ -12,10 +12,10 @@ const bench = new Bench({ time: 2000 });
 
 bench
   .add('compiler (JS)', () => {
-    compileJs(configPath, 'json', { macroMode: true });
+    compileJsWithMacro(configPath, 'json', { macroMode: true });
   })
   .add('compiler-native (Rust)', () => {
-    compileNative(configPath, 'json', { macroMode: true });
+    compileNativeWithMacro(configPath, 'json', { macroMode: true });
   });
 
 async function run() {

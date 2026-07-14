@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use oxc_allocator::Allocator;
@@ -11,10 +11,10 @@ use crate::error::ConfTSError;
 use crate::eval::{
   EvalContext, collect_imports, collect_macro_imports, evaluate, find_default_export,
 };
-use crate::resolver::{find_tsconfig, read_tsconfig, resolve_module};
+use crate::resolver::{TsConfig, find_tsconfig, read_tsconfig, resolve_module};
 use crate::types::{
-  CompileOptions, FileContext, FileOwner, LineIndex, ParsedFile, ParsedProgram, Value,
-  serialize_output,
+  CompileOptions, FileContext, FileOwner, LineIndex, ParsedFile, ParsedProgram, TransformResult,
+  Value, serialize_output,
 };
 
 /// Parse a TypeScript source file into a ParsedFile + LineIndex.
@@ -86,10 +86,18 @@ fn decode_source(bytes: &[u8], file_path: &str) -> Result<String, ConfTSError> {
   })
 }
 
-fn load_file(file_path: &str) -> Result<FileContext, ConfTSError> {
-  let bytes = std::fs::read(file_path)
-    .map_err(|e| ConfTSError::new(format!("Failed to read file: {}", e), file_path, 1, 1))?;
-  let source = decode_source(&bytes, file_path)?;
+fn load_file(
+  file_path: &str,
+  overrides: &HashMap<String, String>,
+) -> Result<FileContext, ConfTSError> {
+  let source = match overrides.get(file_path) {
+    Some(text) => text.clone(),
+    None => {
+      let bytes = std::fs::read(file_path)
+        .map_err(|e| ConfTSError::new(format!("Failed to read file: {}", e), file_path, 1, 1))?;
+      decode_source(&bytes, file_path)?
+    }
+  };
   let (parsed, line_index) = parse_ts_file(&source, file_path)?;
   let imports = collect_imports(parsed.program());
   Ok(FileContext {
@@ -163,12 +171,32 @@ pub fn collect_enums(
   }
 }
 
-/// Internal compile function.
-fn _compile(
+/// A fully-loaded, resolved filesystem project ready for evaluation: every
+/// reachable file starting from `entry_file`, plus the tsconfig used to
+/// resolve them. Shared by the plain constants-only compile and by
+/// @conf-ts/macro-transformer-native's macro pre-evaluation pass.
+pub struct LoadedProgram {
+  pub file_contexts: HashMap<String, FileContext>,
+  pub entry_file: String,
+  pub tsconfig_path: PathBuf,
+  pub tsconfig_dir: PathBuf,
+  pub tsconfig: TsConfig,
+}
+
+/// Load `input_file` and every file it (transitively) imports from the
+/// filesystem, following tsconfig path-alias resolution.
+pub fn load_file_program(input_file: &str) -> Result<LoadedProgram, ConfTSError> {
+  load_file_program_with_overrides(input_file, &HashMap::new())
+}
+
+/// Same as `load_file_program`, but `overrides` (keyed by absolute file
+/// path) is checked before falling back to the filesystem for each file's
+/// source text — used to feed macro-transformed source back into the
+/// ordinary constants-only pipeline via `compile_transformed`.
+pub fn load_file_program_with_overrides(
   input_file: &str,
-  macro_mode: bool,
-  options: &CompileOptions,
-) -> Result<(Value, HashSet<String>), ConfTSError> {
+  overrides: &HashMap<String, String>,
+) -> Result<LoadedProgram, ConfTSError> {
   let input_path = Path::new(input_file);
   let abs_input = if input_path.is_absolute() {
     input_path.to_path_buf()
@@ -196,7 +224,7 @@ fn _compile(
     }
     loaded.insert(file_path.clone());
 
-    let ctx = load_file(&file_path)?;
+    let ctx = load_file(&file_path, overrides)?;
     for (_, import_info) in &ctx.imports {
       if let Some(resolved) = resolve_module(
         &import_info.source,
@@ -213,15 +241,25 @@ fn _compile(
     file_contexts.insert(file_path, ctx);
   }
 
-  let mut options_with_macro = options.clone();
-  options_with_macro.macro_mode = macro_mode;
+  Ok(LoadedProgram {
+    file_contexts,
+    entry_file: abs_input_str,
+    tsconfig_path,
+    tsconfig_dir,
+    tsconfig,
+  })
+}
 
+/// Build an `EvalContext` for `loaded`, wiring up its module resolver and
+/// eagerly collecting macro imports for every file (bookkeeping only —
+/// compiler-native's own compile paths never set `macro_evaluator`, so this
+/// map is only ever consulted by a downstream macro evaluator).
+pub fn create_eval_context(loaded: &LoadedProgram) -> EvalContext {
   let mut eval_ctx = EvalContext::new();
-  eval_ctx.file_contexts = file_contexts.clone();
+  eval_ctx.file_contexts = loaded.file_contexts.clone();
 
-  // Set up resolver closure
-  let tsconfig_dir_clone = tsconfig_dir.clone();
-  let tsconfig_for_resolver = tsconfig.clone();
+  let tsconfig_dir_clone = loaded.tsconfig_dir.clone();
+  let tsconfig_for_resolver = loaded.tsconfig.clone();
   eval_ctx.resolver = Some(Box::new(move |specifier: &str, from_file: &str| {
     resolve_module(
       specifier,
@@ -232,56 +270,86 @@ fn _compile(
     .map(|p| p.display().to_string())
   }));
 
-  // Collect macro imports
-  for (file_path, ctx) in &file_contexts {
+  for (file_path, ctx) in &loaded.file_contexts {
     let imports = collect_macro_imports(ctx.program(), file_path);
     eval_ctx
       .macro_imports_map
       .insert(file_path.clone(), imports);
   }
 
-  // Collect enums from all files
-  let file_paths: Vec<String> = file_contexts.keys().cloned().collect();
-  for file_path in &file_paths {
-    let ctx = file_contexts.get(file_path).unwrap().clone();
-    collect_enums(
-      ctx.program(),
-      file_path,
-      &mut eval_ctx,
-      &ctx,
-      &options_with_macro,
-    );
-  }
+  eval_ctx
+}
 
-  // Evaluate default export from entry file
-  let entry_ctx = file_contexts
-    .get(&abs_input_str)
+/// Run the enum-collection pass over every file in `loaded`.
+pub fn collect_enums_for_all(
+  loaded: &LoadedProgram,
+  eval_ctx: &mut EvalContext,
+  options: &CompileOptions,
+) {
+  let file_paths: Vec<String> = loaded.file_contexts.keys().cloned().collect();
+  for file_path in &file_paths {
+    let ctx = loaded.file_contexts.get(file_path).unwrap().clone();
+    collect_enums(ctx.program(), file_path, eval_ctx, &ctx, options);
+  }
+}
+
+fn compile_loaded(
+  loaded: &LoadedProgram,
+  format: &str,
+  options: &CompileOptions,
+  extra_dependencies: &[String],
+) -> Result<(String, Vec<String>), ConfTSError> {
+  let mut eval_ctx = create_eval_context(loaded);
+  collect_enums_for_all(loaded, &mut eval_ctx, options);
+
+  let entry_ctx = loaded
+    .file_contexts
+    .get(&loaded.entry_file)
     .ok_or_else(|| {
       ConfTSError::new(
-        format!("Entry file not found: {}", abs_input_str),
-        &abs_input_str,
+        format!("Entry file not found: {}", loaded.entry_file),
+        &loaded.entry_file,
         1,
         1,
       )
     })?
     .clone();
 
-  let output = find_default_export(&entry_ctx, &mut eval_ctx, &options_with_macro)?;
+  let output = find_default_export(&entry_ctx, &mut eval_ctx, options)?;
 
   eval_ctx
     .evaluated_files
-    .insert(tsconfig_path.display().to_string());
-  Ok((output, eval_ctx.evaluated_files))
+    .insert(loaded.tsconfig_path.display().to_string());
+  for dep in extra_dependencies {
+    eval_ctx.evaluated_files.insert(dep.clone());
+  }
+
+  let file_names: Vec<String> = eval_ctx.evaluated_files.into_iter().collect();
+  let serialized = serialize_output(&output, format)?;
+  Ok((serialized, file_names))
 }
 
-/// Public compile function matching the TS API.
+/// Public compile function matching the TS API. Always constants-only —
+/// compiler-native no longer evaluates macros itself; see
+/// @conf-ts/macro-transformer-native for macro pre-evaluation.
 pub fn compile(
   input_file: &str,
   format: &str,
   options: &CompileOptions,
 ) -> Result<(String, Vec<String>), ConfTSError> {
-  let (output, evaluated_files) = _compile(input_file, options.macro_mode, options)?;
-  let file_names: Vec<String> = evaluated_files.into_iter().collect();
-  let serialized = serialize_output(&output, format)?;
-  Ok((serialized, file_names))
+  let loaded = load_file_program(input_file)?;
+  compile_loaded(&loaded, format, options, &[])
+}
+
+/// Compile an entry file given a pre-computed macro `TransformResult`
+/// (`transformed.files` overrides the original source for whichever files
+/// had macro calls rewritten to literal source).
+pub fn compile_transformed(
+  input_file: &str,
+  format: &str,
+  transformed: &TransformResult,
+  options: &CompileOptions,
+) -> Result<(String, Vec<String>), ConfTSError> {
+  let loaded = load_file_program_with_overrides(input_file, &transformed.files)?;
+  compile_loaded(&loaded, format, options, &transformed.dependencies)
 }

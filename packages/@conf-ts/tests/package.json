@@ -19,7 +19,9 @@
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
-    "@conf-ts/compiler-native": "workspace:*"
+    "@conf-ts/compiler-native": "workspace:*",
+    "@conf-ts/macro-transformer": "workspace:*",
+    "@conf-ts/macro-transformer-native": "workspace:*"
   },
   "devDependencies": {
     "@conf-ts/expression": "workspace:*",

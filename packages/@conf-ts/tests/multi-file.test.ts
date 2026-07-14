@@ -10,6 +10,8 @@ import {
 } from '@conf-ts/compiler-native';
 import { describe, expect, it } from 'vitest';
 
+import { compileJsWithMacro, compileNativeWithMacro } from './test-utils';
+
 describe('Multi-file test', () => {
   it('should handle multiple file edits correctly', () => {
     const configPath = path.resolve(__dirname, 'fixtures/multi-file');
@@ -219,12 +221,12 @@ describe('Multi-file test', () => {
 
   it('should expand imported const and enum values in expr macro', () => {
     const configPath = path.resolve(__dirname, 'fixtures/multi-file');
-    const { output: resultJs } = compileJs(
+    const { output: resultJs } = compileJsWithMacro(
       path.join(configPath, 'expr-import.ts'),
       'json',
       { macroMode: true },
     );
-    const { output: resultNative } = compileNative(
+    const { output: resultNative } = compileNativeWithMacro(
       path.join(configPath, 'expr-import.ts'),
       'json',
       { macroMode: true },
@@ -244,7 +246,7 @@ describe('Multi-file test', () => {
     const { output: resultJs, dependencies: dependenciesJs } =
       compileInMemoryJs(files, '/index.ts', 'json', false);
     const { output: resultNative, dependencies: dependenciesNative } =
-      compileInMemoryNative(files, '/index.ts', 'json', false);
+      compileInMemoryNative(files, '/index.ts', 'json');
 
     expect(JSON.parse(resultJs)).toEqual({ name: 'default-config' });
     expect(JSON.parse(resultNative)).toEqual({ name: 'default-config' });

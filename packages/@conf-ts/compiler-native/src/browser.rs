@@ -1,23 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use oxc_ast::ast::*;
-
-use crate::compiler::parse_ts_file;
+use crate::compiler::{collect_enums, parse_ts_file};
 use crate::error::ConfTSError;
-use crate::eval::{
-  EvalContext, collect_imports, collect_macro_imports, evaluate, find_default_export,
-};
+use crate::eval::{EvalContext, collect_imports, collect_macro_imports, find_default_export};
 use crate::resolver::resolve_module_in_memory;
-use crate::types::{CompileOptions, FileContext, Value, serialize_output};
+use crate::types::{CompileOptions, FileContext, TransformResult, serialize_output};
 
-/// Compile from in-memory files (browser mode).
-pub fn compile_in_memory(
+/// Parse every `.ts`/`.tsx`/`.js`/`.jsx` file in `files` into a `FileContext`.
+/// Shared with @conf-ts/macro-transformer-native's in-memory transform path.
+pub fn build_file_contexts(
   files: &HashMap<String, String>,
-  entry_file: &str,
-  format: &str,
-  macro_mode: bool,
-  options: &CompileOptions,
-) -> Result<(String, Vec<String>), ConfTSError> {
+) -> Result<HashMap<String, FileContext>, ConfTSError> {
   let mut file_contexts: HashMap<String, FileContext> = HashMap::new();
   for (file_name, source) in files {
     if file_name.ends_with(".ts")
@@ -38,11 +31,16 @@ pub fn compile_in_memory(
       );
     }
   }
+  Ok(file_contexts)
+}
 
-  let effective_macro = options.macro_mode || macro_mode;
-  let mut effective_options = options.clone();
-  effective_options.macro_mode = effective_macro;
-
+/// Build an `EvalContext` for an in-memory file set, wiring up the
+/// in-memory module resolver and eagerly collecting macro imports. Shared
+/// with @conf-ts/macro-transformer-native's in-memory transform path.
+pub fn create_in_memory_eval_context(
+  files: &HashMap<String, String>,
+  file_contexts: &HashMap<String, FileContext>,
+) -> EvalContext {
   let mut eval_ctx = EvalContext::new();
   eval_ctx.file_contexts = file_contexts.clone();
 
@@ -51,76 +49,30 @@ pub fn compile_in_memory(
     resolve_module_in_memory(specifier, from_file, &files_clone)
   }));
 
-  for (file_path, ctx) in &file_contexts {
+  for (file_path, ctx) in file_contexts {
     let imports = collect_macro_imports(ctx.program(), file_path);
     eval_ctx
       .macro_imports_map
       .insert(file_path.clone(), imports);
   }
 
+  eval_ctx
+}
+
+fn compile_in_memory_impl(
+  files: &HashMap<String, String>,
+  entry_file: &str,
+  format: &str,
+  options: &CompileOptions,
+  extra_dependencies: &[String],
+) -> Result<(String, Vec<String>), ConfTSError> {
+  let file_contexts = build_file_contexts(files)?;
+  let mut eval_ctx = create_in_memory_eval_context(files, &file_contexts);
+
   let file_paths: Vec<String> = file_contexts.keys().cloned().collect();
   for file_path in &file_paths {
     let ctx = file_contexts.get(file_path).unwrap().clone();
-    for stmt in &ctx.program().body {
-      let decl = match stmt {
-        Statement::TSEnumDeclaration(e) => Some(e.as_ref()),
-        Statement::ExportNamedDeclaration(export) => {
-          if let Some(Declaration::TSEnumDeclaration(e)) = &export.declaration {
-            Some(e.as_ref())
-          } else {
-            None
-          }
-        }
-        _ => None,
-      };
-
-      if let Some(enum_decl) = decl {
-        let enum_name = enum_decl.id.name.as_str();
-        let mut next_enum_value: i64 = 0;
-
-        for member in &enum_decl.body.members {
-          let member_name = match &member.id {
-            TSEnumMemberName::Identifier(ident) => ident.name.as_str().to_string(),
-            TSEnumMemberName::String(s) => s.value.as_str().to_string(),
-            _ => continue,
-          };
-          let full_name = format!("{}.{}", enum_name, member_name);
-
-          if let Some(ref init) = member.initializer {
-            let mut enum_eval_files = HashSet::new();
-            std::mem::swap(&mut eval_ctx.evaluated_files, &mut enum_eval_files);
-            match evaluate(init, &ctx, &mut eval_ctx, None, &effective_options) {
-              Ok(val) => {
-                if let Value::Number(n) = &val {
-                  next_enum_value = n.value as i64 + 1;
-                }
-                eval_ctx
-                  .enum_map
-                  .entry(file_path.clone())
-                  .or_default()
-                  .insert(full_name, val);
-              }
-              Err(_) => {
-                eval_ctx
-                  .enum_map
-                  .entry(file_path.clone())
-                  .or_default()
-                  .insert(full_name, Value::number(next_enum_value as f64));
-                next_enum_value += 1;
-              }
-            }
-            std::mem::swap(&mut eval_ctx.evaluated_files, &mut enum_eval_files);
-          } else {
-            eval_ctx
-              .enum_map
-              .entry(file_path.clone())
-              .or_default()
-              .insert(full_name, Value::number(next_enum_value as f64));
-            next_enum_value += 1;
-          }
-        }
-      }
-    }
+    collect_enums(ctx.program(), file_path, &mut eval_ctx, &ctx, options);
   }
 
   let entry_ctx = file_contexts
@@ -135,9 +87,45 @@ pub fn compile_in_memory(
     })?
     .clone();
 
-  let output = find_default_export(&entry_ctx, &mut eval_ctx, &effective_options)?;
+  let output = find_default_export(&entry_ctx, &mut eval_ctx, options)?;
+
+  for dep in extra_dependencies {
+    eval_ctx.evaluated_files.insert(dep.clone());
+  }
 
   let file_names: Vec<String> = eval_ctx.evaluated_files.into_iter().collect();
   let serialized = serialize_output(&output, format)?;
   Ok((serialized, file_names))
+}
+
+/// Compile from in-memory files (browser mode). Always constants-only — see
+/// `compile_in_memory_transformed` for the macro pre-evaluation pipeline.
+pub fn compile_in_memory(
+  files: &HashMap<String, String>,
+  entry_file: &str,
+  format: &str,
+  options: &CompileOptions,
+) -> Result<(String, Vec<String>), ConfTSError> {
+  compile_in_memory_impl(files, entry_file, format, options, &[])
+}
+
+/// In-memory counterpart to `compiler::compile_transformed`: `transformed.files`
+/// is merged over `files` before building the program, then the ordinary
+/// constants-only pass runs.
+pub fn compile_in_memory_transformed(
+  files: &HashMap<String, String>,
+  entry_file: &str,
+  format: &str,
+  transformed: &TransformResult,
+  options: &CompileOptions,
+) -> Result<(String, Vec<String>), ConfTSError> {
+  let mut merged = files.clone();
+  merged.extend(transformed.files.clone());
+  compile_in_memory_impl(
+    &merged,
+    entry_file,
+    format,
+    options,
+    &transformed.dependencies,
+  )
 }

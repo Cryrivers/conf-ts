@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
+    "@conf-ts/macro-transformer": "workspace:*",
     "commander": "^15.0.0"
   },
   "devDependencies": {

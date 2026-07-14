@@ -1,4 +1,5 @@
 import { compile } from '@conf-ts/compiler';
+import { compile as compileWithMacro } from '@conf-ts/macro-transformer';
 import { Command } from 'commander';
 
 const program = new Command();
@@ -46,13 +47,15 @@ program
       ) {
         throw new Error('jsx-output must be a JSON object.');
       }
-      const { output: result } = compile(fileEntry, format, {
-        macroMode: macro,
+      const compileOptions = {
         preserveKeyOrder: preserveOrder,
         jsx,
         quote,
         jsxOutput: parsedJsxOutput,
-      });
+      };
+      const { output: result } = macro
+        ? compileWithMacro(fileEntry, format, compileOptions)
+        : compile(fileEntry, format, compileOptions);
       console.log(result);
     } catch (error: any) {
       console.error(`Error: ${error.message}`);

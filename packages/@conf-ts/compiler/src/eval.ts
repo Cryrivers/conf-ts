@@ -2,8 +2,10 @@ import ts from 'typescript';
 
 import { MACRO_FUNCTIONS } from './constants';
 import { ConfTSError } from './error';
-import { evaluateMacro } from './macro';
-import { CompileOptions, FormattedNumber } from './shared';
+import {
+  FormattedNumber,
+  type InternalEvaluationOptions as CompileOptions,
+} from './shared';
 
 type NormalizedJsxOutputOptions = {
   type: string;
@@ -1734,15 +1736,27 @@ export function evaluate(
       }
     }
     if (macro) {
-      return evaluateMacro(
-        expression,
-        sourceFile,
-        typeChecker,
-        enumMap,
-        macroImportsMap,
-        evaluatedFiles,
-        context,
-        options,
+      if (options?.evaluateCallExpression) {
+        return options.evaluateCallExpression(
+          expression,
+          sourceFile,
+          typeChecker,
+          enumMap,
+          macroImportsMap,
+          evaluatedFiles,
+          context,
+          options,
+        );
+      }
+      throw new ConfTSError(
+        'Internal error: macro mode requires an evaluateCallExpression hook',
+        {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(
+            sourceFile,
+            expression.getStart(),
+          ),
+        },
       );
     }
     const callee = expression.expression.getText(sourceFile);

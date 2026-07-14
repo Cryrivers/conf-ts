@@ -1,7 +1,7 @@
 {
-  "name": "@conf-ts/webpack-plugin",
+  "name": "@conf-ts/macro-transformer",
   "version": "0.0.12",
-  "description": "Webpack plugin for conf-ts",
+  "description": "Pre-evaluates conf-ts macros by rewriting source text, using the TypeScript compiler API.",
   "author": {
     "name": "Zhongliang Wang",
     "email": "hello@zhongliang.wang",
@@ -12,29 +12,29 @@
     "url": "https://github.com/Cryrivers/conf-ts"
   },
   "main": "dist/cjs/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/cjs/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
   "types": "dist/cjs/index.d.ts",
   "scripts": {
     "build": "pnpm run build:cjs",
     "build:cjs": "tsc -p tsconfig.cjs.json",
-    "test": "vitest run",
     "format": "prettier --write ."
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
-    "@conf-ts/macro-transformer": "workspace:*",
-    "piscina": "^5.2.0"
-  },
-  "optionalDependencies": {
-    "@conf-ts/compiler-native": "workspace:*",
-    "@conf-ts/macro-transformer-native": "workspace:*"
+    "@conf-ts/expr-core": "workspace:*",
+    "typescript": "^6.0.3"
   },
   "devDependencies": {
+    "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/node": "^26.1.1",
-    "@types/webpack": "^5.28.5",
     "prettier": "^3.9.5",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.10",
-    "webpack": "^5.108.4"
+    "vitest": "^4.1.10"
   }
 }

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
+use compiler_native::error::ConfTSError;
+use compiler_native::eval::{EvalContext, call_expr_callee_name, evaluate, get_location};
+use compiler_native::types::{CompileOptions, FileContext, QuoteStyle, Value};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
-
-use crate::error::ConfTSError;
-use crate::eval::{EvalContext, call_expr_callee_name, evaluate, get_location};
-use crate::types::{CompileOptions, FileContext, QuoteStyle, Value};
 
 /// Evaluate a macro call expression.
 pub fn evaluate_macro(
@@ -72,7 +71,7 @@ fn expect_expression_argument<'a>(
   })
 }
 
-// A call to one of the macro functions in crate::eval::MACRO_FUNCTIONS is
+// A call to one of the macro functions in compiler_native::eval::MACRO_FUNCTIONS is
 // inlineable inside an expr() callback body — except `expr` itself, since a
 // nested `expr(...)` call isn't a value expression — and only when it
 // doesn't touch the context parameter, since it must be resolvable entirely
@@ -86,7 +85,7 @@ fn is_inlineable_macro_call(
     Expression::Identifier(ident) => {
       let name = ident.name.as_str();
       name != "expr"
-        && crate::eval::MACRO_FUNCTIONS.contains(&name)
+        && compiler_native::eval::MACRO_FUNCTIONS.contains(&name)
         && check_macro_import(name, ctx, &file_ctx.file_path)
     }
     _ => false,
@@ -102,7 +101,7 @@ fn is_inlineable_macro_call(
 //
 // This must stay in sync with its two counterparts, since nothing enforces
 // agreement across the language/package boundary between them:
-//   - compiler/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
+//   - macro-transformer/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
 //   - expression/src/eval.ts: GLOBAL_BUILTINS (the runtime side backing
 //     these names — this compiler emits e.g. `Number(x)` as literal runtime
 //     call text, so @conf-ts/expression's evaluator must know how to
@@ -945,7 +944,7 @@ fn compact_expression_whitespace(source: &str) -> String {
   output
 }
 
-// Keep this in sync with @conf-ts/compiler/src/expression-rewrite.ts encodeStringLiteral.
+// Keep this in sync with @conf-ts/macro-transformer/src/expression-rewrite.ts encodeStringLiteral.
 fn encode_string_literal(value: &str, quote: QuoteStyle) -> String {
   let json = serde_json::to_string(value).unwrap();
   match quote {

@@ -1,13 +1,16 @@
 import path from 'path';
-import { compile as compileJs } from '@conf-ts/compiler';
 import expression from '@conf-ts/expression';
-import { describe, expect, it } from 'vitest';
-
 import {
   encodeStringLiteral,
   rewriteContextExpression,
-} from '../compiler/src/expression-rewrite';
-import { assertMacroError, assertMacroOutput } from './test-utils';
+} from '@conf-ts/macro-transformer';
+import { describe, expect, it } from 'vitest';
+
+import {
+  assertMacroError,
+  assertMacroOutput,
+  compileJsWithMacro,
+} from './test-utils';
 
 const callbackError =
   'expr callback must be an arrow function with a single identifier parameter and expression body';
@@ -80,7 +83,7 @@ describe('Expr Macro', () => {
   });
 
   it('should return output consumable by @conf-ts/expression', () => {
-    const result = compileJs(
+    const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-const.conf.ts'),
       'json',
       { macroMode: true },
@@ -92,7 +95,7 @@ describe('Expr Macro', () => {
   });
 
   it('should return single-quoted quote matrix output consumable by @conf-ts/expression', () => {
-    const result = compileJs(
+    const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-quote-single.conf.ts'),
       'json',
       { macroMode: true, quote: 'single' },
@@ -109,7 +112,7 @@ describe('Expr Macro', () => {
   });
 
   it('should fold a call whose argument only coincidentally shares text with the context parameter', () => {
-    const result = compileJs(
+    const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-macro.conf.ts'),
       'json',
       { macroMode: true },
@@ -125,7 +128,7 @@ describe('Expr Macro', () => {
   it('should keep String/Number/Boolean as a runtime call when they cannot be folded to a constant', () => {
     assertMacroOutput('expr-macro-runtime');
 
-    const result = compileJs(
+    const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-macro-runtime.conf.ts'),
       'json',
       { macroMode: true },

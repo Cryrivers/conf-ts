@@ -1,13 +1,16 @@
+import {
+  ConfTSError,
+  evaluate,
+  FormattedNumber,
+  MACRO_FUNCTIONS,
+  type QuoteStyle,
+} from '@conf-ts/compiler';
 import ts from 'typescript';
 
-import { MACRO_FUNCTIONS } from './constants';
-import { ConfTSError } from './error';
-import { evaluate } from './eval';
 import {
   encodeStringLiteral,
   rewriteContextExpression,
 } from './expression-rewrite';
-import { FormattedNumber, type QuoteStyle } from './shared';
 
 // Macro functions (other than `expr` itself) that can be called inside an
 // expr() callback body. A call to one of these is only inlineable when it
@@ -39,7 +42,7 @@ function isInlineableMacroCall(
 //
 // This set must stay in sync with its two counterparts, since nothing
 // enforces agreement across the language/package boundary between them:
-//   - compiler-native/src/macro_eval.rs: EXPR_RUNTIME_FALLBACK_MACROS
+//   - macro-transformer-native/src/macro_eval.rs: EXPR_RUNTIME_FALLBACK_MACROS
 //   - expression/src/eval.ts: GLOBAL_BUILTINS (the runtime side backing
 //     these names — the compiler emits e.g. `Number(x)` as literal runtime
 //     call text, so @conf-ts/expression's evaluator must know how to

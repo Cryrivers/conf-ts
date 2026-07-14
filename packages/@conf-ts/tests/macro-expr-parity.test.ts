@@ -1,8 +1,8 @@
 import path from 'path';
-import { compile as compileJs } from '@conf-ts/compiler';
-import { compile as compileNative } from '@conf-ts/compiler-native';
 import expression, { type Expr } from '@conf-ts/expression';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { compileJsWithMacro, compileNativeWithMacro } from './test-utils';
 
 type Env = Record<string, unknown>;
 type Outcome =
@@ -166,16 +166,18 @@ describe('expr runtime/compiler parity', () => {
 
     const file = path.resolve(__dirname, 'fixtures/macros/expr-parity.conf.ts');
     jsExpressions = JSON.parse(
-      compileJs(file, 'json', { macroMode: true }).output,
+      compileJsWithMacro(file, 'json', { macroMode: true }).output,
     );
     nativeExpressions = JSON.parse(
-      compileNative(file, 'json', { macroMode: true }).output,
+      compileNativeWithMacro(file, 'json', { macroMode: true }).output,
     );
     singleQuoteJsExpressions = JSON.parse(
-      compileJs(file, 'json', { macroMode: true, quote: 'single' }).output,
+      compileJsWithMacro(file, 'json', { macroMode: true, quote: 'single' })
+        .output,
     );
     singleQuoteNativeExpressions = JSON.parse(
-      compileNative(file, 'json', { macroMode: true, quote: 'single' }).output,
+      compileNativeWithMacro(file, 'json', { macroMode: true, quote: 'single' })
+        .output,
     );
   });
 

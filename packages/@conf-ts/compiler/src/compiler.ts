@@ -6,18 +6,19 @@ import { ConfTSError } from './error';
 import { evaluate } from './eval';
 import {
   CompileOptions,
+  EvaluationState,
   FormattedNumber,
   jsonStringify,
   orderedClone,
+  TransformResult,
   validateCompileOptions,
   validateMacroImports,
 } from './shared';
 
-function _compile(
-  inputFile: string,
-  macro: boolean,
-  options?: CompileOptions,
-): { output: object; evaluatedFiles: Set<string>; tsConfigPath: string } {
+function resolveProgramOptions(inputFile: string): {
+  tsConfigPath: string;
+  compilerOptions: ts.CompilerOptions;
+} {
   const tsConfigPath = ts.findConfigFile(inputFile, ts.sys.fileExists);
 
   if (!tsConfigPath) {
@@ -68,21 +69,67 @@ function _compile(
     );
   }
 
-  const program = ts.createProgram([inputFile], compilerOptions.options);
+  return { tsConfigPath, compilerOptions: compilerOptions.options };
+}
+
+/** Build a `ts.Program` for a config entry file from its nearest tsconfig.json. */
+export function createFileProgram(inputFile: string): {
+  program: ts.Program;
+  tsConfigPath: string;
+} {
+  const { tsConfigPath, compilerOptions } = resolveProgramOptions(inputFile);
+  const program = ts.createProgram([inputFile], compilerOptions);
+  return { program, tsConfigPath };
+}
+
+/** Build a `ts.Program` whose sources are the originals with `overrides` spliced in by filename. */
+function createFileProgramWithOverrides(
+  inputFile: string,
+  overrides: Record<string, string>,
+): { program: ts.Program; tsConfigPath: string } {
+  const { tsConfigPath, compilerOptions } = resolveProgramOptions(inputFile);
+  const host = ts.createCompilerHost(compilerOptions, true);
+  const originalGetSourceFile = host.getSourceFile.bind(host);
+  const originalReadFile = host.readFile.bind(host);
+  host.getSourceFile = (fileName, languageVersion, ...rest) => {
+    const overrideText = overrides[fileName];
+    if (overrideText !== undefined) {
+      return ts.createSourceFile(fileName, overrideText, languageVersion, true);
+    }
+    return originalGetSourceFile(fileName, languageVersion, ...rest);
+  };
+  host.readFile = fileName => {
+    const overrideText = overrides[fileName];
+    if (overrideText !== undefined) {
+      return overrideText;
+    }
+    return originalReadFile(fileName);
+  };
+  const program = ts.createProgram([inputFile], compilerOptions, host);
+  return { program, tsConfigPath };
+}
+
+/**
+ * Collect enum values and macro imports from every non-declaration file in
+ * `program`. This is the "first pass" shared by both the plain constant-only
+ * compile and the macro pre-evaluation transform.
+ */
+export function createEvaluationState(
+  program: ts.Program,
+  macro: boolean,
+  options?: CompileOptions,
+): EvaluationState {
   const typeChecker = program.getTypeChecker();
   const enumMap: { [filePath: string]: { [key: string]: any } } = {};
   const macroImportsMap: { [filePath: string]: Set<string> } = {};
-  let output: { [key: string]: any } = {};
   const evaluatedFiles: Set<string> = new Set();
   const enumEvaluatedFiles: Set<string> = new Set();
 
-  // First pass: collect enum values and macro imports from all files
   for (const sourceFile of program.getSourceFiles()) {
     if (sourceFile.isDeclarationFile) {
       continue;
     }
 
-    // Validate macro imports for this file
     macroImportsMap[sourceFile.fileName] = validateMacroImports(
       sourceFile,
       macro,
@@ -123,14 +170,54 @@ function _compile(
     });
   }
 
-  // Second pass: evaluate the default export from the entry file only
-  const entrySourceFile = program.getSourceFile(inputFile);
-  if (entrySourceFile) {
-    let foundDefaultExport = false;
-    ts.forEachChild(entrySourceFile, node => {
-      if (ts.isExportAssignment(node)) {
+  return { typeChecker, enumMap, macroImportsMap, evaluatedFiles };
+}
+
+/**
+ * Evaluate the entry file's default export ("second pass"), using the enum
+ * and macro-import bookkeeping already collected in `state`.
+ */
+export function evaluateDefaultExport(
+  program: ts.Program,
+  entryFile: string,
+  state: EvaluationState,
+  macro: boolean,
+  options?: CompileOptions,
+): object {
+  const { typeChecker, enumMap, macroImportsMap, evaluatedFiles } = state;
+  let output: { [key: string]: any } = {};
+
+  const entrySourceFile = program.getSourceFile(entryFile);
+  if (!entrySourceFile) {
+    return output;
+  }
+
+  let foundDefaultExport = false;
+  ts.forEachChild(entrySourceFile, node => {
+    if (ts.isExportAssignment(node)) {
+      output = evaluate(
+        node.expression,
+        entrySourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        macro,
+        evaluatedFiles,
+        undefined,
+        options,
+      );
+      foundDefaultExport = true;
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.exportClause &&
+      ts.isNamedExports(node.exportClause)
+    ) {
+      for (const specifier of node.exportClause.elements) {
+        if (specifier.name.text !== 'default') {
+          continue;
+        }
         output = evaluate(
-          node.expression,
+          specifier.propertyName || specifier.name,
           entrySourceFile,
           typeChecker,
           enumMap,
@@ -141,60 +228,31 @@ function _compile(
           options,
         );
         foundDefaultExport = true;
-      } else if (
-        ts.isExportDeclaration(node) &&
-        node.exportClause &&
-        ts.isNamedExports(node.exportClause)
-      ) {
-        for (const specifier of node.exportClause.elements) {
-          if (specifier.name.text !== 'default') {
-            continue;
-          }
-          output = evaluate(
-            specifier.propertyName || specifier.name,
-            entrySourceFile,
-            typeChecker,
-            enumMap,
-            macroImportsMap,
-            macro,
-            evaluatedFiles,
-            undefined,
-            options,
-          );
-          foundDefaultExport = true;
-          break;
-        }
+        break;
       }
-    });
-    if (!foundDefaultExport) {
-      throw new ConfTSError(
-        `No default export found in the entry file: ${entrySourceFile.fileName}`,
-        {
-          file: entrySourceFile.fileName,
-          line: 1,
-          character: 1,
-        },
-      );
     }
+  });
+
+  if (!foundDefaultExport) {
+    throw new ConfTSError(
+      `No default export found in the entry file: ${entrySourceFile.fileName}`,
+      {
+        file: entrySourceFile.fileName,
+        line: 1,
+        character: 1,
+      },
+    );
   }
 
-  return { output, evaluatedFiles, tsConfigPath };
+  return output;
 }
 
-export function compile(
-  inputFile: string,
+function serialize(
+  output: object,
   format: 'json' | 'yaml',
+  dependencies: string[],
   options?: CompileOptions,
-) {
-  validateCompileOptions(options);
-  const effectiveMacro = options?.macroMode ?? false;
-  const { output, evaluatedFiles, tsConfigPath } = _compile(
-    inputFile,
-    effectiveMacro,
-    options,
-  );
-  const fileNames = Array.from([tsConfigPath, ...evaluatedFiles]);
-
+): { output: string; dependencies: string[] } {
   const customTags = [
     {
       identify: (v: any) => v instanceof FormattedNumber,
@@ -209,19 +267,13 @@ export function compile(
     const jsonSource = options?.preserveKeyOrder
       ? jsonStringify(orderedClone(output), 2)
       : jsonStringify(output, 2);
-    return {
-      output: jsonSource,
-      dependencies: fileNames,
-    };
+    return { output: jsonSource, dependencies };
   } else if (format === 'yaml') {
-    const yamlOptions = {
-      customTags,
-      indentSeq: false,
-    };
+    const yamlOptions = { customTags, indentSeq: false };
     const yamlSource = options?.preserveKeyOrder
       ? yamlStringify(orderedClone(output), yamlOptions)
       : yamlStringify(output, yamlOptions);
-    return { output: yamlSource, dependencies: fileNames };
+    return { output: yamlSource, dependencies };
   } else {
     throw new ConfTSError(`Unsupported format: ${format}`, {
       file: 'unknown',
@@ -229,4 +281,61 @@ export function compile(
       character: 1,
     });
   }
+}
+
+export function compile(
+  inputFile: string,
+  format: 'json' | 'yaml',
+  options?: CompileOptions,
+) {
+  validateCompileOptions(options);
+  const macro = options?.macroMode ?? false;
+  const { program, tsConfigPath } = createFileProgram(inputFile);
+  const state = createEvaluationState(program, macro, options);
+  const output = evaluateDefaultExport(
+    program,
+    inputFile,
+    state,
+    macro,
+    options,
+  );
+  const fileNames = Array.from(
+    new Set([tsConfigPath, ...state.evaluatedFiles]),
+  );
+  return serialize(output, format, fileNames, options);
+}
+
+/**
+ * Compile an entry file given a pre-computed macro `TransformResult`
+ * (`transformed.files` overrides the original source for whichever files had
+ * macro calls rewritten to literal source). Always runs constants-only —
+ * macros are expected to already be gone from the rewritten text.
+ */
+export function compileTransformed(
+  inputFile: string,
+  format: 'json' | 'yaml',
+  transformed: TransformResult,
+  options?: CompileOptions,
+) {
+  validateCompileOptions(options);
+  const { program, tsConfigPath } = createFileProgramWithOverrides(
+    inputFile,
+    transformed.files,
+  );
+  const state = createEvaluationState(program, false, options);
+  const output = evaluateDefaultExport(
+    program,
+    inputFile,
+    state,
+    false,
+    options,
+  );
+  const fileNames = Array.from(
+    new Set([
+      tsConfigPath,
+      ...transformed.dependencies,
+      ...state.evaluatedFiles,
+    ]),
+  );
+  return serialize(output, format, fileNames, options);
 }

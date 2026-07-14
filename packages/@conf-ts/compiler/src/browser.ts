@@ -1,16 +1,17 @@
 import ts from 'typescript';
 import { stringify as yamlStringify } from 'yaml';
 
+import { createEvaluationState, evaluateDefaultExport } from './compiler';
 import { ConfTSError } from './error';
-import { evaluate } from './eval';
 import {
   CompileOptions,
   orderedClone,
+  TransformResult,
   validateCompileOptions,
-  validateMacroImports,
+  type InMemoryFiles,
 } from './shared';
 
-export type InMemoryFiles = { [fileName: string]: string };
+export type { InMemoryFiles };
 
 function createInMemoryCompilerHost(
   files: InMemoryFiles,
@@ -38,129 +39,9 @@ function createInMemoryCompilerHost(
   return host;
 }
 
-function compileWithProgram(
-  program: ts.Program,
-  entryFile: string,
-  macro: boolean,
-  options?: CompileOptions,
-): { output: object; evaluatedFiles: Set<string> } {
-  const typeChecker = program.getTypeChecker();
-  const enumMap: { [filePath: string]: { [key: string]: any } } = {};
-  const macroImportsMap: { [filePath: string]: Set<string> } = {};
-  let output: { [key: string]: any } = {};
-  const evaluatedFiles: Set<string> = new Set();
-  const enumEvaluatedFiles: Set<string> = new Set();
-
-  for (const sourceFile of program.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile) {
-      continue;
-    }
-    macroImportsMap[sourceFile.fileName] = validateMacroImports(
-      sourceFile,
-      macro,
-    );
-
-    ts.forEachChild(sourceFile, node => {
-      if (ts.isEnumDeclaration(node)) {
-        let nextEnumValue = 0;
-        node.members.forEach(member => {
-          const enumName = node.name.getText(sourceFile);
-          const memberName = member.name.getText(sourceFile);
-          const fullEnumMemberName = `${enumName}.${memberName}`;
-          if (!enumMap[sourceFile.fileName]) {
-            enumMap[sourceFile.fileName] = {};
-          }
-          if (member.initializer) {
-            const value = evaluate(
-              member.initializer,
-              sourceFile,
-              typeChecker,
-              enumMap,
-              macroImportsMap,
-              macro,
-              enumEvaluatedFiles,
-              undefined,
-              options,
-            );
-            enumMap[sourceFile.fileName][fullEnumMemberName] = value;
-            if (typeof value === 'number') {
-              nextEnumValue = value + 1;
-            }
-          } else {
-            enumMap[sourceFile.fileName][fullEnumMemberName] = nextEnumValue;
-            nextEnumValue++;
-          }
-        });
-      }
-    });
-  }
-
-  const entrySourceFile = program.getSourceFile(entryFile);
-  if (entrySourceFile) {
-    let foundDefaultExport = false;
-    ts.forEachChild(entrySourceFile, node => {
-      if (ts.isExportAssignment(node)) {
-        output = evaluate(
-          node.expression,
-          entrySourceFile,
-          program.getTypeChecker(),
-          enumMap,
-          macroImportsMap,
-          macro,
-          evaluatedFiles,
-          undefined,
-          options,
-        );
-        foundDefaultExport = true;
-      } else if (
-        ts.isExportDeclaration(node) &&
-        node.exportClause &&
-        ts.isNamedExports(node.exportClause)
-      ) {
-        for (const specifier of node.exportClause.elements) {
-          if (specifier.name.text !== 'default') {
-            continue;
-          }
-          output = evaluate(
-            specifier.propertyName || specifier.name,
-            entrySourceFile,
-            program.getTypeChecker(),
-            enumMap,
-            macroImportsMap,
-            macro,
-            evaluatedFiles,
-            undefined,
-            options,
-          );
-          foundDefaultExport = true;
-          break;
-        }
-      }
-    });
-    if (!foundDefaultExport) {
-      throw new ConfTSError(
-        `No default export found in the entry file: ${entrySourceFile.fileName}`,
-        {
-          file: entrySourceFile.fileName,
-          line: 1,
-          character: 1,
-        },
-      );
-    }
-  }
-
-  return { output, evaluatedFiles };
-}
-
-export function compileInMemory(
-  files: InMemoryFiles,
-  entryFile: string,
-  format: 'json' | 'yaml',
-  macroMode: boolean,
-  tsconfig?: { compilerOptions?: ts.CompilerOptions },
-  options?: CompileOptions,
-) {
-  validateCompileOptions(options);
+function resolveInMemoryCompilerOptions(tsconfig?: {
+  compilerOptions?: ts.CompilerOptions;
+}): ts.CompilerOptions {
   const defaultOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
     module: ts.ModuleKind.ESNext,
@@ -175,11 +56,19 @@ export function compileInMemory(
     jsx: ts.JsxEmit.ReactJSX,
   };
 
-  const optionsTs: ts.CompilerOptions = {
+  return {
     ...defaultOptions,
     ...(tsconfig?.compilerOptions || {}),
   };
+}
 
+/** Build an in-memory `ts.Program` from a virtual file map. */
+export function createInMemoryProgram(
+  files: InMemoryFiles,
+  entryFile: string,
+  tsconfig?: { compilerOptions?: ts.CompilerOptions },
+): ts.Program {
+  const optionsTs = resolveInMemoryCompilerOptions(tsconfig);
   const host = createInMemoryCompilerHost(files, optionsTs);
 
   const isTsLike = (name: string) => /\.(tsx?|jsx?)$/i.test(name);
@@ -187,26 +76,25 @@ export function compileInMemory(
     new Set<string>([...Object.keys(files).filter(isTsLike), entryFile]),
   );
 
-  const program = ts.createProgram(rootNames, optionsTs, host);
+  return ts.createProgram(rootNames, optionsTs, host);
+}
 
-  const { output, evaluatedFiles } = compileWithProgram(
-    program,
-    entryFile,
-    options?.macroMode ?? macroMode,
-    options,
-  );
-  const fileNames = Array.from(evaluatedFiles);
-
+function serialize(
+  output: object,
+  format: 'json' | 'yaml',
+  dependencies: string[],
+  options?: CompileOptions,
+): { output: string; dependencies: string[] } {
   if (format === 'json') {
     const jsonSource = options?.preserveKeyOrder
       ? JSON.stringify(orderedClone(output), null, 2)
       : JSON.stringify(output, null, 2);
-    return { output: jsonSource, dependencies: fileNames };
+    return { output: jsonSource, dependencies };
   } else if (format === 'yaml') {
     const yamlSource = options?.preserveKeyOrder
       ? yamlStringify(orderedClone(output), { indentSeq: false })
       : yamlStringify(output, { indentSeq: false });
-    return { output: yamlSource, dependencies: fileNames };
+    return { output: yamlSource, dependencies };
   } else {
     throw new ConfTSError(`Unsupported format: ${format}`, {
       file: 'unknown',
@@ -214,4 +102,57 @@ export function compileInMemory(
       character: 1,
     });
   }
+}
+
+export function compileInMemory(
+  files: InMemoryFiles,
+  entryFile: string,
+  format: 'json' | 'yaml',
+  macroMode: boolean,
+  tsconfig?: { compilerOptions?: ts.CompilerOptions },
+  options?: CompileOptions,
+) {
+  validateCompileOptions(options);
+  const macro = options?.macroMode ?? macroMode;
+  const program = createInMemoryProgram(files, entryFile, tsconfig);
+  const state = createEvaluationState(program, macro, options);
+  const output = evaluateDefaultExport(
+    program,
+    entryFile,
+    state,
+    macro,
+    options,
+  );
+  const fileNames = Array.from(state.evaluatedFiles);
+  return serialize(output, format, fileNames, options);
+}
+
+/**
+ * In-memory counterpart to `compileTransformed`: `transformed.files` is
+ * spread over `files` before building the program, then the ordinary
+ * constants-only pass runs.
+ */
+export function compileInMemoryTransformed(
+  files: InMemoryFiles,
+  entryFile: string,
+  format: 'json' | 'yaml',
+  transformed: TransformResult,
+  tsconfig?: { compilerOptions?: ts.CompilerOptions },
+  options?: CompileOptions,
+) {
+  validateCompileOptions(options);
+  const mergedFiles: InMemoryFiles = { ...files, ...transformed.files };
+  const program = createInMemoryProgram(mergedFiles, entryFile, tsconfig);
+  const state = createEvaluationState(program, false, options);
+  const output = evaluateDefaultExport(
+    program,
+    entryFile,
+    state,
+    false,
+    options,
+  );
+  const fileNames = Array.from(
+    new Set([...transformed.dependencies, ...state.evaluatedFiles]),
+  );
+  return serialize(output, format, fileNames, options);
 }

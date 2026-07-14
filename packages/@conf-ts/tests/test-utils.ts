@@ -1,8 +1,53 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { compile as compileJs, type CompileOptions } from '@conf-ts/compiler';
+import {
+  compile as compileJs,
+  compileTransformed,
+  type CompileOptions,
+} from '@conf-ts/compiler';
 import { compile as compileNative } from '@conf-ts/compiler-native';
+import { transformMacros } from '@conf-ts/macro-transformer';
+import { compile as compileNativeMacro } from '@conf-ts/macro-transformer-native';
 import { expect } from 'vitest';
+
+/**
+ * @conf-ts/compiler no longer evaluates macros itself: when `macroMode` is
+ * requested, macros must be pre-evaluated by @conf-ts/macro-transformer
+ * first, then the rewritten source is compiled with the ordinary
+ * constants-only pipeline via `compileTransformed`.
+ */
+export function compileJsWithMacro(
+  inputFilePath: string,
+  format: 'json' | 'yaml',
+  options?: CompileOptions,
+) {
+  if (options?.macroMode) {
+    return compileTransformed(
+      inputFilePath,
+      format,
+      transformMacros(inputFilePath, options),
+      options,
+    );
+  }
+  return compileJs(inputFilePath, format, options);
+}
+
+/**
+ * Native counterpart to `compileJsWithMacro`: @conf-ts/compiler-native no
+ * longer evaluates macros itself either, so macro-mode compiles route
+ * through @conf-ts/macro-transformer-native's own transform+compile
+ * convenience wrapper instead.
+ */
+export function compileNativeWithMacro(
+  inputFilePath: string,
+  format: 'json' | 'yaml',
+  options?: CompileOptions,
+) {
+  if (options?.macroMode) {
+    return compileNativeMacro(inputFilePath, format, options);
+  }
+  return compileNative(inputFilePath, format, options);
+}
 
 const FIXTURES_DIR = path.resolve(__dirname, 'fixtures');
 const SPEC_DIR = path.join(FIXTURES_DIR, 'specs');
@@ -28,14 +73,22 @@ function assertOutput(
     'utf-8',
   );
 
-  const { output: jsonResultJs } = compileJs(inputFilePath, 'json', options);
-  const { output: yamlResultJs } = compileJs(inputFilePath, 'yaml', options);
-  const { output: jsonResultNative } = compileNative(
+  const { output: jsonResultJs } = compileJsWithMacro(
     inputFilePath,
     'json',
     options,
   );
-  const { output: yamlResultNative } = compileNative(
+  const { output: yamlResultJs } = compileJsWithMacro(
+    inputFilePath,
+    'yaml',
+    options,
+  );
+  const { output: jsonResultNative } = compileNativeWithMacro(
+    inputFilePath,
+    'json',
+    options,
+  );
+  const { output: yamlResultNative } = compileNativeWithMacro(
     inputFilePath,
     'yaml',
     options,
@@ -54,10 +107,10 @@ function assertError(
   suffix: string = '.conf.ts',
 ) {
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
-  expect(() => compileJs(inputFilePath, 'json', options)).toThrow(
+  expect(() => compileJsWithMacro(inputFilePath, 'json', options)).toThrow(
     expectedError,
   );
-  expect(() => compileNative(inputFilePath, 'json', options)).toThrow(
+  expect(() => compileNativeWithMacro(inputFilePath, 'json', options)).toThrow(
     expectedError,
   );
 }

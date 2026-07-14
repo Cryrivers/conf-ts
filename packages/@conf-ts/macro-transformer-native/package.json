@@ -1,0 +1,53 @@
+{
+  "name": "@conf-ts/macro-transformer-native",
+  "version": "0.0.12",
+  "description": "Pre-evaluates conf-ts macros by rewriting source text, using the oxc API.",
+  "author": {
+    "name": "Zhongliang Wang",
+    "email": "hello@zhongliang.wang",
+    "url": "https://zhongliang.wang"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cryrivers/conf-ts"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.d.ts",
+    "index.js"
+  ],
+  "napi": {
+    "binaryName": "macro-transformer-native",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin"
+    ]
+  },
+  "engines": {
+    "node": ">= 12.22.0 < 13 || >= 14.17.0 < 15 || >= 15.12.0 < 16 || >= 16.0.0"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "format:prettier": "prettier . -w && cargo fmt && taplo format",
+    "lint": "oxlint .",
+    "prepublishOnly": "napi prepublish -t npm -p ../../native-bindings",
+    "preversion": "napi build --platform && git add .",
+    "version": "napi version"
+  },
+  "dependencies": {
+    "@napi-rs/cli": "^3.7.3"
+  },
+  "devDependencies": {
+    "@conf-ts/compiler": "workspace:*",
+    "@conf-ts/compiler-native": "workspace:*",
+    "@conf-ts/macro": "workspace:*",
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "@types/node": "^26.1.1",
+    "oxlint": "^1.73.0",
+    "prettier": "^3.9.5",
+    "vitest": "^4.1.10"
+  }
+}

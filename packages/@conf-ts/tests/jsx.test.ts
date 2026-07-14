@@ -118,8 +118,7 @@ describe('JSX Test', () => {
     ).toEqual(expected);
     expect(
       JSON.parse(
-        compileInMemoryNative(files, '/index.conf.tsx', 'json', false, options)
-          .output,
+        compileInMemoryNative(files, '/index.conf.tsx', 'json', options).output,
       ),
     ).toEqual(expected);
   });
@@ -141,7 +140,7 @@ describe('JSX Test', () => {
       ),
     ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
     expect(() =>
-      compileInMemoryNative(files, '/index.conf.tsx', 'json', false, options),
+      compileInMemoryNative(files, '/index.conf.tsx', 'json', options),
     ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
   });
 });
