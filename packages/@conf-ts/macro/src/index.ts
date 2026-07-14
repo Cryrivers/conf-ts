@@ -4,7 +4,7 @@ console.warn(
   '@conf-ts/macro has been imported. This package is intended for compile-time macro expansion and should not be directly imported into runtime code.',
 );
 
-export type { Expr, RuntimeEnv } from '@conf-ts/expression';
+export type { Expr, LooseExpr, RuntimeEnv } from '@conf-ts/expression';
 
 function macroNotTransformed(name: string): never {
   throw new Error(

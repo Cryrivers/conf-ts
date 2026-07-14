@@ -269,9 +269,35 @@ const calculate = expression('subtotal * (1 + taxRate)');
 calculate({ subtotal: 100, taxRate: 0.08 }); // 108
 ```
 
-Pass `expression(source, { optionalMemberAccess: true })` to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
+Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
 
-Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode. Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
+Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
+
+#### `LooseExpr`: omitting `?.` for deeply optional context types
+
+`LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr<Context, ReturnType>`. When a `Context` has nested optional properties (e.g. `{ a?: { b?: { c?: number } } }`), annotating an `expr(...)` result as `LooseExpr` presents the callback with a deeply-required view of `Context`, so the body can be written without `?.` at every level:
+
+```ts
+import { expr, type LooseExpr } from '@conf-ts/macro';
+
+type Context = { a?: { b?: { c?: number } } };
+
+// No `?.` needed: LooseExpr contextually types `ctx` as deeply required.
+const check: LooseExpr<Context, number | boolean> = expr(
+  ctx => ctx.a.b.c || true,
+);
+```
+
+`LooseContext` also recurses into array element types, so indexed access through an array of optional-field objects (`ctx.a[0].b.c`) works the same way — both at the type level and at runtime, since `optionalMemberAccess`/`loose: true` already short-circuits `a[b][c]`-style bracket access exactly like `a.b.c` (bracket vs. dot access aren't distinguished). Tuple element positions aren't preserved through `LooseContext`, since indexed access can't recover which tuple slot was read anyway.
+
+`expr()`'s compile-time behavior is unchanged — the macro already treats `ctx.a.b.c` as a plain property chain, which is exactly what `optionalMemberAccess`/`loose: true` needs at runtime. Because of that, `LooseExpr` values must be evaluated with `optionalMemberAccess: true` (or `loose: true`); `expression()` only accepts a `LooseExpr` argument when one of those is set, and otherwise falls back to a `Compiled` function that requires the deeply-required shape (matching the fact that, without the option, a missing property really does throw):
+
+```ts
+import expression from '@conf-ts/expression';
+
+const compiled = expression(check, { loose: true });
+compiled({}); // fine: `a` is optional in the original Context
+```
 
 ### Runtime expression syntax
 

@@ -7,7 +7,7 @@ import {
 } from '@conf-ts/expr-core';
 
 import { evaluate, type EvalOptions } from './eval';
-import type { Expr, ExpressionOptions, RuntimeEnv } from './types';
+import type { Expr, ExpressionOptions, LooseExpr, RuntimeEnv } from './types';
 
 type Compiled<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown> = (
   env: Context,
@@ -41,7 +41,14 @@ function cacheGet(key: string): Compiled | undefined {
   return value;
 }
 
-function expression(expr: string, options?: ExpressionOptions): Compiled;
+function expression<
+  Context extends RuntimeEnv = RuntimeEnv,
+  ReturnType = unknown,
+>(
+  expr: LooseExpr<Context, ReturnType>,
+  options: ExpressionOptions &
+    ({ optionalMemberAccess: true } | { loose: true }),
+): Compiled<Context, ReturnType>;
 function expression<
   Context extends RuntimeEnv = RuntimeEnv,
   ReturnType = unknown,
@@ -49,6 +56,7 @@ function expression<
   expr: Expr<Context, ReturnType>,
   options?: ExpressionOptions,
 ): Compiled<Context, ReturnType>;
+function expression(expr: string, options?: ExpressionOptions): Compiled;
 function expression<
   Context extends RuntimeEnv = RuntimeEnv,
   ReturnType = unknown,
@@ -60,7 +68,8 @@ function expression<
     throw new Error(formatInvalid());
   }
 
-  const optionalMemberAccess = options?.optionalMemberAccess === true;
+  const optionalMemberAccess =
+    options?.optionalMemberAccess === true || options?.loose === true;
   const evalOptions: EvalOptions | undefined = optionalMemberAccess
     ? { optionalMemberAccess: true }
     : undefined;
@@ -104,4 +113,4 @@ function expression<
 }
 
 export default expression;
-export type { ExpressionOptions, Expr, RuntimeEnv };
+export type { Expr, ExpressionOptions, LooseExpr, RuntimeEnv };
