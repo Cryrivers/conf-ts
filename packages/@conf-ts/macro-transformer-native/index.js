@@ -587,7 +587,4 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
-module.exports.compile = nativeBinding.compile
-module.exports.compileInMemory = nativeBinding.compileInMemory
-module.exports.transformMacros = nativeBinding.transformMacros
-module.exports.transformMacrosInMemory = nativeBinding.transformMacrosInMemory
+module.exports.transform = nativeBinding.transform

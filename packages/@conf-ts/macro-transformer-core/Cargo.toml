@@ -1,0 +1,22 @@
+[package]
+name = "macro_transformer_core"
+version = "0.0.12"
+edition = "2024"
+publish = false
+
+[dependencies]
+compiler_native = { path = "../compiler-native", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+swc_core = { version = "=73.0.0", features = [
+  "common_sourcemap",
+  "ecma_ast",
+  "ecma_codegen",
+  "ecma_parser_typescript",
+  "ecma_transforms",
+  "ecma_visit",
+] }
+swc_sourcemap = "=10.0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(swc_ast_unknown)"] }

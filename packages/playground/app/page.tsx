@@ -95,15 +95,37 @@ function PageContent() {
   const compile = useCallback(async () => {
     setError(null);
     try {
-      const { compileInMemory } = await import('@conf-ts/compiler/browser');
-      const compiled = compileInMemory(
-        files,
-        filePath,
-        format,
-        macro,
-        undefined,
-        { env: { NODE_ENV: 'production' }, jsx: true, jsxOutput },
-      );
+      const [{ compileInMemory }, { transform }] = await Promise.all([
+        import('@conf-ts/compiler-native/browser'),
+        import('@conf-ts/macro-transformer-native/browser'),
+      ]);
+      const compileFiles = macro
+        ? {
+            ...files,
+            [filePath]: transform(
+              {
+                filename: filePath,
+                code: input,
+                project: {
+                  files,
+                  entryFiles: [filePath],
+                  dependencies: [filePath],
+                },
+              },
+              {
+                env: { NODE_ENV: 'production' },
+                jsx: true,
+                jsxOutput,
+              },
+            ).code,
+          }
+        : files;
+      const compileFormat = (outputFormat: 'json' | 'yaml') =>
+        compileInMemory(compileFiles, filePath, outputFormat, undefined, {
+          jsx: true,
+          jsxOutput,
+        });
+      const compiled = compileFormat(format);
 
       let parsedOutput = null;
       try {
@@ -111,14 +133,7 @@ function PageContent() {
           parsedOutput = JSON.parse(compiled.output);
         } else {
           // Always compile to JSON for validation if we're not in JSON mode
-          const jsonCompiled = compileInMemory(
-            files,
-            filePath,
-            'json',
-            macro,
-            undefined,
-            { env: { NODE_ENV: 'production' }, jsx: true, jsxOutput },
-          );
+          const jsonCompiled = compileFormat('json');
           parsedOutput = JSON.parse(jsonCompiled.output);
         }
       } catch (e) {
@@ -137,7 +152,7 @@ function PageContent() {
       setError(e?.toString?.() ?? String(e));
       setIsStepComplete(false);
     }
-  }, [files, format, macro, jsxOutput, currentStep, input]);
+  }, [files, filePath, format, macro, jsxOutput, currentStep, input]);
 
   useEffect(() => {
     void compile();

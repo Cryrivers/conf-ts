@@ -22,12 +22,13 @@
   "types": "dist/cjs/index.d.ts",
   "scripts": {
     "build": "pnpm run build:cjs",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.cjs.json",
     "format": "prettier --write ."
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
     "@conf-ts/expr-core": "workspace:*",
+    "magic-string": "^0.30.21",
     "typescript": "^6.0.3"
   },
   "devDependencies": {

@@ -18,7 +18,8 @@
     "format": "prettier --write ."
   },
   "dependencies": {
-    "@conf-ts/compiler": "workspace:*",
+    "@conf-ts/compiler-native": "workspace:*",
+    "@conf-ts/macro-transformer-native": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@shikijs/monaco": "^4.3.1",
     "clsx": "^2.1.1",

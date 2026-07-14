@@ -1,23 +1,20 @@
-import {
-  ConfTSError,
-  evaluate,
-  FormattedNumber,
-  MACRO_FUNCTIONS,
-  type QuoteStyle,
-} from '@conf-ts/compiler';
+import { ConfTSError, FormattedNumber } from '@conf-ts/compiler';
+import { evaluate } from '@conf-ts/compiler/internal';
 import ts from 'typescript';
 
 import {
   encodeStringLiteral,
   rewriteContextExpression,
 } from './expression-rewrite';
+import { MACRO_FUNCTION_NAMES } from './macro-names';
+import type { MacroEvaluationOptions, QuoteStyle } from './types';
 
 // Macro functions (other than `expr` itself) that can be called inside an
 // expr() callback body. A call to one of these is only inlineable when it
 // doesn't touch the context parameter, since it must be resolvable entirely
 // at compile time.
 const EXPR_INLINEABLE_MACROS = new Set<string>(
-  MACRO_FUNCTIONS.filter(name => name !== 'expr'),
+  MACRO_FUNCTION_NAMES.filter(name => name !== 'expr'),
 );
 
 function isInlineableMacroCall(
@@ -42,7 +39,7 @@ function isInlineableMacroCall(
 //
 // This set must stay in sync with its two counterparts, since nothing
 // enforces agreement across the language/package boundary between them:
-//   - macro-transformer-native/src/macro_eval.rs: EXPR_RUNTIME_FALLBACK_MACROS
+//   - macro-transformer-core/src/lib.rs: runtime fallback macro matching
 //   - expression/src/eval.ts: GLOBAL_BUILTINS (the runtime side backing
 //     these names — the compiler emits e.g. `Number(x)` as literal runtime
 //     call text, so @conf-ts/expression's evaluator must know how to
@@ -88,11 +85,7 @@ function referencesContextParam(node: ts.Node, paramName: string): boolean {
   );
 }
 
-type MacroOptions = {
-  preserveKeyOrder?: boolean;
-  env?: Record<string, string>;
-  quote?: QuoteStyle;
-};
+type MacroOptions = MacroEvaluationOptions & { quote?: QuoteStyle };
 
 type ExprReplacement = [start: number, end: number, value: string];
 
@@ -1000,8 +993,9 @@ export function evaluateMacro(
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
   options?: MacroOptions,
+  importedName?: string,
 ): any {
-  const callee = getCalleeName(expression, sourceFile);
+  const callee = importedName ?? getCalleeName(expression, sourceFile);
 
   const handlers = [
     () =>

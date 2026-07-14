@@ -1,5 +1,4 @@
-# Shared Cargo workspace build output for compiler-native + macro-transformer-native
-# (see ./Cargo.toml). Matches the existing convention in each crate's own
-# .gitignore, which also excludes /target and Cargo.lock.
+# Shared build output for compiler-native, macro-transformer-core,
+# macro-transformer-native, and swc-plugin. Cargo.lock is intentionally
+# committed at this workspace root so all SWC entry points stay in sync.
 /target
-/Cargo.lock

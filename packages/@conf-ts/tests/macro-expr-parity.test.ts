@@ -166,17 +166,16 @@ describe('expr runtime/compiler parity', () => {
 
     const file = path.resolve(__dirname, 'fixtures/macros/expr-parity.conf.ts');
     jsExpressions = JSON.parse(
-      compileJsWithMacro(file, 'json', { macroMode: true }).output,
+      compileJsWithMacro(file, 'json', { macro: true }).output,
     );
     nativeExpressions = JSON.parse(
-      compileNativeWithMacro(file, 'json', { macroMode: true }).output,
+      compileNativeWithMacro(file, 'json', { macro: true }).output,
     );
     singleQuoteJsExpressions = JSON.parse(
-      compileJsWithMacro(file, 'json', { macroMode: true, quote: 'single' })
-        .output,
+      compileJsWithMacro(file, 'json', { macro: true, quote: 'single' }).output,
     );
     singleQuoteNativeExpressions = JSON.parse(
-      compileNativeWithMacro(file, 'json', { macroMode: true, quote: 'single' })
+      compileNativeWithMacro(file, 'json', { macro: true, quote: 'single' })
         .output,
     );
   });

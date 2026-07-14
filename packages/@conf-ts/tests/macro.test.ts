@@ -51,7 +51,7 @@ describe('Macro Test', () => {
       compileJsWithMacro(
         path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
         'json',
-        { macroMode: true },
+        { macro: true },
       );
     }).toThrow(
       "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
@@ -60,7 +60,7 @@ describe('Macro Test', () => {
       compileNativeWithMacro(
         path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
         'json',
-        { macroMode: true },
+        { macro: true },
       );
     }).toThrow(
       "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
@@ -72,7 +72,7 @@ describe('Macro Test', () => {
       compileJsWithMacro(
         path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
         'json',
-        { macroMode: true },
+        { macro: true },
       );
     }).toThrow(
       "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",
@@ -81,7 +81,7 @@ describe('Macro Test', () => {
       compileNativeWithMacro(
         path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
         'json',
-        { macroMode: true },
+        { macro: true },
       );
     }).toThrow(
       "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",

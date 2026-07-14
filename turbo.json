@@ -3,7 +3,19 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "target/**", "*.node"]
+      "outputs": [
+        "dist/**",
+        ".next/**",
+        "target/**",
+        "*.node",
+        "*.wasm",
+        "*.wasi.cjs",
+        "*.wasi-browser.js",
+        "browser.js",
+        "wasi-worker*.mjs",
+        "index.js",
+        "index.d.ts"
+      ]
     },
     "test": {
       "dependsOn": ["build"],

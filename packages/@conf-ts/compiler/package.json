@@ -22,12 +22,17 @@
       "types": "./dist/cjs/browser.d.ts",
       "import": "./dist/cjs/browser.js",
       "require": "./dist/cjs/browser.js"
+    },
+    "./internal": {
+      "types": "./dist/cjs/internal.d.ts",
+      "import": "./dist/cjs/internal.js",
+      "require": "./dist/cjs/internal.js"
     }
   },
   "types": "dist/cjs/index.d.ts",
   "scripts": {
     "build": "pnpm run build:cjs",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.cjs.json",
     "format": "prettier --write ."
   },
   "dependencies": {
@@ -36,7 +41,6 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/node": "^26.1.1",
     "prettier": "^3.9.5",

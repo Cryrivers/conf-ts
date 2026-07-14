@@ -1,25 +1,12 @@
-export {
-  compile,
-  compileTransformed,
-  createEvaluationState,
-  createFileProgram,
-  evaluateDefaultExport,
-} from './compiler';
-export {
-  compileInMemory,
-  compileInMemoryTransformed,
-  createInMemoryProgram,
-} from './browser';
-export { evaluate } from './eval';
+export { compile } from './compiler';
+export { compileInMemory } from './browser';
 export { ConfTSError } from './error';
-export { MACRO_FUNCTIONS, MACRO_PACKAGE } from './constants';
 export { FormattedNumber } from './shared';
 export type {
+  CompileInput,
   CompileOptions,
-  EvaluationState,
   InMemoryFiles,
-  InternalEvaluationOptions,
   JsxOutputOptions,
-  QuoteStyle,
-  TransformResult,
+  SourceCompileInput,
+  SourceProject,
 } from './shared';

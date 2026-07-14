@@ -13,10 +13,8 @@ export interface ConfTsWebpackPluginOptions {
   format?: 'json' | 'yaml';
   name?: string;
   extensionToRemove?: string | string[];
-  macro?: boolean;
   preserveKeyOrder?: boolean;
   jsx?: CompileOptions['jsx'];
-  quote?: CompileOptions['quote'];
   jsxOutput?: CompileOptions['jsxOutput'];
   check?: boolean;
   useWorkers?: boolean;
@@ -50,13 +48,18 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
       `compiler must be 'auto', 'native', or 'js', got ${JSON.stringify(options.compiler)}`,
     );
   }
-  if (
-    options.quote !== undefined &&
-    options.quote !== 'single' &&
-    options.quote !== 'double'
-  ) {
+  const legacyOptions = options as ConfTsWebpackPluginOptions & {
+    macro?: unknown;
+    quote?: unknown;
+  };
+  if (Object.prototype.hasOwnProperty.call(legacyOptions, 'macro')) {
     reject(
-      `quote must be 'single' or 'double', got ${JSON.stringify(options.quote)}`,
+      'the macro option was removed; add TypeScriptMacroTransformPlugin or SwcMacroTransformPlugin instead',
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(legacyOptions, 'quote')) {
+    reject(
+      'the quote option belongs to macro transformation; pass it to a MacroTransformPlugin instead',
     );
   }
   if (options.name !== undefined && typeof options.name !== 'string') {
@@ -85,7 +88,6 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   ) {
     reject('jsxOutput must be a plain object');
   }
-  expectBool('macro');
   expectBool('preserveKeyOrder');
   expectBool('jsx');
   expectBool('check');
@@ -112,10 +114,8 @@ export class ConfTsWebpackPlugin {
       format,
       name,
       extensionToRemove = '.conf.ts',
-      macro,
       preserveKeyOrder,
       jsx,
-      quote,
       jsxOutput,
       check,
       useWorkers = true,
@@ -144,10 +144,8 @@ export class ConfTsWebpackPlugin {
             format,
             name,
             extensionToRemove,
-            macro,
             preserveKeyOrder,
             jsx,
-            quote,
             jsxOutput,
             check,
             useWorkers,
@@ -170,3 +168,9 @@ export class ConfTsWebpackPlugin {
     }
   }
 }
+
+export {
+  TypeScriptMacroTransformPlugin,
+  type MacroTransformPluginOptions,
+} from './macro-transform-plugin/typescript';
+export { SwcMacroTransformPlugin } from './macro-transform-plugin/swc';

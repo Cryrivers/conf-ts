@@ -1,16 +1,19 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { type CompileOptions } from '@conf-ts/compiler';
+import { type CompileOptions, type SourceProject } from '@conf-ts/compiler';
 import type Piscina from 'piscina';
 import type { Compiler, LoaderContext } from 'webpack';
 
+import {
+  CONF_TS_MACRO_TRANSFORM_META,
+  type MacroTransformLoaderMeta,
+} from './macro-transform-plugin/types';
 import compileTask, { type CompilerPreference } from './worker';
 
 export interface LoaderOptions extends CompileOptions {
   name?: string;
   format?: 'json' | 'yaml';
   extensionToRemove?: string | string[];
-  macro?: boolean;
   check?: boolean;
   useWorkers?: boolean;
   compiler?: CompilerPreference;
@@ -25,9 +28,7 @@ interface CompileResult {
 
 export function createCompileOptions(options: LoaderOptions): CompileOptions {
   return {
-    macroMode: options.macro || false,
     preserveKeyOrder: options.preserveKeyOrder || false,
-    quote: options.quote,
     jsx: options.jsx,
     jsxOutput: options.jsxOutput,
   };
@@ -117,6 +118,8 @@ function toWebpackError(err: unknown): Error {
 export default async function (
   this: LoaderContext<LoaderOptions>,
   source: string,
+  inputSourceMap?: object | string | null,
+  inputMeta?: unknown,
 ) {
   this.cacheable();
 
@@ -131,6 +134,7 @@ export default async function (
 
   try {
     const compileOptions = createCompileOptions(options);
+    const macroMeta = readMacroTransformMeta(inputMeta);
 
     let result: CompileResult;
     if (useWorkers) {
@@ -143,20 +147,27 @@ export default async function (
         );
       }
       result = (await piscina.run({
-        resourcePath: this.resourcePath,
+        filename: this.resourcePath,
+        code: source,
+        project: macroMeta?.project,
         format,
         options: compileOptions,
         compiler: compilerPref,
       })) as CompileResult;
     } else {
       result = compileTask({
-        resourcePath: this.resourcePath,
+        filename: this.resourcePath,
+        code: source,
+        project: macroMeta?.project,
         format,
         options: compileOptions,
         compiler: compilerPref,
       });
     }
 
+    for (const dep of macroMeta?.transformDependencies ?? []) {
+      this.addDependency(dep);
+    }
     for (const dep of result.dependencies) {
       this.addDependency(dep);
     }
@@ -190,8 +201,26 @@ export default async function (
       await fs.writeFile(generatedPath, result.output);
     }
 
-    callback(null, source);
+    callback(null, source, inputSourceMap as any, inputMeta as any);
   } catch (error) {
     callback(toWebpackError(error));
   }
+}
+
+function readMacroTransformMeta(meta: unknown):
+  | {
+      project: SourceProject;
+      transformDependencies: string[];
+    }
+  | undefined {
+  if (!meta || typeof meta !== 'object') {
+    return undefined;
+  }
+  const value = (meta as MacroTransformLoaderMeta)[
+    CONF_TS_MACRO_TRANSFORM_META
+  ];
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  return value;
 }

@@ -1,18 +1,18 @@
-import { sep } from 'path';
+import { dirname, sep } from 'path';
 import ts from 'typescript';
 import { stringify as yamlStringify } from 'yaml';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
+import type { EvaluationState } from './internal-types';
 import {
   CompileOptions,
-  EvaluationState,
   FormattedNumber,
   jsonStringify,
   orderedClone,
-  TransformResult,
   validateCompileOptions,
-  validateMacroImports,
+  type CompileInput,
+  type SourceCompileInput,
 } from './shared';
 
 function resolveProgramOptions(inputFile: string): {
@@ -109,19 +109,114 @@ function createFileProgramWithOverrides(
   return { program, tsConfigPath };
 }
 
+function projectCompilerOptions(input: SourceCompileInput): ts.CompilerOptions {
+  return {
+    target: ts.ScriptTarget.ES2020,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    strict: true,
+    skipLibCheck: true,
+    noEmit: true,
+    noLib: true,
+    allowJs: true,
+    resolveJsonModule: true,
+    jsx: ts.JsxEmit.ReactJSX,
+    ...(input.project?.compilerOptions as ts.CompilerOptions | undefined),
+  };
+}
+
+function createProjectCompilerHost(
+  input: SourceCompileInput,
+  files: Record<string, string>,
+  options: ts.CompilerOptions,
+): ts.CompilerHost {
+  const resolutions = input.project?.resolutions ?? {};
+  const has = (fileName: string) =>
+    Object.prototype.hasOwnProperty.call(files, fileName);
+  const directoryExists = (directoryName: string) =>
+    Object.keys(files).some(fileName =>
+      fileName.startsWith(`${directoryName}/`),
+    );
+  const extensionFromFileName = (fileName: string): ts.Extension => {
+    if (/\.d\.ts$/i.test(fileName)) return ts.Extension.Dts;
+    if (/\.tsx$/i.test(fileName)) return ts.Extension.Tsx;
+    if (/\.jsx$/i.test(fileName)) return ts.Extension.Jsx;
+    if (/\.[cm]?js$/i.test(fileName)) return ts.Extension.Js;
+    if (/\.json$/i.test(fileName)) return ts.Extension.Json;
+    return ts.Extension.Ts;
+  };
+  const host: ts.CompilerHost = {
+    fileExists: has,
+    readFile: fileName => files[fileName],
+    getSourceFile: (fileName, languageVersion) => {
+      const text = files[fileName];
+      return text === undefined
+        ? undefined
+        : ts.createSourceFile(fileName, text, languageVersion, true);
+    },
+    getDefaultLibFileName: () => 'lib.d.ts',
+    getCurrentDirectory: () => dirname(input.filename),
+    getCanonicalFileName: fileName => fileName,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => '\n',
+    writeFile: () => {},
+    directoryExists,
+    getDirectories: () => [],
+    realpath: fileName => fileName,
+    resolveModuleNames: (moduleNames, containingFile) =>
+      moduleNames.map(moduleName => {
+        const resolvedFileName =
+          resolutions[containingFile]?.[moduleName] ??
+          ts.resolveModuleName(moduleName, containingFile, options, {
+            fileExists: has,
+            readFile: fileName => files[fileName],
+            directoryExists,
+            getCurrentDirectory: () => dirname(input.filename),
+            getDirectories: () => [],
+            realpath: fileName => fileName,
+            useCaseSensitiveFileNames: () => true,
+          }).resolvedModule?.resolvedFileName;
+        if (!resolvedFileName || !has(resolvedFileName)) return undefined;
+        return {
+          resolvedFileName,
+          extension: extensionFromFileName(resolvedFileName),
+          isExternalLibraryImport: false,
+        };
+      }),
+  };
+  return host;
+}
+
+/** Build a program from a host-provided, serializable source snapshot. */
+export function createSourceProgram(input: SourceCompileInput): ts.Program {
+  const files = {
+    ...(input.project?.files ?? {}),
+    [input.filename]: input.code,
+  };
+  const options = projectCompilerOptions(input);
+  const rootNames = Array.from(
+    new Set([
+      ...Object.keys(files).filter(name => /\.[cm]?[jt]sx?$/i.test(name)),
+      input.filename,
+    ]),
+  );
+  return ts.createProgram(
+    rootNames,
+    options,
+    createProjectCompilerHost(input, files, options),
+  );
+}
+
 /**
- * Collect enum values and macro imports from every non-declaration file in
- * `program`. This is the "first pass" shared by both the plain constant-only
- * compile and the macro pre-evaluation transform.
+ * Collect enum values from every non-declaration file in `program`.
  */
 export function createEvaluationState(
   program: ts.Program,
-  macro: boolean,
   options?: CompileOptions,
 ): EvaluationState {
   const typeChecker = program.getTypeChecker();
   const enumMap: { [filePath: string]: { [key: string]: any } } = {};
-  const macroImportsMap: { [filePath: string]: Set<string> } = {};
+  const importBindingsMap: { [filePath: string]: Set<string> } = {};
   const evaluatedFiles: Set<string> = new Set();
   const enumEvaluatedFiles: Set<string> = new Set();
 
@@ -130,10 +225,7 @@ export function createEvaluationState(
       continue;
     }
 
-    macroImportsMap[sourceFile.fileName] = validateMacroImports(
-      sourceFile,
-      macro,
-    );
+    importBindingsMap[sourceFile.fileName] = new Set();
 
     ts.forEachChild(sourceFile, node => {
       if (ts.isEnumDeclaration(node)) {
@@ -151,8 +243,8 @@ export function createEvaluationState(
               sourceFile,
               typeChecker,
               enumMap,
-              macroImportsMap,
-              macro,
+              importBindingsMap,
+              false,
               enumEvaluatedFiles,
               undefined,
               options,
@@ -170,21 +262,20 @@ export function createEvaluationState(
     });
   }
 
-  return { typeChecker, enumMap, macroImportsMap, evaluatedFiles };
+  return { typeChecker, enumMap, importBindingsMap, evaluatedFiles };
 }
 
 /**
  * Evaluate the entry file's default export ("second pass"), using the enum
- * and macro-import bookkeeping already collected in `state`.
+ * and enum bookkeeping already collected in `state`.
  */
 export function evaluateDefaultExport(
   program: ts.Program,
   entryFile: string,
   state: EvaluationState,
-  macro: boolean,
   options?: CompileOptions,
 ): object {
-  const { typeChecker, enumMap, macroImportsMap, evaluatedFiles } = state;
+  const { typeChecker, enumMap, importBindingsMap, evaluatedFiles } = state;
   let output: { [key: string]: any } = {};
 
   const entrySourceFile = program.getSourceFile(entryFile);
@@ -200,8 +291,8 @@ export function evaluateDefaultExport(
         entrySourceFile,
         typeChecker,
         enumMap,
-        macroImportsMap,
-        macro,
+        importBindingsMap,
+        false,
         evaluatedFiles,
         undefined,
         options,
@@ -221,8 +312,8 @@ export function evaluateDefaultExport(
           entrySourceFile,
           typeChecker,
           enumMap,
-          macroImportsMap,
-          macro,
+          importBindingsMap,
+          false,
           evaluatedFiles,
           undefined,
           options,
@@ -284,58 +375,27 @@ function serialize(
 }
 
 export function compile(
-  inputFile: string,
+  input: CompileInput,
   format: 'json' | 'yaml',
   options?: CompileOptions,
 ) {
   validateCompileOptions(options);
-  const macro = options?.macroMode ?? false;
-  const { program, tsConfigPath } = createFileProgram(inputFile);
-  const state = createEvaluationState(program, macro, options);
-  const output = evaluateDefaultExport(
-    program,
-    inputFile,
-    state,
-    macro,
-    options,
-  );
+  const inputFile = typeof input === 'string' ? input : input.filename;
+  let program: ts.Program;
+  let tsConfigPath: string | undefined;
+  if (typeof input === 'string') {
+    ({ program, tsConfigPath } = createFileProgram(input));
+  } else if (input.project) {
+    program = createSourceProgram(input);
+  } else {
+    ({ program, tsConfigPath } = createFileProgramWithOverrides(inputFile, {
+      [inputFile]: input.code,
+    }));
+  }
+  const state = createEvaluationState(program, options);
+  const output = evaluateDefaultExport(program, inputFile, state, options);
   const fileNames = Array.from(
-    new Set([tsConfigPath, ...state.evaluatedFiles]),
-  );
-  return serialize(output, format, fileNames, options);
-}
-
-/**
- * Compile an entry file given a pre-computed macro `TransformResult`
- * (`transformed.files` overrides the original source for whichever files had
- * macro calls rewritten to literal source). Always runs constants-only —
- * macros are expected to already be gone from the rewritten text.
- */
-export function compileTransformed(
-  inputFile: string,
-  format: 'json' | 'yaml',
-  transformed: TransformResult,
-  options?: CompileOptions,
-) {
-  validateCompileOptions(options);
-  const { program, tsConfigPath } = createFileProgramWithOverrides(
-    inputFile,
-    transformed.files,
-  );
-  const state = createEvaluationState(program, false, options);
-  const output = evaluateDefaultExport(
-    program,
-    inputFile,
-    state,
-    false,
-    options,
-  );
-  const fileNames = Array.from(
-    new Set([
-      tsConfigPath,
-      ...transformed.dependencies,
-      ...state.evaluatedFiles,
-    ]),
+    new Set([...(tsConfigPath ? [tsConfigPath] : []), ...state.evaluatedFiles]),
   );
   return serialize(output, format, fileNames, options);
 }

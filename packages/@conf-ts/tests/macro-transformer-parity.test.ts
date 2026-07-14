@@ -1,18 +1,19 @@
 import fs from 'fs';
 import path from 'path';
-import { compileTransformed, type CompileOptions } from '@conf-ts/compiler';
+import { compile, type CompileOptions } from '@conf-ts/compiler';
 import {
-  transformMacros as transformMacrosJs,
+  createMacroProjectSnapshot,
+  transform as transformMacrosJs,
   type MacroTransformOptions,
 } from '@conf-ts/macro-transformer';
-import { transformMacros as transformMacrosNative } from '@conf-ts/macro-transformer-native';
+import { transform as transformMacrosNative } from '@conf-ts/macro-transformer-native';
 import { describe, expect, it } from 'vitest';
 
 const MACRO_DIR = path.resolve(__dirname, 'fixtures/macros');
 
 // Fixtures that need non-default options or environment variables to
 // compile successfully — mirrors the setup in macro.test.ts/macro-expr-compiler.test.ts.
-const FIXTURE_OPTIONS: Record<string, CompileOptions> = {
+const FIXTURE_OPTIONS: Record<string, MacroTransformOptions> = {
   'expr-quote-single': { quote: 'single' },
 };
 
@@ -42,18 +43,15 @@ describe('macro-transformer / macro-transformer-native parity', () => {
     setUpEnv();
     const inputFile = path.join(MACRO_DIR, `${name}.conf.ts`);
     const options: MacroTransformOptions = FIXTURE_OPTIONS[name] ?? {};
+    const code = fs.readFileSync(inputFile, 'utf8');
+    const project = createMacroProjectSnapshot([inputFile]);
 
-    const jsResult = transformMacrosJs(inputFile, options);
-    const nativeResult = transformMacrosNative(inputFile, options);
+    const input = { filename: inputFile, code, project };
+    const jsResult = transformMacrosJs(input, options);
+    const nativeResult = transformMacrosNative(input, options);
 
-    // Both transformers must rewrite the exact same set of files, with
-    // byte-identical rewritten source text.
-    expect(Object.keys(jsResult.files).sort()).toEqual(
-      Object.keys(nativeResult.files).sort(),
-    );
-    for (const file of Object.keys(jsResult.files)) {
-      expect(nativeResult.files[file]).toBe(jsResult.files[file]);
-    }
+    expect(nativeResult.code).toBe(jsResult.code);
+    expect(jsResult.code).not.toContain("from '@conf-ts/macro'");
 
     // Both must report the same dependency set (order-independent).
     expect([...jsResult.dependencies].sort()).toEqual(
@@ -68,20 +66,30 @@ describe('macro-transformer / macro-transformer-native parity', () => {
       .readFileSync(path.join(MACRO_DIR, `${name}.json`), 'utf-8')
       .replace(/\n$/, '');
 
-    const { output: fromJsTransform } = compileTransformed(
-      inputFile,
+    const compileOptions: CompileOptions = {
+      preserveKeyOrder: options.preserveKeyOrder,
+      jsx: options.jsx,
+      jsxOutput: options.jsxOutput,
+    };
+    const { output: fromJsTransform } = compile(
+      { filename: inputFile, code: jsResult.code, project },
       'json',
-      jsResult,
-      options,
+      compileOptions,
     );
-    const { output: fromNativeTransform } = compileTransformed(
-      inputFile,
+    const { output: fromNativeTransform } = compile(
+      { filename: inputFile, code: nativeResult.code, project },
       'json',
-      nativeResult,
-      options,
+      compileOptions,
     );
 
     expect(fromJsTransform).toBe(expectedOutput);
     expect(fromNativeTransform).toBe(expectedOutput);
+
+    expect(
+      transformMacrosJs(
+        { filename: inputFile, code: jsResult.code, project },
+        options,
+      ).code,
+    ).toBe(jsResult.code);
   });
 });

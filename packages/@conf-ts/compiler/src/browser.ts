@@ -6,7 +6,6 @@ import { ConfTSError } from './error';
 import {
   CompileOptions,
   orderedClone,
-  TransformResult,
   validateCompileOptions,
   type InMemoryFiles,
 } from './shared';
@@ -108,51 +107,13 @@ export function compileInMemory(
   files: InMemoryFiles,
   entryFile: string,
   format: 'json' | 'yaml',
-  macroMode: boolean,
   tsconfig?: { compilerOptions?: ts.CompilerOptions },
   options?: CompileOptions,
 ) {
   validateCompileOptions(options);
-  const macro = options?.macroMode ?? macroMode;
   const program = createInMemoryProgram(files, entryFile, tsconfig);
-  const state = createEvaluationState(program, macro, options);
-  const output = evaluateDefaultExport(
-    program,
-    entryFile,
-    state,
-    macro,
-    options,
-  );
+  const state = createEvaluationState(program, options);
+  const output = evaluateDefaultExport(program, entryFile, state, options);
   const fileNames = Array.from(state.evaluatedFiles);
-  return serialize(output, format, fileNames, options);
-}
-
-/**
- * In-memory counterpart to `compileTransformed`: `transformed.files` is
- * spread over `files` before building the program, then the ordinary
- * constants-only pass runs.
- */
-export function compileInMemoryTransformed(
-  files: InMemoryFiles,
-  entryFile: string,
-  format: 'json' | 'yaml',
-  transformed: TransformResult,
-  tsconfig?: { compilerOptions?: ts.CompilerOptions },
-  options?: CompileOptions,
-) {
-  validateCompileOptions(options);
-  const mergedFiles: InMemoryFiles = { ...files, ...transformed.files };
-  const program = createInMemoryProgram(mergedFiles, entryFile, tsconfig);
-  const state = createEvaluationState(program, false, options);
-  const output = evaluateDefaultExport(
-    program,
-    entryFile,
-    state,
-    false,
-    options,
-  );
-  const fileNames = Array.from(
-    new Set([...transformed.dependencies, ...state.evaluatedFiles]),
-  );
   return serialize(output, format, fileNames, options);
 }

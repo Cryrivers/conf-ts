@@ -38,7 +38,7 @@ describe('JSX Test', () => {
   });
 
   it('should handle macro calls inside JSX attributes', () => {
-    assertJsxOutput('with-macros', { macroMode: true });
+    assertJsxOutput('with-macros', { macro: true });
   });
 
   it('should support flat JSX props output', () => {
@@ -111,14 +111,20 @@ describe('JSX Test', () => {
 
     expect(
       JSON.parse(
-        compileInMemoryJs(files, '/index.conf.tsx', 'json', false, undefined, {
+        compileInMemoryJs(files, '/index.conf.tsx', 'json', undefined, {
           ...options,
         }).output,
       ),
     ).toEqual(expected);
     expect(
       JSON.parse(
-        compileInMemoryNative(files, '/index.conf.tsx', 'json', options).output,
+        compileInMemoryNative(
+          files,
+          '/index.conf.tsx',
+          'json',
+          undefined,
+          options,
+        ).output,
       ),
     ).toEqual(expected);
   });
@@ -130,17 +136,16 @@ describe('JSX Test', () => {
     const options = { jsx: false } as const;
 
     expect(() =>
-      compileInMemoryJs(
+      compileInMemoryJs(files, '/index.conf.tsx', 'json', undefined, options),
+    ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
+    expect(() =>
+      compileInMemoryNative(
         files,
         '/index.conf.tsx',
         'json',
-        false,
         undefined,
         options,
       ),
-    ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
-    expect(() =>
-      compileInMemoryNative(files, '/index.conf.tsx', 'json', options),
     ).toThrow('JSX is disabled. Enable it with compiler option jsx: true');
   });
 });

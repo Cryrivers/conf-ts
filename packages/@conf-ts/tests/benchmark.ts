@@ -12,10 +12,10 @@ const bench = new Bench({ time: 2000 });
 
 bench
   .add('compiler (JS)', () => {
-    compileJsWithMacro(configPath, 'json', { macroMode: true });
+    compileJsWithMacro(configPath, 'json', { macro: true });
   })
   .add('compiler-native (Rust)', () => {
-    compileNativeWithMacro(configPath, 'json', { macroMode: true });
+    compileNativeWithMacro(configPath, 'json', { macro: true });
   });
 
 async function run() {

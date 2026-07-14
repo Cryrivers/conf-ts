@@ -1,52 +1,96 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  compile as compileJs,
-  compileTransformed,
-  type CompileOptions,
-} from '@conf-ts/compiler';
+import { compile as compileJs, type CompileOptions } from '@conf-ts/compiler';
 import { compile as compileNative } from '@conf-ts/compiler-native';
-import { transformMacros } from '@conf-ts/macro-transformer';
-import { compile as compileNativeMacro } from '@conf-ts/macro-transformer-native';
+import {
+  createMacroProjectSnapshot,
+  transform as transformMacros,
+  type MacroTransformOptions,
+} from '@conf-ts/macro-transformer';
+import { transform as transformMacrosNative } from '@conf-ts/macro-transformer-native';
 import { expect } from 'vitest';
 
-/**
- * @conf-ts/compiler no longer evaluates macros itself: when `macroMode` is
- * requested, macros must be pre-evaluated by @conf-ts/macro-transformer
- * first, then the rewritten source is compiled with the ordinary
- * constants-only pipeline via `compileTransformed`.
- */
+export interface TestCompileOptions
+  extends CompileOptions, MacroTransformOptions {
+  macro?: boolean;
+}
+
+function splitOptions(options?: TestCompileOptions): {
+  compileOptions: CompileOptions;
+  transformOptions: MacroTransformOptions;
+} {
+  const {
+    macro: _macro,
+    env,
+    quote,
+    sourceMap,
+    ...sharedOptions
+  } = options ?? {};
+  return {
+    compileOptions: sharedOptions,
+    transformOptions: {
+      ...sharedOptions,
+      env,
+      quote,
+      sourceMap,
+    },
+  };
+}
+
 export function compileJsWithMacro(
   inputFilePath: string,
   format: 'json' | 'yaml',
-  options?: CompileOptions,
+  options?: TestCompileOptions,
 ) {
-  if (options?.macroMode) {
-    return compileTransformed(
-      inputFilePath,
-      format,
-      transformMacros(inputFilePath, options),
-      options,
+  const { compileOptions, transformOptions } = splitOptions(options);
+  if (options?.macro) {
+    const code = fs.readFileSync(inputFilePath, 'utf8');
+    const project = createMacroProjectSnapshot([inputFilePath]);
+    const transformed = transformMacros(
+      { filename: inputFilePath, code, project },
+      transformOptions,
     );
+    const compiled = compileJs(
+      { filename: inputFilePath, code: transformed.code, project },
+      format,
+      compileOptions,
+    );
+    return {
+      ...compiled,
+      dependencies: Array.from(
+        new Set([...transformed.dependencies, ...compiled.dependencies]),
+      ),
+    };
   }
-  return compileJs(inputFilePath, format, options);
+  return compileJs(inputFilePath, format, compileOptions);
 }
 
-/**
- * Native counterpart to `compileJsWithMacro`: @conf-ts/compiler-native no
- * longer evaluates macros itself either, so macro-mode compiles route
- * through @conf-ts/macro-transformer-native's own transform+compile
- * convenience wrapper instead.
- */
 export function compileNativeWithMacro(
   inputFilePath: string,
   format: 'json' | 'yaml',
-  options?: CompileOptions,
+  options?: TestCompileOptions,
 ) {
-  if (options?.macroMode) {
-    return compileNativeMacro(inputFilePath, format, options);
+  const { compileOptions, transformOptions } = splitOptions(options);
+  if (options?.macro) {
+    const code = fs.readFileSync(inputFilePath, 'utf8');
+    const project = createMacroProjectSnapshot([inputFilePath]);
+    const transformed = transformMacrosNative(
+      { filename: inputFilePath, code, project },
+      transformOptions,
+    );
+    const compiled = compileNative(
+      { filename: inputFilePath, code: transformed.code, project },
+      format,
+      compileOptions,
+    );
+    return {
+      ...compiled,
+      dependencies: Array.from(
+        new Set([...transformed.dependencies, ...compiled.dependencies]),
+      ),
+    };
   }
-  return compileNative(inputFilePath, format, options);
+  return compileNative(inputFilePath, format, compileOptions);
 }
 
 const FIXTURES_DIR = path.resolve(__dirname, 'fixtures');
@@ -58,7 +102,7 @@ const JSX_DIR = path.join(FIXTURES_DIR, 'jsx');
 function assertOutput(
   inputFolder: string,
   testName: string,
-  options?: CompileOptions,
+  options?: TestCompileOptions,
   suffix: string = '.conf.ts',
 ) {
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
@@ -103,7 +147,7 @@ function assertError(
   inputFolder: string,
   testName: string,
   expectedError: string,
-  options?: CompileOptions,
+  options?: TestCompileOptions,
   suffix: string = '.conf.ts',
 ) {
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
@@ -115,54 +159,60 @@ function assertError(
   );
 }
 
-export function assertSpecOutput(testName: string, options?: CompileOptions) {
-  assertOutput(SPEC_DIR, testName, { ...options, macroMode: false });
+export function assertSpecOutput(
+  testName: string,
+  options?: TestCompileOptions,
+) {
+  assertOutput(SPEC_DIR, testName, options);
 }
 
 export function assertSpecError(
   testName: string,
   expectedError: string,
-  options?: CompileOptions,
+  options?: TestCompileOptions,
 ) {
-  assertError(SPEC_DIR, testName, expectedError, {
-    ...options,
-    macroMode: false,
-  });
+  assertError(SPEC_DIR, testName, expectedError, options);
 }
 
-export function assertMacroOutput(testName: string, options?: CompileOptions) {
+export function assertMacroOutput(
+  testName: string,
+  options?: TestCompileOptions,
+) {
   assertOutput(MACRO_DIR, testName, {
     ...options,
-    macroMode: true,
+    macro: true,
   });
 }
 
 export function assertEdgeCaseOutput(
   testName: string,
-  options?: CompileOptions,
+  options?: TestCompileOptions,
 ) {
-  assertOutput(EDGE_CASES_DIR, testName, { ...options, macroMode: true });
+  assertOutput(EDGE_CASES_DIR, testName, { ...options, macro: true });
 }
 
 export function assertMacroError(
   testName: string,
   expectedError: string,
-  options?: CompileOptions,
+  options?: TestCompileOptions,
 ) {
   assertError(MACRO_DIR, testName, expectedError, {
     ...options,
-    macroMode: true,
+    macro: true,
   });
 }
 
-export function assertJsxOutput(testName: string, options?: CompileOptions) {
+export function assertJsxOutput(
+  testName: string,
+  options?: TestCompileOptions,
+) {
   assertOutput(JSX_DIR, testName, { jsx: true, ...options }, '.json.tsx');
 }
 
 export function assertJsxError(
   testName: string,
   expectedError: string,
-  options?: CompileOptions,
+  options?: TestCompileOptions,
 ) {
   assertError(JSX_DIR, testName, expectedError, { ...options }, '.json.tsx');
 }

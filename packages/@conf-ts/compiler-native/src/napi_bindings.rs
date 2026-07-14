@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::types::{
-  CompileOptions, JsxOutputField, JsxOutputOptions as NativeJsxOutputOptions, QuoteStyle,
-};
+use crate::compiler::{SourceCompileInput, SourceProject};
+use crate::types::{CompileOptions, JsxOutputField, JsxOutputOptions as NativeJsxOutputOptions};
 
 #[napi(object)]
 pub struct CompileResult {
@@ -17,7 +16,9 @@ pub struct CompileResult {
 pub struct JsxOutputOptions {
   #[napi(js_name = "type")]
   pub type_name: Option<String>,
+  #[napi(ts_type = "string | false")]
   pub props: Option<Either<String, bool>>,
+  #[napi(ts_type = "string | false")]
   pub children: Option<Either<String, bool>>,
   pub key: Option<String>,
   pub fragment: Option<String>,
@@ -29,10 +30,26 @@ pub struct JsxOutputOptions {
 pub struct JsCompileOptions {
   pub preserve_key_order: Option<bool>,
   pub jsx: Option<bool>,
-  pub env: Option<HashMap<String, String>>,
   pub jsx_output: Option<JsxOutputOptions>,
-  #[napi(ts_type = "'single' | 'double'")]
-  pub quote: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsSourceProject {
+  pub files: HashMap<String, String>,
+  pub resolutions: Option<HashMap<String, HashMap<String, String>>>,
+  pub compiler_options: Option<serde_json::Value>,
+}
+
+#[napi(object)]
+pub struct JsSourceCompileInput {
+  pub filename: String,
+  pub code: String,
+  pub project: Option<JsSourceProject>,
+}
+
+#[napi(object)]
+pub struct JsTsConfig {
+  pub compiler_options: Option<serde_json::Value>,
 }
 
 fn convert_jsx_field(value: Option<Either<String, bool>>) -> Option<JsxOutputField> {
@@ -45,79 +62,85 @@ fn convert_jsx_field(value: Option<Either<String, bool>>) -> Option<JsxOutputFie
 }
 
 fn convert_jsx_output(value: Option<JsxOutputOptions>) -> Option<NativeJsxOutputOptions> {
-  value.map(|o| NativeJsxOutputOptions {
-    type_name: o.type_name,
-    props: convert_jsx_field(o.props),
-    children: convert_jsx_field(o.children),
-    key: o.key,
-    fragment: o.fragment,
-    type_format: o.type_format,
+  value.map(|options| NativeJsxOutputOptions {
+    type_name: options.type_name,
+    props: convert_jsx_field(options.props),
+    children: convert_jsx_field(options.children),
+    key: options.key,
+    fragment: options.fragment,
+    type_format: options.type_format,
   })
 }
 
-fn parse_quote(value: Option<String>) -> Result<QuoteStyle> {
-  match value.as_deref() {
-    None | Some("double") => Ok(QuoteStyle::Double),
-    Some("single") => Ok(QuoteStyle::Single),
-    _ => Err(Error::new(
-      Status::GenericFailure,
-      "Invalid option: quote must be 'single' or 'double'",
-    )),
+fn convert_options(options: Option<JsCompileOptions>) -> CompileOptions {
+  options.map_or_else(CompileOptions::default, |options| CompileOptions {
+    preserve_key_order: options.preserve_key_order.unwrap_or(false),
+    jsx: options.jsx,
+    jsx_output: convert_jsx_output(options.jsx_output),
+  })
+}
+
+fn convert_project(project: JsSourceProject) -> SourceProject {
+  SourceProject {
+    files: project.files,
+    resolutions: project.resolutions.unwrap_or_default(),
+    compiler_options: project.compiler_options,
   }
 }
 
-/// Compile a TypeScript config file to JSON or YAML.
-#[napi]
-pub fn compile(
-  input_file: String,
-  format: String,
-  options: Option<JsCompileOptions>,
+fn result(
+  value: std::result::Result<(String, Vec<String>), crate::error::ConfTSError>,
 ) -> Result<CompileResult> {
-  let opts = match options {
-    Some(o) => CompileOptions {
-      preserve_key_order: o.preserve_key_order.unwrap_or(false),
-      jsx: o.jsx,
-      env: o.env,
-      jsx_output: convert_jsx_output(o.jsx_output),
-      quote: parse_quote(o.quote)?,
-    },
-    None => CompileOptions::default(),
-  };
-
-  let (output, dependencies) = crate::compiler::compile(&input_file, &format, &opts)
-    .map_err(|e| Error::new(Status::GenericFailure, e.message.clone()))?;
-
+  let (output, dependencies) =
+    value.map_err(|error| Error::new(Status::GenericFailure, error.message))?;
   Ok(CompileResult {
     output,
     dependencies,
   })
 }
 
-/// Compile from in-memory files.
+/// Compile ordinary TypeScript source to JSON or YAML.
+#[napi]
+pub fn compile(
+  input: Either<String, JsSourceCompileInput>,
+  format: String,
+  options: Option<JsCompileOptions>,
+) -> Result<CompileResult> {
+  let options = convert_options(options);
+  match input {
+    Either::A(path) => result(crate::compiler::compile_path(&path, &format, &options)),
+    Either::B(input) => result(crate::compiler::compile_source(
+      &SourceCompileInput {
+        filename: input.filename,
+        code: input.code,
+        project: input.project.map(convert_project),
+      },
+      &format,
+      &options,
+    )),
+  }
+}
+
+/// Compile an in-memory ordinary TypeScript project.
 #[napi]
 pub fn compile_in_memory(
   files: HashMap<String, String>,
   entry_file: String,
   format: String,
+  tsconfig: Option<JsTsConfig>,
   options: Option<JsCompileOptions>,
 ) -> Result<CompileResult> {
-  let opts = match options {
-    Some(o) => CompileOptions {
-      preserve_key_order: o.preserve_key_order.unwrap_or(false),
-      jsx: o.jsx,
-      env: o.env,
-      jsx_output: convert_jsx_output(o.jsx_output),
-      quote: parse_quote(o.quote)?,
-    },
-    None => CompileOptions::default(),
+  let project = SourceProject {
+    files,
+    resolutions: HashMap::new(),
+    compiler_options: tsconfig.and_then(|value| value.compiler_options),
   };
-
-  let (output, dependencies) =
-    crate::browser::compile_in_memory(&files, &entry_file, &format, &opts)
-      .map_err(|e| Error::new(Status::GenericFailure, e.message.clone()))?;
-
-  Ok(CompileResult {
-    output,
-    dependencies,
-  })
+  result(crate::browser::compile_project(
+    &project.files,
+    &entry_file,
+    Some(&project.resolutions),
+    project.compiler_options.as_ref(),
+    &format,
+    &convert_options(options),
+  ))
 }

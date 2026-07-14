@@ -12,11 +12,29 @@
     "url": "https://github.com/Cryrivers/conf-ts"
   },
   "main": "index.js",
+  "browser": "browser.js",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "require": "./index.js"
+    },
+    "./browser": {
+      "types": "./index.d.ts",
+      "import": "./browser.js",
+      "default": "./browser.js"
+    }
+  },
   "types": "index.d.ts",
   "files": [
     "index.d.ts",
     "index.js",
-    "browser.js"
+    "browser.js",
+    "compiler-native.wasi.cjs",
+    "compiler-native.wasi-browser.js",
+    "compiler-native.wasm32-wasi.wasm",
+    "wasi-worker.mjs",
+    "wasi-worker-browser.mjs"
   ],
   "napi": {
     "binaryName": "compiler-native",
@@ -25,7 +43,8 @@
       "x86_64-apple-darwin",
       "x86_64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl",
-      "aarch64-apple-darwin"
+      "aarch64-apple-darwin",
+      "wasm32-wasip1-threads"
     ]
   },
   "engines": {
@@ -33,9 +52,11 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
-    "build": "napi build --platform --release",
+    "build": "pnpm run build:native && pnpm run build:wasi",
+    "build:native": "napi build --platform --release",
     "build:debug": "napi build --platform",
+    "build:wasi": "napi build --platform --release --target wasm32-wasip1-threads && node ../scripts/finalize-wasi-browser.mjs",
+    "test:wasi": "node --test ./test/wasi.test.cjs",
     "format:prettier": "prettier . -w && cargo fmt && taplo format",
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm -p ../../native-bindings",
@@ -43,11 +64,13 @@
     "version": "napi version"
   },
   "dependencies": {
+    "@emnapi/core": "^1.11.1",
+    "@emnapi/runtime": "^1.11.1",
+    "@napi-rs/wasm-runtime": "^1.1.6",
     "@napi-rs/cli": "^3.7.3"
   },
   "devDependencies": {
     "@conf-ts/compiler": "workspace:*",
-    "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/node": "^26.1.1",
     "oxlint": "^1.73.0",

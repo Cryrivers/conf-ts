@@ -1,39 +1,26 @@
-use std::cell::RefCell;
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use oxc_ast::ast::*;
-use oxc_span::GetSpan;
+use swc_core::common::{BytePos, SourceMap, Spanned};
+use swc_core::ecma::ast::*;
 
 use crate::error::ConfTSError;
-use crate::types::{
-  CompileOptions, FileContext, JsxOutputField, LineIndex, TransformState, Value,
-  normalize_number_raw,
-};
+use crate::types::{CompileOptions, FileContext, JsxOutputField, Value, normalize_number_raw};
 
-pub const MACRO_FUNCTIONS: &[&str] = &[
-  "String",
-  "Number",
-  "Boolean",
-  "arrayMap",
-  "arrayFilter",
-  "arrayFlatMap",
-  "env",
-  "expr",
-];
-
-/// Get source location from a byte offset.
-pub fn get_location(li: &LineIndex, offset: u32) -> (usize, usize) {
-  li.get_location(offset)
+/// Get source location from a byte position.
+pub fn get_location(sm: &SourceMap, pos: BytePos) -> (usize, usize) {
+  let loc = sm.lookup_char_pos(pos);
+  (loc.line, loc.col_display + 1)
 }
 
 fn assert_jsx_enabled(
   options: &CompileOptions,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<(), ConfTSError> {
   if options.jsx != Some(true) {
-    let (line, character) = get_location(&file_ctx.line_index, offset);
+    let (line, character) = get_location(&file_ctx.source_map, pos);
     return Err(ConfTSError::new(
       "JSX is disabled. Enable it with compiler option jsx: true",
       &file_ctx.file_path,
@@ -44,11 +31,15 @@ fn assert_jsx_enabled(
   Ok(())
 }
 
-pub fn module_export_name_to_string(name: &ModuleExportName) -> String {
+/// Helper to get identifier name as &str
+fn ident_name(ident: &Ident) -> &str {
+  ident.sym.as_str()
+}
+
+fn module_export_name_to_string(name: &ModuleExportName) -> String {
   match name {
-    ModuleExportName::IdentifierName(ident) => ident.name.as_str().to_string(),
-    ModuleExportName::IdentifierReference(ident) => ident.name.as_str().to_string(),
-    ModuleExportName::StringLiteral(s) => s.value.as_str().to_string(),
+    ModuleExportName::Ident(ident) => ident_name(ident).to_string(),
+    ModuleExportName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
   }
 }
 
@@ -118,10 +109,10 @@ fn validate_jsx_name(
   value: &str,
   field: &str,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<String, ConfTSError> {
   if value.is_empty() {
-    let (line, character) = get_location(&file_ctx.line_index, offset);
+    let (line, character) = get_location(&file_ctx.source_map, pos);
     return Err(ConfTSError::new(
       format!(
         "Invalid option: jsxOutput.{} must be a non-empty string",
@@ -140,14 +131,14 @@ fn validate_jsx_field(
   field: &str,
   default_value: &str,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<Option<String>, ConfTSError> {
   match value {
     None => Ok(Some(default_value.to_string())),
     Some(JsxOutputField::Name(name)) if !name.is_empty() => Ok(Some(name.clone())),
     Some(JsxOutputField::Disabled) => Ok(None),
     Some(JsxOutputField::Name(_)) | Some(JsxOutputField::InvalidBool) => {
-      let (line, character) = get_location(&file_ctx.line_index, offset);
+      let (line, character) = get_location(&file_ctx.source_map, pos);
       Err(ConfTSError::new(
         format!(
           "Invalid option: jsxOutput.{} must be a non-empty string or false",
@@ -164,13 +155,13 @@ fn validate_jsx_field(
 fn validate_jsx_type_format(
   value: Option<&String>,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<JsxTypeFormat, ConfTSError> {
   match value.map(|v| v.as_str()) {
     None | Some("string") => Ok(JsxTypeFormat::String),
     Some("descriptor") => Ok(JsxTypeFormat::Descriptor),
     Some(_) => {
-      let (line, character) = get_location(&file_ctx.line_index, offset);
+      let (line, character) = get_location(&file_ctx.source_map, pos);
       Err(ConfTSError::new(
         "Invalid option: jsxOutput.typeFormat must be \"string\" or \"descriptor\"",
         &file_ctx.file_path,
@@ -184,11 +175,11 @@ fn validate_jsx_type_format(
 fn normalize_jsx_output_options(
   options: &CompileOptions,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<NormalizedJsxOutputOptions, ConfTSError> {
   let raw = options.jsx_output.as_ref();
   let type_name = match raw.and_then(|o| o.type_name.as_ref()) {
-    Some(value) => validate_jsx_name(value, "type", file_ctx, offset)?,
+    Some(value) => validate_jsx_name(value, "type", file_ctx, pos)?,
     None => "type".to_string(),
   };
   let props = validate_jsx_field(
@@ -196,25 +187,25 @@ fn normalize_jsx_output_options(
     "props",
     "props",
     file_ctx,
-    offset,
+    pos,
   )?;
   let children = validate_jsx_field(
     raw.and_then(|o| o.children.as_ref()),
     "children",
     "children",
     file_ctx,
-    offset,
+    pos,
   )?;
   let key = match raw.and_then(|o| o.key.as_ref()) {
-    Some(value) => validate_jsx_name(value, "key", file_ctx, offset)?,
+    Some(value) => validate_jsx_name(value, "key", file_ctx, pos)?,
     None => "key".to_string(),
   };
   let fragment = match raw.and_then(|o| o.fragment.as_ref()) {
-    Some(value) => validate_jsx_name(value, "fragment", file_ctx, offset)?,
+    Some(value) => validate_jsx_name(value, "fragment", file_ctx, pos)?,
     None => "Fragment".to_string(),
   };
   let type_format =
-    validate_jsx_type_format(raw.and_then(|o| o.type_format.as_ref()), file_ctx, offset)?;
+    validate_jsx_type_format(raw.and_then(|o| o.type_format.as_ref()), file_ctx, pos)?;
 
   let mut enabled_fields: Vec<(&str, &str)> = vec![("type", &type_name), ("key", &key)];
   if let Some(props_name) = &props {
@@ -227,7 +218,7 @@ fn normalize_jsx_output_options(
   let mut seen: HashMap<String, String> = HashMap::new();
   for (field, value) in enabled_fields {
     if let Some(existing) = seen.get(value) {
-      let (line, character) = get_location(&file_ctx.line_index, offset);
+      let (line, character) = get_location(&file_ctx.source_map, pos);
       return Err(ConfTSError::new(
         format!(
           "Invalid option: jsxOutput.{} conflicts with jsxOutput.{} field \"{}\"",
@@ -259,20 +250,15 @@ fn get_object_prop(map: &[(String, Value)], key: &str) -> Value {
     .unwrap_or(Value::Undefined)
 }
 
-fn enum_object_from_decl(
-  enum_decl: &TSEnumDeclaration,
-  file_path: &str,
-  ctx: &mut EvalContext,
-) -> Value {
-  let enum_name = enum_decl.id.name.as_str();
+fn enum_object_from_decl(enum_decl: &TsEnumDecl, file_path: &str, ctx: &mut EvalContext) -> Value {
+  let enum_name = enum_decl.id.sym.as_str();
   let mut forward = Vec::new();
   let mut reverse: Vec<(String, Value)> = Vec::new();
   if let Some(file_enums) = ctx.enum_map.get(file_path) {
-    for member in &enum_decl.body.members {
+    for member in &enum_decl.members {
       let member_name = match &member.id {
-        TSEnumMemberName::Identifier(ident) => ident.name.as_str().to_string(),
-        TSEnumMemberName::String(s) => s.value.as_str().to_string(),
-        _ => continue,
+        TsEnumMemberId::Ident(ident) => ident.sym.as_str().to_string(),
+        TsEnumMemberId::Str(s) => s.value.as_str().unwrap_or("").to_string(),
       };
       let full_name = format!("{}.{}", enum_name, member_name);
       if let Some(value) = file_enums.get(&full_name) {
@@ -302,95 +288,82 @@ fn enum_object_from_decl(
 
 /// Evaluate an expression node to a Value.
 pub fn evaluate(
-  expr: &Expression,
+  expr: &Expr,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  if !ctx.evaluated_files.contains(&file_ctx.file_path) {
-    ctx.evaluated_files.insert(file_ctx.file_path.clone());
-  }
-
-  if ctx.macro_evaluator.is_some() && !ctx.macro_imports_map.contains_key(&file_ctx.file_path) {
-    let imports = collect_macro_imports(file_ctx.program(), &file_ctx.file_path);
-    ctx
-      .macro_imports_map
-      .insert(file_ctx.file_path.clone(), imports);
-  }
+  ctx.evaluated_files.insert(file_ctx.file_path.clone());
 
   match expr {
-    Expression::StringLiteral(s) => Ok(Value::String(s.value.as_str().to_string())),
+    // String literals
+    Expr::Lit(Lit::Str(s)) => Ok(Value::String(s.value.as_str().unwrap_or("").to_string())),
 
-    Expression::NumericLiteral(n) => {
+    // Numeric literals
+    Expr::Lit(Lit::Num(n)) => {
       let raw = n.raw.as_ref().map(|value| value.as_str().to_string());
       Ok(Value::number_with_raw(n.value, normalize_number_raw(raw)))
     }
 
-    Expression::BooleanLiteral(b) => Ok(Value::Bool(b.value)),
+    // Boolean literals
+    Expr::Lit(Lit::Bool(b)) => Ok(Value::Bool(b.value)),
 
-    Expression::NullLiteral(_) => Ok(Value::Null),
+    // Null literal
+    Expr::Lit(Lit::Null(_)) => Ok(Value::Null),
 
-    Expression::TemplateLiteral(tpl) => {
+    // Template literals with expressions
+    Expr::Tpl(tpl) => {
       let mut result = String::new();
       for i in 0..tpl.quasis.len() {
-        if let Some(ref cooked) = tpl.quasis[i].value.cooked {
-          result.push_str(cooked.as_str());
+        if let Some(ref cooked) = tpl.quasis[i].cooked {
+          result.push_str(cooked.as_str().unwrap_or(""));
         } else {
-          result.push_str(tpl.quasis[i].value.raw.as_str());
+          result.push_str(tpl.quasis[i].raw.as_str());
         }
-        if i < tpl.expressions.len() {
-          let val = evaluate(&tpl.expressions[i], file_ctx, ctx, local_context, options)?;
+        if i < tpl.exprs.len() {
+          let val = evaluate(&tpl.exprs[i], file_ctx, ctx, local_context, options)?;
           result.push_str(&val.to_display_string());
         }
       }
       Ok(Value::String(result))
     }
 
-    Expression::ObjectExpression(obj) => {
+    // Object literal
+    Expr::Object(obj) => {
       let mut map: Vec<(String, Value)> = Vec::new();
-      for prop_kind in &obj.properties {
-        match prop_kind {
-          ObjectPropertyKind::ObjectProperty(prop) => {
-            if prop.method {
-              continue;
+      for prop_or_spread in &obj.props {
+        match prop_or_spread {
+          PropOrSpread::Prop(prop) => match prop.as_ref() {
+            Prop::KeyValue(kv) => {
+              let key = eval_prop_name(&kv.key, file_ctx, ctx, local_context, options)?;
+              let val = evaluate(&kv.value, file_ctx, ctx, local_context, options)?;
+              set_object_prop(&mut map, key, val, options.preserve_key_order);
             }
-            if prop.shorthand {
-              if let PropertyKey::StaticIdentifier(ident) = &prop.key {
-                let name = ident.name.as_str().to_string();
-                if let Some(lc) = local_context {
-                  if let Some(val) = lc.get(&name) {
-                    set_object_prop(&mut map, name, val.clone(), options.preserve_key_order);
-                    continue;
-                  }
-                }
-                let (line, character) = get_location(&file_ctx.line_index, prop.span.start);
-                let val = resolve_identifier(
-                  &name,
-                  file_ctx,
-                  ctx,
-                  local_context,
-                  options,
-                  line,
-                  character,
-                )?;
-                set_object_prop(&mut map, name, val, options.preserve_key_order);
+            Prop::Shorthand(ident) => {
+              let name = ident_name(ident).to_string();
+              if let Some(lc) = local_context
+                && let Some(val) = lc.get(&name)
+              {
+                set_object_prop(&mut map, name, val.clone(), options.preserve_key_order);
+                continue;
               }
-            } else {
-              let key = eval_property_key(
-                &prop.key,
-                prop.computed,
+              let (line, character) = get_location(&file_ctx.source_map, ident.span.lo);
+              let val = resolve_identifier(
+                &name,
                 file_ctx,
                 ctx,
                 local_context,
                 options,
+                line,
+                character,
               )?;
-              let val = evaluate(&prop.value, file_ctx, ctx, local_context, options)?;
-              set_object_prop(&mut map, key, val, options.preserve_key_order);
+              set_object_prop(&mut map, name, val, options.preserve_key_order);
             }
-          }
-          ObjectPropertyKind::SpreadProperty(spread) => {
-            let val = evaluate(&spread.argument, file_ctx, ctx, local_context, options)?;
+            _ => {}
+          },
+          PropOrSpread::Spread(spread) => {
+            let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
             if let Value::Object(spread_map) = val {
               for (k, v) in spread_map {
                 set_object_prop(&mut map, k, v, options.preserve_key_order);
@@ -402,130 +375,86 @@ pub fn evaluate(
       Ok(Value::Object(map))
     }
 
-    Expression::ArrayExpression(arr) => {
+    // Array literal
+    Expr::Array(arr) => {
       let mut elements = Vec::new();
-      for elem in &arr.elements {
+      for elem in &arr.elems {
         match elem {
-          ArrayExpressionElement::SpreadElement(spread) => {
-            let val = evaluate(&spread.argument, file_ctx, ctx, local_context, options)?;
+          Some(ExprOrSpread {
+            spread: Some(_),
+            expr,
+          }) => {
+            let val = evaluate(expr, file_ctx, ctx, local_context, options)?;
             if let Value::Array(items) = val {
               elements.extend(items);
             }
           }
-          ArrayExpressionElement::Elision(_) => {
-            elements.push(Value::Undefined);
+          Some(ExprOrSpread { spread: None, expr }) => {
+            let val = evaluate(expr, file_ctx, ctx, local_context, options)?;
+            elements.push(val);
           }
-          other => {
-            if let Some(expr) = other.as_expression() {
-              let val = evaluate(expr, file_ctx, ctx, local_context, options)?;
-              elements.push(val);
-            }
+          None => {
+            elements.push(Value::Undefined);
           }
         }
       }
       Ok(Value::Array(elements))
     }
 
-    Expression::Identifier(ident) => {
-      let name = ident.name.as_str();
+    // Identifiers
+    Expr::Ident(ident) => {
+      let name = ident_name(ident);
       if name == "undefined" {
         return Ok(Value::Undefined);
       }
-      if let Some(lc) = local_context {
-        if let Some(val) = lc.get(name) {
-          return Ok(val.clone());
-        }
+      if let Some(lc) = local_context
+        && let Some(val) = lc.get(name)
+      {
+        return Ok(val.clone());
       }
-      let (line, character) = get_location(&file_ctx.line_index, ident.span.start);
+      let (line, character) = get_location(&file_ctx.source_map, ident.span.lo);
       resolve_identifier(name, file_ctx, ctx, local_context, options, line, character)
     }
 
-    Expression::StaticMemberExpression(member) => {
-      let prop_name = member.property.name.as_str().to_string();
-      if member.optional {
-        eval_optional_member_access(
-          &member.object,
-          &prop_name,
-          false,
-          file_ctx,
-          ctx,
-          local_context,
-          options,
-        )
-      } else {
-        eval_member_access(
-          &member.object,
-          &prop_name,
-          false,
-          member.span.start,
-          file_ctx,
-          ctx,
-          local_context,
-          options,
-        )
-      }
+    // Property access: obj.prop
+    Expr::Member(member) => eval_member_expr(member, file_ctx, ctx, local_context, options),
+
+    Expr::OptChain(opt_chain) => {
+      eval_opt_chain_expr(opt_chain, file_ctx, ctx, local_context, options)
     }
 
-    Expression::ComputedMemberExpression(member) => {
-      let val = evaluate(&member.expression, file_ctx, ctx, local_context, options)?;
-      let prop_name = val.to_display_string();
-      if member.optional {
-        eval_optional_member_access(
-          &member.object,
-          &prop_name,
-          true,
-          file_ctx,
-          ctx,
-          local_context,
-          options,
-        )
-      } else {
-        eval_member_access(
-          &member.object,
-          &prop_name,
-          true,
-          member.span.start,
-          file_ctx,
-          ctx,
-          local_context,
-          options,
-        )
-      }
-    }
-
-    Expression::ChainExpression(chain) => {
-      eval_chain_expr(&chain.expression, file_ctx, ctx, local_context, options)
-    }
-
-    Expression::UnaryExpression(unary) => {
-      if matches!(unary.operator, UnaryOperator::Typeof) {
-        let operand = match evaluate(&unary.argument, file_ctx, ctx, local_context, options) {
+    // Unary prefix: +, -, !, ~, typeof
+    Expr::Unary(unary) => {
+      // typeof does not throw on undefined identifiers in JS; mirror that
+      // by catching resolve errors and returning "undefined".
+      if matches!(unary.op, UnaryOp::TypeOf) {
+        let operand = match evaluate(&unary.arg, file_ctx, ctx, local_context, options) {
           Ok(val) => val,
           Err(_) => Value::Undefined,
         };
         return Ok(Value::String(operand.typeof_string().to_string()));
       }
-      if matches!(unary.operator, UnaryOperator::Void) {
-        evaluate(&unary.argument, file_ctx, ctx, local_context, options)?;
+      if matches!(unary.op, UnaryOp::Void) {
+        evaluate(&unary.arg, file_ctx, ctx, local_context, options)?;
         return Ok(Value::Undefined);
       }
-      if matches!(unary.operator, UnaryOperator::Delete) {
-        evaluate(&unary.argument, file_ctx, ctx, local_context, options)?;
+      if matches!(unary.op, UnaryOp::Delete) {
+        evaluate(&unary.arg, file_ctx, ctx, local_context, options)?;
         return Ok(Value::Bool(true));
       }
-      let operand = evaluate(&unary.argument, file_ctx, ctx, local_context, options)?;
-      match unary.operator {
-        UnaryOperator::UnaryPlus => Ok(Value::number(operand.to_number())),
-        UnaryOperator::UnaryNegation => Ok(Value::number(-operand.to_number())),
-        UnaryOperator::LogicalNot => Ok(Value::Bool(!operand.is_truthy())),
-        UnaryOperator::BitwiseNot => {
+      let operand = evaluate(&unary.arg, file_ctx, ctx, local_context, options)?;
+      match unary.op {
+        UnaryOp::Plus => Ok(Value::number(operand.to_number())),
+        UnaryOp::Minus => Ok(Value::number(-operand.to_number())),
+        UnaryOp::Bang => Ok(Value::Bool(!operand.is_truthy())),
+        UnaryOp::Tilde => {
           let n = operand.to_number() as i32;
           Ok(Value::number((!n) as f64))
         }
         _ => {
-          let (line, character) = get_location(&file_ctx.line_index, unary.span.start);
+          let (line, character) = get_location(&file_ctx.source_map, unary.span.lo);
           Err(ConfTSError::new(
-            format!("Unsupported unary operator: {:?}", unary.operator),
+            format!("Unsupported unary operator: {:?}", unary.op),
             &file_ctx.file_path,
             line,
             character,
@@ -534,44 +463,19 @@ pub fn evaluate(
       }
     }
 
-    Expression::LogicalExpression(log) => {
-      let left = evaluate(&log.left, file_ctx, ctx, local_context, options)?;
-      match log.operator {
-        LogicalOperator::And => {
-          if left.is_truthy() {
-            evaluate(&log.right, file_ctx, ctx, local_context, options)
-          } else {
-            Ok(left)
-          }
-        }
-        LogicalOperator::Or => {
-          if left.is_truthy() {
-            Ok(left)
-          } else {
-            evaluate(&log.right, file_ctx, ctx, local_context, options)
-          }
-        }
-        LogicalOperator::Coalesce => match left {
-          Value::Null | Value::Undefined => {
-            evaluate(&log.right, file_ctx, ctx, local_context, options)
-          }
-          _ => Ok(left),
-        },
-      }
-    }
-
-    Expression::BinaryExpression(bin) => {
+    // Binary expressions (with short-circuit evaluation for logical ops)
+    Expr::Bin(bin) => {
       let left = evaluate(&bin.left, file_ctx, ctx, local_context, options)?;
-      if matches!(bin.operator, BinaryOperator::Instanceof) {
-        let result = match &bin.right {
-          Expression::Identifier(identifier) if identifier.name.as_str() == "Array" => {
+      if matches!(bin.op, BinaryOp::InstanceOf) {
+        let result = match bin.right.as_ref() {
+          Expr::Ident(identifier) if identifier.sym == "Array" => {
             matches!(&left, Value::Array(_))
           }
-          Expression::Identifier(identifier) if identifier.name.as_str() == "Object" => {
+          Expr::Ident(identifier) if identifier.sym == "Object" => {
             matches!(&left, Value::Object(_) | Value::Array(_))
           }
           _ => {
-            let (line, character) = get_location(&file_ctx.line_index, bin.right.span().start);
+            let (line, character) = get_location(&file_ctx.source_map, bin.right.span().lo);
             return Err(ConfTSError::new(
               "Unsupported instanceof constructor",
               &file_ctx.file_path,
@@ -582,43 +486,60 @@ pub fn evaluate(
         };
         return Ok(Value::Bool(result));
       }
-      let right = evaluate(&bin.right, file_ctx, ctx, local_context, options)?;
-      eval_binary_op(
-        bin.operator,
-        left,
-        right,
-        &file_ctx.file_path,
-        &file_ctx.line_index,
-        bin.span.start,
-      )
+      match bin.op {
+        BinaryOp::LogicalAnd => {
+          if left.is_truthy() {
+            evaluate(&bin.right, file_ctx, ctx, local_context, options)
+          } else {
+            Ok(left)
+          }
+        }
+        BinaryOp::LogicalOr => {
+          if left.is_truthy() {
+            Ok(left)
+          } else {
+            evaluate(&bin.right, file_ctx, ctx, local_context, options)
+          }
+        }
+        BinaryOp::NullishCoalescing => match left {
+          Value::Null | Value::Undefined => {
+            evaluate(&bin.right, file_ctx, ctx, local_context, options)
+          }
+          _ => Ok(left),
+        },
+        _ => {
+          let right = evaluate(&bin.right, file_ctx, ctx, local_context, options)?;
+          eval_binary_op(
+            bin.op,
+            left,
+            right,
+            &file_ctx.file_path,
+            &file_ctx.source_map,
+            bin.span.lo,
+          )
+        }
+      }
     }
 
-    Expression::ParenthesizedExpression(paren) => {
-      evaluate(&paren.expression, file_ctx, ctx, local_context, options)
+    // Parenthesized expressions
+    Expr::Paren(paren) => evaluate(&paren.expr, file_ctx, ctx, local_context, options),
+
+    // Type assertion (as)
+    Expr::TsAs(ts_as) => evaluate(&ts_as.expr, file_ctx, ctx, local_context, options),
+
+    // Const assertion (as const)
+    Expr::TsConstAssertion(assert) => evaluate(&assert.expr, file_ctx, ctx, local_context, options),
+
+    // Satisfies expression
+    Expr::TsSatisfies(ts_satisfies) => {
+      evaluate(&ts_satisfies.expr, file_ctx, ctx, local_context, options)
     }
 
-    Expression::TSAsExpression(ts_as) => {
-      evaluate(&ts_as.expression, file_ctx, ctx, local_context, options)
-    }
-
-    Expression::TSSatisfiesExpression(ts_satisfies) => evaluate(
-      &ts_satisfies.expression,
-      file_ctx,
-      ctx,
-      local_context,
-      options,
-    ),
-
-    Expression::TSNonNullExpression(ts_non_null) => {
-      let val = evaluate(
-        &ts_non_null.expression,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )?;
-      let (line, character) = get_location(&file_ctx.line_index, ts_non_null.span.start);
-      let is_typed_nullish = is_strictly_nullish_expr(&ts_non_null.expression, file_ctx);
+    // Non-null assertion (!)
+    Expr::TsNonNull(ts_non_null) => {
+      let val = evaluate(&ts_non_null.expr, file_ctx, ctx, local_context, options)?;
+      let (line, character) = get_location(&file_ctx.source_map, ts_non_null.span.lo);
+      let is_typed_nullish = is_strictly_nullish_expr(&ts_non_null.expr, file_ctx);
 
       if is_typed_nullish {
         Err(ConfTSError::new(
@@ -640,21 +561,24 @@ pub fn evaluate(
       }
     }
 
-    Expression::TSTypeAssertion(assertion) => {
-      evaluate(&assertion.expression, file_ctx, ctx, local_context, options)
+    // Type assertion (angle bracket)
+    Expr::TsTypeAssertion(assertion) => {
+      evaluate(&assertion.expr, file_ctx, ctx, local_context, options)
     }
 
-    Expression::ConditionalExpression(cond) => {
+    // Conditional (ternary)
+    Expr::Cond(cond) => {
       let condition = evaluate(&cond.test, file_ctx, ctx, local_context, options)?;
       if condition.is_truthy() {
-        evaluate(&cond.consequent, file_ctx, ctx, local_context, options)
+        evaluate(&cond.cons, file_ctx, ctx, local_context, options)
       } else {
-        evaluate(&cond.alternate, file_ctx, ctx, local_context, options)
+        evaluate(&cond.alt, file_ctx, ctx, local_context, options)
       }
     }
 
-    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
-      let (line, character) = get_location(&file_ctx.line_index, expr.span().start);
+    // Arrow function / function expression => error
+    Expr::Arrow(_) | Expr::Fn(_) => {
+      let (line, character) = get_location(&file_ctx.source_map, expr.span().lo);
       Err(ConfTSError::new(
         "Unsupported type: Function",
         &file_ctx.file_path,
@@ -663,9 +587,10 @@ pub fn evaluate(
       ))
     }
 
-    Expression::NewExpression(new_expr) => {
+    // new expression
+    Expr::New(new_expr) => {
       let callee_name = expr_to_string(&new_expr.callee);
-      let (line, character) = get_location(&file_ctx.line_index, new_expr.span.start);
+      let (line, character) = get_location(&file_ctx.source_map, new_expr.span.lo);
       if callee_name == "Date" {
         Err(ConfTSError::new(
           "Unsupported type: Date",
@@ -683,10 +608,24 @@ pub fn evaluate(
       }
     }
 
-    Expression::CallExpression(call) => eval_call_expr(call, file_ctx, ctx, local_context, options),
+    // Call expression
+    Expr::Call(call) => {
+      if let Some(evaluator) = ctx.call_evaluator {
+        return evaluator(call, file_ctx, ctx, local_context, options);
+      }
+      let callee = call_expr_callee_name(call);
+      let (line, character) = get_location(&file_ctx.source_map, call.span.lo);
+      Err(ConfTSError::new(
+        format!("Unsupported call expression: {}", callee),
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
 
-    Expression::RegExpLiteral(_) => {
-      let (line, character) = get_location(&file_ctx.line_index, expr.span().start);
+    // Regular expression literal
+    Expr::Lit(Lit::Regex(_)) => {
+      let (line, character) = get_location(&file_ctx.source_map, expr.span().lo);
       Err(ConfTSError::new(
         "Unsupported type: RegExp",
         &file_ctx.file_path,
@@ -695,13 +634,15 @@ pub fn evaluate(
       ))
     }
 
-    Expression::JSXElement(jsx_element) => {
-      assert_jsx_enabled(options, file_ctx, jsx_element.opening_element.span.start)?;
+    // JSX element
+    Expr::JSXElement(jsx_element) => {
+      assert_jsx_enabled(options, file_ctx, jsx_element.opening.span.lo)?;
       evaluate_jsx_element(jsx_element, file_ctx, ctx, local_context, options)
     }
 
-    Expression::JSXFragment(jsx_fragment) => {
-      assert_jsx_enabled(options, file_ctx, jsx_fragment.span.start)?;
+    // JSX fragment
+    Expr::JSXFragment(jsx_fragment) => {
+      assert_jsx_enabled(options, file_ctx, jsx_fragment.span.lo)?;
       let children = evaluate_jsx_children(
         &jsx_fragment.children,
         file_ctx,
@@ -709,7 +650,7 @@ pub fn evaluate(
         local_context,
         options,
       )?;
-      let jsx_output = normalize_jsx_output_options(options, file_ctx, jsx_fragment.span.start)?;
+      let jsx_output = normalize_jsx_output_options(options, file_ctx, jsx_fragment.span.lo)?;
       create_jsx_node(
         JsxTypeInfo {
           kind: JsxTypeKind::Fragment,
@@ -721,25 +662,36 @@ pub fn evaluate(
         },
         children,
         file_ctx,
-        jsx_fragment.span.start,
+        jsx_fragment.span.lo,
         options,
       )
     }
 
-    Expression::SequenceExpression(seq) => {
+    // JSX empty expression
+    Expr::JSXEmpty(_) => Ok(Value::Undefined),
+
+    // JSX member expression (unsupported in v1)
+    Expr::JSXMember(_) | Expr::JSXNamespacedName(_) => {
+      let (line, character) = get_location(&file_ctx.source_map, expr.span().lo);
+      Err(ConfTSError::new(
+        "Unsupported JSX tag: member expressions and namespaced names are not supported",
+        &file_ctx.file_path,
+        line,
+        character,
+      ))
+    }
+
+    // Sequence expression
+    Expr::Seq(seq) => {
       let mut result = Value::Undefined;
-      for e in &seq.expressions {
+      for e in &seq.exprs {
         result = evaluate(e, file_ctx, ctx, local_context, options)?;
       }
       Ok(result)
     }
 
-    Expression::TSInstantiationExpression(inst) => {
-      evaluate(&inst.expression, file_ctx, ctx, local_context, options)
-    }
-
     _ => {
-      let (line, character) = get_location(&file_ctx.line_index, expr.span().start);
+      let (line, character) = get_location(&file_ctx.source_map, expr.span().lo);
       Err(ConfTSError::new(
         format!("Unsupported syntax kind: {:?}", expr),
         &file_ctx.file_path,
@@ -750,131 +702,109 @@ pub fn evaluate(
   }
 }
 
-/// Evaluate a call expression.
-fn eval_call_expr(
-  call: &CallExpression,
+/// Evaluate a member expression (property access).
+fn eval_member_expr(
+  member: &MemberExpr,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  if let Some(evaluator) = ctx.macro_evaluator {
-    return evaluator(call, file_ctx, ctx, local_context, options);
-  }
-  let callee = call_expr_callee_name(call);
-  let (line, character) = get_location(&file_ctx.line_index, call.span.start);
-  if MACRO_FUNCTIONS.contains(&callee.as_str()) {
-    Err(ConfTSError::new(
-      format!("Function \"{}\" is only allowed in macro mode", callee),
-      &file_ctx.file_path,
-      line,
-      character,
-    ))
-  } else {
-    Err(ConfTSError::new(
-      format!("Unsupported call expression: {}", callee),
-      &file_ctx.file_path,
-      line,
-      character,
-    ))
-  }
-}
-
-/// Evaluate a member access (shared by static, computed, and optional member expressions).
-fn eval_member_access(
-  obj_expr: &Expression,
-  prop_name: &str,
-  is_computed: bool,
-  span_start: u32,
-  file_ctx: &FileContext,
-  ctx: &mut EvalContext,
-  local_context: Option<&HashMap<String, Value>>,
-  options: &CompileOptions,
-) -> Result<Value, ConfTSError> {
-  let obj_eval = evaluate(obj_expr, file_ctx, ctx, local_context, options);
-  match &obj_eval {
-    Ok(Value::Object(map)) => return Ok(get_object_prop(map, prop_name)),
-    Ok(Value::Array(arr)) => {
-      if is_computed {
-        if let Ok(idx) = prop_name.parse::<usize>() {
-          return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
-        }
-        return Ok(Value::Undefined);
-      }
-      if prop_name == "length" {
-        return Ok(Value::number(arr.len() as f64));
-      }
-      return Ok(Value::Undefined);
+  let prop_name = match &member.prop {
+    MemberProp::Ident(ident_name_node) => ident_name_node.sym.as_str().to_string(),
+    MemberProp::Computed(comp) => {
+      let val = evaluate(&comp.expr, file_ctx, ctx, local_context, options)?;
+      val.to_display_string()
     }
-    Ok(Value::String(s)) => {
-      if is_computed {
-        if let Ok(idx) = prop_name.parse::<usize>() {
-          return Ok(
-            s.chars()
-              .nth(idx)
-              .map(|c| Value::String(c.to_string()))
-              .unwrap_or(Value::Undefined),
-          );
-        }
-        return Ok(Value::Undefined);
-      }
-      if prop_name == "length" {
-        return Ok(Value::number(s.chars().count() as f64));
-      }
-      return Ok(Value::Undefined);
-    }
-    Ok(Value::Null) | Ok(Value::Undefined) => {
-      let (line, character) = get_location(&file_ctx.line_index, span_start);
-      let label = if matches!(obj_eval, Ok(Value::Null)) {
-        "null"
-      } else {
-        "undefined"
-      };
+    _ => {
+      let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
       return Err(ConfTSError::new(
-        format!("Cannot read property of {}", label),
+        "Unsupported member expression property type",
         &file_ctx.file_path,
         line,
         character,
       ));
     }
-    _ => {}
+  };
+
+  let mut obj_debug = String::new();
+  let obj_eval = evaluate(&member.obj, file_ctx, ctx, local_context, options);
+  if let Ok(obj) = obj_eval {
+    obj_debug = match &obj {
+      Value::Object(map) => {
+        let mut keys: Vec<String> = map.iter().map(|(k, _)| k.clone()).collect();
+        keys.sort();
+        if keys.is_empty() {
+          "object keys=[]".to_string()
+        } else {
+          format!("object keys=[{}]", keys.join(", "))
+        }
+      }
+      Value::Array(arr) => format!("array length={}", arr.len()),
+      _ => format!("value={}", obj.to_display_string()),
+    };
+    match &obj {
+      Value::Object(map) => {
+        return Ok(get_object_prop(map, &prop_name));
+      }
+      Value::Array(arr) => {
+        if matches!(member.prop, MemberProp::Computed(_)) {
+          if let Ok(idx) = prop_name.parse::<usize>() {
+            return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
+          }
+          return Ok(Value::Undefined);
+        }
+        if prop_name == "length" {
+          return Ok(Value::number(arr.len() as f64));
+        }
+        return Ok(Value::Undefined);
+      }
+      Value::String(s) => {
+        if matches!(member.prop, MemberProp::Computed(_)) {
+          if let Ok(idx) = prop_name.parse::<usize>() {
+            return Ok(
+              s.chars()
+                .nth(idx)
+                .map(|c| Value::String(c.to_string()))
+                .unwrap_or(Value::Undefined),
+            );
+          }
+          return Ok(Value::Undefined);
+        }
+        if prop_name == "length" {
+          return Ok(Value::number(s.chars().count() as f64));
+        }
+        return Ok(Value::Undefined);
+      }
+      Value::Null | Value::Undefined => {
+        let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
+        return Err(ConfTSError::new(
+          format!(
+            "Cannot read property of {}",
+            if matches!(obj, Value::Null) {
+              "null"
+            } else {
+              "undefined"
+            }
+          ),
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+      _ => {}
+    }
+  } else if let Err(err) = obj_eval {
+    obj_debug = format!("eval_error={}", err.message);
   }
 
-  // Try as enum access
-  let full_name = if let Expression::Identifier(ident) = obj_expr {
-    format!("{}.{}", ident.name.as_str(), prop_name)
+  // Then try as enum access
+  let full_name = if let Expr::Ident(ident) = member.obj.as_ref() {
+    format!("{}.{}", ident_name(ident), prop_name)
   } else {
     String::new()
   };
 
-  if !full_name.is_empty() {
-    if let Some(file_enums) = ctx.enum_map.get(&file_ctx.file_path) {
-      if let Some(val) = file_enums.get(&full_name) {
-        return Ok(val.clone());
-      }
-    }
-    for (file_path, file_enums) in &ctx.enum_map {
-      if let Some(val) = file_enums.get(&full_name) {
-        ctx.evaluated_files.insert(file_path.clone());
-        return Ok(val.clone());
-      }
-    }
-  }
-
-  let obj_debug = match &obj_eval {
-    Ok(Value::Object(map)) => {
-      let mut keys: Vec<String> = map.iter().map(|(k, _)| k.clone()).collect();
-      keys.sort();
-      if keys.is_empty() {
-        "object keys=[]".to_string()
-      } else {
-        format!("object keys=[{}]", keys.join(", "))
-      }
-    }
-    Ok(Value::Array(arr)) => format!("array length={}", arr.len()),
-    Ok(val) => format!("value={}", val.to_display_string()),
-    Err(err) => format!("eval_error={}", err.message),
-  };
   let enum_in_file = ctx
     .enum_map
     .get(&file_ctx.file_path)
@@ -887,11 +817,25 @@ fn eval_member_access(
     "checked"
   };
 
-  let (line, character) = get_location(&file_ctx.line_index, span_start);
+  if !full_name.is_empty() {
+    if let Some(file_enums) = ctx.enum_map.get(&file_ctx.file_path)
+      && let Some(val) = file_enums.get(&full_name)
+    {
+      return Ok(val.clone());
+    }
+    for (file_path, file_enums) in &ctx.enum_map {
+      if let Some(val) = file_enums.get(&full_name) {
+        ctx.evaluated_files.insert(file_path.clone());
+        return Ok(val.clone());
+      }
+    }
+  }
+
+  let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
   Err(ConfTSError::new(
     format!(
       "Unsupported property access expression: {}.{}. Debug: obj={}, enum_lookup={}, enum_candidates={}/{}",
-      expr_to_string(obj_expr),
+      expr_to_string(&member.obj),
       prop_name,
       obj_debug,
       enum_lookup,
@@ -904,79 +848,68 @@ fn eval_member_access(
   ))
 }
 
-/// Evaluate an optional chain expression.
-fn eval_chain_expr(
-  chain_elem: &ChainElement,
+fn eval_opt_chain_expr(
+  opt_chain: &OptChainExpr,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  match chain_elem {
-    ChainElement::StaticMemberExpression(member) => {
-      let prop_name = member.property.name.as_str().to_string();
-      eval_optional_member_access(
-        &member.object,
-        &prop_name,
-        false,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )
+  match &*opt_chain.base {
+    OptChainBase::Member(member) => {
+      eval_optional_member_expr(member, file_ctx, ctx, local_context, options)
     }
-    ChainElement::ComputedMemberExpression(member) => {
-      let val = evaluate(&member.expression, file_ctx, ctx, local_context, options)?;
-      let prop_name = val.to_display_string();
-      eval_optional_member_access(
-        &member.object,
-        &prop_name,
-        true,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )
-    }
-    ChainElement::CallExpression(call) => {
+    OptChainBase::Call(call) => {
       match evaluate(&call.callee, file_ctx, ctx, local_context, options) {
         Ok(Value::Null) | Ok(Value::Undefined) => Ok(Value::Undefined),
-        _ => eval_call_expr(call, file_ctx, ctx, local_context, options),
+        _ => {
+          let wrapped = Expr::Call(CallExpr {
+            span: call.span,
+            ctxt: call.ctxt,
+            callee: Callee::Expr(call.callee.clone()),
+            args: call.args.clone(),
+            type_args: call.type_args.clone(),
+          });
+          evaluate(&wrapped, file_ctx, ctx, local_context, options)
+        }
       }
-    }
-    ChainElement::TSNonNullExpression(ts_nn) => {
-      evaluate(&ts_nn.expression, file_ctx, ctx, local_context, options)
-    }
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, chain_elem.span().start);
-      Err(ConfTSError::new(
-        "Unsupported chain expression",
-        &file_ctx.file_path,
-        line,
-        character,
-      ))
     }
   }
 }
 
-fn eval_optional_member_access(
-  obj_expr: &Expression,
-  prop_name: &str,
-  is_computed: bool,
+fn eval_optional_member_expr(
+  member: &MemberExpr,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  let obj = evaluate(obj_expr, file_ctx, ctx, local_context, options)?;
+  let prop_name = match &member.prop {
+    MemberProp::Ident(ident_name_node) => ident_name_node.sym.as_str().to_string(),
+    MemberProp::Computed(comp) => {
+      let val = evaluate(&comp.expr, file_ctx, ctx, local_context, options)?;
+      val.to_display_string()
+    }
+    _ => {
+      let (line, character) = get_location(&file_ctx.source_map, member.span.lo);
+      return Err(ConfTSError::new(
+        "Unsupported member expression property type",
+        &file_ctx.file_path,
+        line,
+        character,
+      ));
+    }
+  };
+
+  let obj = evaluate(&member.obj, file_ctx, ctx, local_context, options)?;
   match obj {
     Value::Null | Value::Undefined => Ok(Value::Undefined),
-    Value::Object(map) => Ok(get_object_prop(&map, prop_name)),
+    Value::Object(map) => Ok(get_object_prop(&map, &prop_name)),
     Value::Array(arr) => {
-      if is_computed {
-        if let Ok(idx) = prop_name.parse::<usize>() {
-          return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
-        }
+      if matches!(member.prop, MemberProp::Computed(_))
+        && let Ok(idx) = prop_name.parse::<usize>()
+      {
+        return Ok(arr.get(idx).cloned().unwrap_or(Value::Undefined));
       }
       if prop_name == "length" {
         return Ok(Value::number(arr.len() as f64));
@@ -984,15 +917,15 @@ fn eval_optional_member_access(
       Ok(Value::Undefined)
     }
     Value::String(s) => {
-      if is_computed {
-        if let Ok(idx) = prop_name.parse::<usize>() {
-          return Ok(
-            s.chars()
-              .nth(idx)
-              .map(|c| Value::String(c.to_string()))
-              .unwrap_or(Value::Undefined),
-          );
-        }
+      if matches!(member.prop, MemberProp::Computed(_))
+        && let Ok(idx) = prop_name.parse::<usize>()
+      {
+        return Ok(
+          s.chars()
+            .nth(idx)
+            .map(|c| Value::String(c.to_string()))
+            .unwrap_or(Value::Undefined),
+        );
       }
       if prop_name == "length" {
         return Ok(Value::number(s.chars().count() as f64));
@@ -1005,51 +938,51 @@ fn eval_optional_member_access(
 
 /// Evaluate a binary operation.
 fn eval_binary_op(
-  op: BinaryOperator,
+  op: BinaryOp,
   left: Value,
   right: Value,
   file: &str,
-  li: &LineIndex,
-  offset: u32,
+  sm: &SourceMap,
+  pos: BytePos,
 ) -> Result<Value, ConfTSError> {
   match op {
-    BinaryOperator::Addition => match (&left, &right) {
+    BinaryOp::Add => match (&left, &right) {
       (Value::String(l), _) => Ok(Value::String(format!("{}{}", l, right.to_display_string()))),
       (_, Value::String(r)) => Ok(Value::String(format!("{}{}", left.to_display_string(), r))),
       _ => Ok(Value::number(left.to_number() + right.to_number())),
     },
-    BinaryOperator::Subtraction => Ok(Value::number(left.to_number() - right.to_number())),
-    BinaryOperator::Multiplication => Ok(Value::number(left.to_number() * right.to_number())),
-    BinaryOperator::Division => Ok(Value::number(left.to_number() / right.to_number())),
-    BinaryOperator::Remainder => Ok(Value::number(left.to_number() % right.to_number())),
-    BinaryOperator::Exponential => Ok(Value::number(left.to_number().powf(right.to_number()))),
-    BinaryOperator::GreaterThan => Ok(Value::Bool(left.to_number() > right.to_number())),
-    BinaryOperator::LessThan => Ok(Value::Bool(left.to_number() < right.to_number())),
-    BinaryOperator::GreaterEqualThan => Ok(Value::Bool(left.to_number() >= right.to_number())),
-    BinaryOperator::LessEqualThan => Ok(Value::Bool(left.to_number() <= right.to_number())),
-    BinaryOperator::Equality => Ok(Value::Bool(left.loose_eq(&right))),
-    BinaryOperator::StrictEquality => Ok(Value::Bool(left.strict_eq(&right))),
-    BinaryOperator::Inequality => Ok(Value::Bool(!left.loose_eq(&right))),
-    BinaryOperator::StrictInequality => Ok(Value::Bool(!left.strict_eq(&right))),
-    BinaryOperator::BitwiseAnd => Ok(Value::number(
+    BinaryOp::Sub => Ok(Value::number(left.to_number() - right.to_number())),
+    BinaryOp::Mul => Ok(Value::number(left.to_number() * right.to_number())),
+    BinaryOp::Div => Ok(Value::number(left.to_number() / right.to_number())),
+    BinaryOp::Mod => Ok(Value::number(left.to_number() % right.to_number())),
+    BinaryOp::Exp => Ok(Value::number(left.to_number().powf(right.to_number()))),
+    BinaryOp::Gt => Ok(Value::Bool(left.to_number() > right.to_number())),
+    BinaryOp::Lt => Ok(Value::Bool(left.to_number() < right.to_number())),
+    BinaryOp::GtEq => Ok(Value::Bool(left.to_number() >= right.to_number())),
+    BinaryOp::LtEq => Ok(Value::Bool(left.to_number() <= right.to_number())),
+    BinaryOp::EqEq => Ok(Value::Bool(left.loose_eq(&right))),
+    BinaryOp::EqEqEq => Ok(Value::Bool(left.strict_eq(&right))),
+    BinaryOp::NotEq => Ok(Value::Bool(!left.loose_eq(&right))),
+    BinaryOp::NotEqEq => Ok(Value::Bool(!left.strict_eq(&right))),
+    BinaryOp::BitAnd => Ok(Value::number(
       ((left.to_number() as i32) & (right.to_number() as i32)) as f64,
     )),
-    BinaryOperator::BitwiseOR => Ok(Value::number(
+    BinaryOp::BitOr => Ok(Value::number(
       ((left.to_number() as i32) | (right.to_number() as i32)) as f64,
     )),
-    BinaryOperator::BitwiseXOR => Ok(Value::number(
+    BinaryOp::BitXor => Ok(Value::number(
       ((left.to_number() as i32) ^ (right.to_number() as i32)) as f64,
     )),
-    BinaryOperator::ShiftLeft => Ok(Value::number(
+    BinaryOp::LShift => Ok(Value::number(
       ((left.to_number() as i32) << ((right.to_number() as i32) & 31)) as f64,
     )),
-    BinaryOperator::ShiftRight => Ok(Value::number(
+    BinaryOp::RShift => Ok(Value::number(
       ((left.to_number() as i32) >> ((right.to_number() as i32) & 31)) as f64,
     )),
-    BinaryOperator::ShiftRightZeroFill => Ok(Value::number(
+    BinaryOp::ZeroFillRShift => Ok(Value::number(
       ((left.to_number() as i32 as u32) >> ((right.to_number() as i32) & 31)) as f64,
     )),
-    BinaryOperator::In => {
+    BinaryOp::In => {
       let key = left.to_display_string();
       match &right {
         Value::Object(map) => Ok(Value::Bool(map.iter().any(|(k, _)| k == &key))),
@@ -1058,7 +991,7 @@ fn eval_binary_op(
           Err(_) => Ok(Value::Bool(false)),
         },
         _ => {
-          let (line, character) = get_location(li, offset);
+          let (line, character) = get_location(sm, pos);
           Err(ConfTSError::new(
             "Cannot use 'in' operator on non-object value",
             file,
@@ -1069,7 +1002,7 @@ fn eval_binary_op(
       }
     }
     _ => {
-      let (line, character) = get_location(li, offset);
+      let (line, character) = get_location(sm, pos);
       Err(ConfTSError::new(
         format!("Unsupported binary operator: {:?}", op),
         file,
@@ -1080,34 +1013,23 @@ fn eval_binary_op(
   }
 }
 
-/// Evaluate a property key.
-fn eval_property_key(
-  key: &PropertyKey,
-  computed: bool,
+/// Evaluate a property name (key in object literal).
+fn eval_prop_name(
+  prop: &PropName,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<String, ConfTSError> {
-  if computed {
-    if let Some(expr) = key.as_expression() {
-      let val = evaluate(expr, file_ctx, ctx, local_context, options)?;
-      return Ok(val.to_display_string());
+  match prop {
+    PropName::Ident(id) => Ok(id.sym.as_str().to_string()),
+    PropName::Str(s) => Ok(s.value.as_str().unwrap_or("").to_string()),
+    PropName::Num(n) => Ok(n.value.to_string()),
+    PropName::Computed(comp) => {
+      let val = evaluate(&comp.expr, file_ctx, ctx, local_context, options)?;
+      Ok(val.to_display_string())
     }
-  }
-  match key {
-    PropertyKey::StaticIdentifier(id) => Ok(id.name.as_str().to_string()),
-    PropertyKey::StringLiteral(s) => Ok(s.value.as_str().to_string()),
-    PropertyKey::NumericLiteral(n) => Ok(n.value.to_string()),
-    PropertyKey::BigIntLiteral(bi) => Ok(bi.value.as_str().to_string()),
-    other => {
-      if let Some(expr) = other.as_expression() {
-        let val = evaluate(expr, file_ctx, ctx, local_context, options)?;
-        Ok(val.to_display_string())
-      } else {
-        Ok(String::new())
-      }
-    }
+    PropName::BigInt(bi) => Ok(bi.value.to_string()),
   }
 }
 
@@ -1121,10 +1043,12 @@ pub fn resolve_identifier(
   line: usize,
   character: usize,
 ) -> Result<Value, ConfTSError> {
+  // Check in current file's declarations
   if let Some(val) = resolve_in_file(name, file_ctx, ctx, local_context, options)? {
     return Ok(val);
   }
 
+  // Check imports
   let mut import_debug = "none".to_string();
   if let Some(import_info) = file_ctx.imports.get(name) {
     let original_name = import_info.original_name.as_deref().unwrap_or(name);
@@ -1135,15 +1059,14 @@ pub fn resolve_identifier(
     };
     let mut import_context_loaded = false;
 
-    if let Some(resolved_path) = resolved_path.clone() {
-      if let Some(imported_ctx) = ctx.file_contexts.get(&resolved_path).cloned() {
-        import_context_loaded = true;
-        if original_name == "*" {
-          return Ok(Value::Object(exported_values(&imported_ctx, ctx, options)?));
-        } else if let Some(val) = resolve_in_file(original_name, &imported_ctx, ctx, None, options)?
-        {
-          return Ok(val);
-        }
+    if let Some(resolved_path) = resolved_path.clone()
+      && let Some(imported_ctx) = ctx.file_contexts.get(&resolved_path).cloned()
+    {
+      import_context_loaded = true;
+      if original_name == "*" {
+        return Ok(Value::Object(exported_values(&imported_ctx, ctx, options)?));
+      } else if let Some(val) = resolve_in_file(original_name, &imported_ctx, ctx, None, options)? {
+        return Ok(val);
       }
     }
 
@@ -1163,6 +1086,7 @@ pub fn resolve_identifier(
     .unwrap_or(0);
   let enum_total: usize = ctx.enum_map.values().map(|map| map.len()).sum();
 
+  // Check enum map
   for (file_path, file_enums) in &ctx.enum_map {
     for (enum_key, val) in file_enums {
       if enum_key.ends_with(&format!(".{}", name)) {
@@ -1216,40 +1140,39 @@ fn resolve_declared_in_file(
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
   if name == "default" {
-    for stmt in &file_ctx.program().body {
-      if let Statement::ExportDefaultDeclaration(export) = stmt {
-        if let Some(expr) = export.declaration.as_expression() {
-          let val = evaluate(expr, file_ctx, ctx, local_context, options)?;
-          return Ok(Some(val));
-        } else {
-          let (line, character) = get_location(&file_ctx.line_index, export.span.start);
-          return Err(ConfTSError::new(
-            "Unsupported default export declaration",
-            &file_ctx.file_path,
-            line,
-            character,
-          ));
-        }
+    for item in &file_ctx.module.body {
+      if let ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) = item {
+        let val = evaluate(&export.expr, file_ctx, ctx, local_context, options)?;
+        return Ok(Some(val));
+      }
+      if let ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(_)) = item {
+        let (line, character) = get_location(&file_ctx.source_map, item.span().lo);
+        return Err(ConfTSError::new(
+          "Unsupported default export declaration",
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
       }
     }
   }
-  for stmt in &file_ctx.program().body {
-    match stmt {
-      Statement::VariableDeclaration(var_decl) => {
+  for item in &file_ctx.module.body {
+    match item {
+      ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) => {
         if let Some(result) = check_var_decl(name, var_decl, file_ctx, ctx, local_context, options)?
         {
           return Ok(Some(result));
         }
       }
-      Statement::ExportNamedDeclaration(export_decl) => match &export_decl.declaration {
-        Some(Declaration::VariableDeclaration(var_decl)) => {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => match &export_decl.decl {
+        Decl::Var(var_decl) => {
           if let Some(result) =
             check_var_decl(name, var_decl, file_ctx, ctx, local_context, options)?
           {
             return Ok(Some(result));
           }
         }
-        Some(Declaration::TSEnumDeclaration(enum_decl)) if enum_decl.id.name.as_str() == name => {
+        Decl::TsEnum(enum_decl) if enum_decl.id.sym.as_str() == name => {
           return Ok(Some(enum_object_from_decl(
             enum_decl.as_ref(),
             &file_ctx.file_path,
@@ -1258,7 +1181,9 @@ fn resolve_declared_in_file(
         }
         _ => {}
       },
-      Statement::TSEnumDeclaration(enum_decl) if enum_decl.id.name.as_str() == name => {
+      ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(enum_decl)))
+        if enum_decl.id.sym.as_str() == name =>
+      {
         return Ok(Some(enum_object_from_decl(
           enum_decl.as_ref(),
           &file_ctx.file_path,
@@ -1283,34 +1208,47 @@ pub fn resolve_in_file(
     return Ok(Some(result));
   }
 
-  for stmt in &file_ctx.program().body {
-    match stmt {
-      Statement::ExportNamedDeclaration(named_export) => {
+  for item in &file_ctx.module.body {
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
         for specifier in &named_export.specifiers {
-          let exported_name = module_export_name_to_string(&specifier.exported);
-          if exported_name != name {
-            continue;
-          }
-          let original_name = module_export_name_to_string(&specifier.local);
-          if let Some(src) = &named_export.source {
-            if let Some(imported_ctx) = resolve_imported_file(src.value.as_str(), file_ctx, ctx) {
-              return resolve_in_file(&original_name, &imported_ctx, ctx, None, options);
+          if let ExportSpecifier::Named(named) = specifier {
+            let exported_name = named
+              .exported
+              .as_ref()
+              .map(module_export_name_to_string)
+              .unwrap_or_else(|| module_export_name_to_string(&named.orig));
+            if exported_name != name {
+              continue;
             }
-          } else {
-            return resolve_declared_in_file(&original_name, file_ctx, ctx, local_context, options);
+            let original_name = module_export_name_to_string(&named.orig);
+            if let Some(src) = &named_export.src {
+              if let Some(imported_ctx) =
+                resolve_imported_file(src.value.as_str().unwrap_or(""), file_ctx, ctx)
+              {
+                return resolve_in_file(&original_name, &imported_ctx, ctx, None, options);
+              }
+            } else {
+              return resolve_declared_in_file(
+                &original_name,
+                file_ctx,
+                ctx,
+                local_context,
+                options,
+              );
+            }
           }
         }
       }
-      Statement::ExportAllDeclaration(export_all) => {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
         if name == "default" {
           continue;
         }
         if let Some(imported_ctx) =
-          resolve_imported_file(export_all.source.value.as_str(), file_ctx, ctx)
+          resolve_imported_file(export_all.src.value.as_str().unwrap_or(""), file_ctx, ctx)
+          && let Some(result) = resolve_in_file(name, &imported_ctx, ctx, None, options)?
         {
-          if let Some(result) = resolve_in_file(name, &imported_ctx, ctx, None, options)? {
-            return Ok(Some(result));
-          }
+          return Ok(Some(result));
         }
       }
       _ => {}
@@ -1327,59 +1265,63 @@ fn exported_values(
 ) -> Result<Vec<(String, Value)>, ConfTSError> {
   let mut exports = Vec::new();
 
-  for stmt in &file_ctx.program().body {
-    match stmt {
-      Statement::ExportDefaultDeclaration(export) => {
-        if let Some(expr) = export.declaration.as_expression() {
-          let val = evaluate(expr, file_ctx, ctx, None, options)?;
-          set_object_prop(
-            &mut exports,
-            "default".to_string(),
-            val,
-            options.preserve_key_order,
-          );
-        }
+  for item in &file_ctx.module.body {
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) => {
+        let val = evaluate(&export.expr, file_ctx, ctx, None, options)?;
+        set_object_prop(
+          &mut exports,
+          "default".to_string(),
+          val,
+          options.preserve_key_order,
+        );
       }
-      Statement::ExportNamedDeclaration(export_decl) => {
-        match &export_decl.declaration {
-          Some(Declaration::VariableDeclaration(var_decl)) => {
-            for decl in &var_decl.declarations {
-              if let BindingPattern::BindingIdentifier(ident) = &decl.id {
-                let name = ident.name.as_str().to_string();
-                if let Some(val) = resolve_declared_in_file(&name, file_ctx, ctx, None, options)? {
-                  set_object_prop(&mut exports, name, val, options.preserve_key_order);
-                }
+      ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => match &export_decl.decl {
+        Decl::Var(var_decl) => {
+          for decl in &var_decl.decls {
+            if let Pat::Ident(ident) = &decl.name {
+              let name = ident_name(&ident.id).to_string();
+              if let Some(val) = resolve_declared_in_file(&name, file_ctx, ctx, None, options)? {
+                set_object_prop(&mut exports, name, val, options.preserve_key_order);
               }
             }
           }
-          Some(Declaration::TSEnumDeclaration(enum_decl)) => {
-            let name = enum_decl.id.name.as_str().to_string();
-            let val = enum_object_from_decl(enum_decl.as_ref(), &file_ctx.file_path, ctx);
-            set_object_prop(&mut exports, name, val, options.preserve_key_order);
-          }
-          _ => {}
         }
-        for specifier in &export_decl.specifiers {
-          let original_name = module_export_name_to_string(&specifier.local);
-          let exported_name = module_export_name_to_string(&specifier.exported);
-          let val = if let Some(src) = &export_decl.source {
-            resolve_imported_file(src.value.as_str(), file_ctx, ctx)
-              .map(|imported_ctx| {
-                resolve_in_file(&original_name, &imported_ctx, ctx, None, options)
-              })
-              .transpose()?
-              .flatten()
-          } else {
-            resolve_declared_in_file(&original_name, file_ctx, ctx, None, options)?
-          };
-          if let Some(val) = val {
-            set_object_prop(&mut exports, exported_name, val, options.preserve_key_order);
+        Decl::TsEnum(enum_decl) => {
+          let name = enum_decl.id.sym.as_str().to_string();
+          let val = enum_object_from_decl(enum_decl.as_ref(), &file_ctx.file_path, ctx);
+          set_object_prop(&mut exports, name, val, options.preserve_key_order);
+        }
+        _ => {}
+      },
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        for specifier in &named_export.specifiers {
+          if let ExportSpecifier::Named(named) = specifier {
+            let original_name = module_export_name_to_string(&named.orig);
+            let exported_name = named
+              .exported
+              .as_ref()
+              .map(module_export_name_to_string)
+              .unwrap_or_else(|| original_name.clone());
+            let val = if let Some(src) = &named_export.src {
+              resolve_imported_file(src.value.as_str().unwrap_or(""), file_ctx, ctx)
+                .map(|imported_ctx| {
+                  resolve_in_file(&original_name, &imported_ctx, ctx, None, options)
+                })
+                .transpose()?
+                .flatten()
+            } else {
+              resolve_declared_in_file(&original_name, file_ctx, ctx, None, options)?
+            };
+            if let Some(val) = val {
+              set_object_prop(&mut exports, exported_name, val, options.preserve_key_order);
+            }
           }
         }
       }
-      Statement::ExportAllDeclaration(export_all) => {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
         if let Some(imported_ctx) =
-          resolve_imported_file(export_all.source.value.as_str(), file_ctx, ctx)
+          resolve_imported_file(export_all.src.value.as_str().unwrap_or(""), file_ctx, ctx)
         {
           for (key, val) in exported_values(&imported_ctx, ctx, options)? {
             if key != "default" {
@@ -1397,59 +1339,57 @@ fn exported_values(
 
 fn check_var_decl(
   name: &str,
-  var_decl: &VariableDeclaration,
+  var_decl: &VarDecl,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
-  if var_decl.kind != VariableDeclarationKind::Const {
-    for decl in &var_decl.declarations {
-      if let BindingPattern::BindingIdentifier(ident) = &decl.id {
-        if ident.name.as_str() == name {
-          let kind = match var_decl.kind {
-            VariableDeclarationKind::Let => "let",
-            VariableDeclarationKind::Var => "var",
-            _ => unreachable!(),
-          };
-          return Err(ConfTSError::new(
-            format!(
-              "Failed to evaluate variable \"{}\". Only 'const' declarations are supported, but it was declared with '{}'.",
-              name, kind
-            ),
-            &file_ctx.file_path,
-            1,
-            1,
-          ));
-        }
+  if var_decl.kind != VarDeclKind::Const {
+    for decl in &var_decl.decls {
+      if let Pat::Ident(ident) = &decl.name
+        && ident_name(&ident.id) == name
+      {
+        let kind = match var_decl.kind {
+          VarDeclKind::Let => "let",
+          VarDeclKind::Var => "var",
+          _ => "const",
+        };
+        return Err(ConfTSError::new(
+          format!(
+            "Failed to evaluate variable \"{}\". Only 'const' declarations are supported, but it was declared with '{}'.",
+            name, kind
+          ),
+          &file_ctx.file_path,
+          1,
+          1,
+        ));
       }
     }
     return Ok(None);
   }
-  for decl in &var_decl.declarations {
-    match &decl.id {
-      BindingPattern::BindingIdentifier(ident) if ident.name.as_str() == name => {
+  for decl in &var_decl.decls {
+    match &decl.name {
+      Pat::Ident(ident) if ident_name(&ident.id) == name => {
         if let Some(ref init) = decl.init {
           let val = evaluate(init, file_ctx, ctx, local_context, options)?;
           return Ok(Some(val));
         }
       }
-      BindingPattern::ObjectPattern(obj_pat) => {
-        if let Some(ref init) = decl.init {
-          if let Some(val) =
+      Pat::Object(obj_pat) => {
+        if let Some(ref init) = decl.init
+          && let Some(val) =
             resolve_destructured(name, obj_pat, init, file_ctx, ctx, local_context, options)?
-          {
-            return Ok(Some(val));
-          }
+        {
+          return Ok(Some(val));
         }
       }
-      BindingPattern::ArrayPattern(arr_pat) => {
-        if let Some(ref init) = decl.init {
-          if let Some(val) =
+      Pat::Array(arr_pat) => {
+        if let Some(ref init) = decl.init
+          && let Some(val) =
             resolve_array_destructured(name, arr_pat, init, file_ctx, ctx, local_context, options)?
-          {
-            return Ok(Some(val));
-          }
+        {
+          return Ok(Some(val));
         }
       }
       _ => {}
@@ -1458,10 +1398,11 @@ fn check_var_decl(
   Ok(None)
 }
 
+/// Resolve a name from an array destructuring pattern.
 fn resolve_array_destructured(
   name: &str,
-  arr_pat: &ArrayPattern,
-  init: &Expression,
+  arr_pat: &ArrayPat,
+  init: &Expr,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
@@ -1471,10 +1412,11 @@ fn resolve_array_destructured(
   resolve_array_pattern_value(name, arr_pat, source, file_ctx, ctx, local_context, options)
 }
 
+/// Resolve a name from a destructuring pattern.
 fn resolve_destructured(
   name: &str,
-  obj_pat: &ObjectPattern,
-  init: &Expression,
+  obj_pat: &ObjectPat,
+  init: &Expr,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
@@ -1494,7 +1436,7 @@ fn resolve_destructured(
 
 fn resolve_pattern_value(
   name: &str,
-  pat: &BindingPattern,
+  pat: &Pat,
   value: Value,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
@@ -1502,20 +1444,20 @@ fn resolve_pattern_value(
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
   match pat {
-    BindingPattern::BindingIdentifier(bind_ident) => {
-      if bind_ident.name.as_str() == name {
+    Pat::Ident(bind_ident) => {
+      if ident_name(&bind_ident.id) == name {
         Ok(Some(value))
       } else {
         Ok(None)
       }
     }
-    BindingPattern::ObjectPattern(obj_pat) => {
+    Pat::Object(obj_pat) => {
       resolve_object_pattern_value(name, obj_pat, value, file_ctx, ctx, local_context, options)
     }
-    BindingPattern::ArrayPattern(arr_pat) => {
+    Pat::Array(arr_pat) => {
       resolve_array_pattern_value(name, arr_pat, value, file_ctx, ctx, local_context, options)
     }
-    BindingPattern::AssignmentPattern(assign) => {
+    Pat::Assign(assign) => {
       let actual = if matches!(value, Value::Undefined) {
         evaluate(&assign.right, file_ctx, ctx, local_context, options)?
       } else {
@@ -1531,12 +1473,22 @@ fn resolve_pattern_value(
         options,
       )
     }
+    Pat::Rest(rest) => resolve_pattern_value(
+      name,
+      &rest.arg,
+      value,
+      file_ctx,
+      ctx,
+      local_context,
+      options,
+    ),
+    _ => Ok(None),
   }
 }
 
 fn resolve_array_pattern_value(
   name: &str,
-  arr_pat: &ArrayPattern,
+  arr_pat: &ArrayPat,
   source: Value,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
@@ -1547,32 +1499,22 @@ fn resolve_array_pattern_value(
     Value::Array(items) => items,
     _ => Vec::new(),
   };
-  for (idx, elem) in arr_pat.elements.iter().enumerate() {
+  for (idx, elem) in arr_pat.elems.iter().enumerate() {
     let Some(pat) = elem else {
       continue;
     };
-    let value = items.get(idx).cloned().unwrap_or(Value::Undefined);
+    let value = if let Pat::Rest(_) = pat {
+      Value::Array(if idx >= items.len() {
+        Vec::new()
+      } else {
+        items[idx..].to_vec()
+      })
+    } else {
+      items.get(idx).cloned().unwrap_or(Value::Undefined)
+    };
     if let Some(resolved) =
       resolve_pattern_value(name, pat, value, file_ctx, ctx, local_context, options)?
     {
-      return Ok(Some(resolved));
-    }
-  }
-  if let Some(rest) = &arr_pat.rest {
-    let rest_items = if arr_pat.elements.len() >= items.len() {
-      Vec::new()
-    } else {
-      items[arr_pat.elements.len()..].to_vec()
-    };
-    if let Some(resolved) = resolve_pattern_value(
-      name,
-      &rest.argument,
-      Value::Array(rest_items),
-      file_ctx,
-      ctx,
-      local_context,
-      options,
-    )? {
       return Ok(Some(resolved));
     }
   }
@@ -1581,7 +1523,7 @@ fn resolve_array_pattern_value(
 
 fn resolve_object_pattern_value(
   name: &str,
-  obj_pat: &ObjectPattern,
+  obj_pat: &ObjectPat,
   source_obj: Value,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
@@ -1592,14 +1534,14 @@ fn resolve_object_pattern_value(
     Value::Object(map) => map,
     _ => Vec::new(),
   };
-  for prop in &obj_pat.properties {
-    if prop.shorthand {
-      if let PropertyKey::StaticIdentifier(key_ident) = &prop.key {
-        let key = key_ident.name.as_str();
-        let value = get_object_prop(&map, key);
+  for prop in &obj_pat.props {
+    match prop {
+      ObjectPatProp::KeyValue(kv) => {
+        let key = eval_pat_prop_name(&kv.key, file_ctx, ctx, local_context, options)?;
+        let value = get_object_prop(&map, &key);
         if let Some(resolved) = resolve_pattern_value(
           name,
-          &prop.value,
+          &kv.value,
           value,
           file_ctx,
           ctx,
@@ -1609,103 +1551,105 @@ fn resolve_object_pattern_value(
           return Ok(Some(resolved));
         }
       }
-    } else {
-      let key = eval_property_key(
-        &prop.key,
-        prop.computed,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )?;
-      let value = get_object_prop(&map, &key);
-      if let Some(resolved) = resolve_pattern_value(
-        name,
-        &prop.value,
-        value,
-        file_ctx,
-        ctx,
-        local_context,
-        options,
-      )? {
-        return Ok(Some(resolved));
-      }
-    }
-  }
-  if let Some(rest) = &obj_pat.rest {
-    let mut keys_to_remove = HashSet::new();
-    for p in &obj_pat.properties {
-      if p.shorthand {
-        if let PropertyKey::StaticIdentifier(key_ident) = &p.key {
-          keys_to_remove.insert(key_ident.name.as_str().to_string());
-        }
-      } else {
-        if let Ok(key) =
-          eval_property_key(&p.key, p.computed, file_ctx, ctx, local_context, options)
-        {
-          keys_to_remove.insert(key);
+      ObjectPatProp::Assign(assign) => {
+        if ident_name(&assign.key) == name {
+          let mut value = get_object_prop(&map, name);
+          if matches!(value, Value::Undefined)
+            && let Some(default_value) = &assign.value
+          {
+            value = evaluate(default_value, file_ctx, ctx, local_context, options)?;
+          }
+          return Ok(Some(value));
         }
       }
-    }
-    let rest_obj: Vec<(String, Value)> = map
-      .iter()
-      .filter(|(k, _)| !keys_to_remove.contains(k))
-      .map(|(k, v)| (k.clone(), v.clone()))
-      .collect();
-    if let Some(resolved) = resolve_pattern_value(
-      name,
-      &rest.argument,
-      Value::Object(rest_obj),
-      file_ctx,
-      ctx,
-      local_context,
-      options,
-    )? {
-      return Ok(Some(resolved));
+      ObjectPatProp::Rest(rest) => {
+        let mut keys_to_remove = HashSet::new();
+        for p in &obj_pat.props {
+          match p {
+            ObjectPatProp::KeyValue(kv) => {
+              keys_to_remove.insert(eval_pat_prop_name(
+                &kv.key,
+                file_ctx,
+                ctx,
+                local_context,
+                options,
+              )?);
+            }
+            ObjectPatProp::Assign(assign) => {
+              keys_to_remove.insert(ident_name(&assign.key).to_string());
+            }
+            ObjectPatProp::Rest(_) => {}
+          }
+        }
+        let rest_obj: Vec<(String, Value)> = map
+          .iter()
+          .filter(|(k, _)| !keys_to_remove.contains(k))
+          .map(|(k, v)| (k.clone(), v.clone()))
+          .collect();
+        if let Some(resolved) = resolve_pattern_value(
+          name,
+          &rest.arg,
+          Value::Object(rest_obj),
+          file_ctx,
+          ctx,
+          local_context,
+          options,
+        )? {
+          return Ok(Some(resolved));
+        }
+      }
     }
   }
   Ok(None)
 }
 
-/// Convert an expression to a display string (for error messages).
-pub fn expr_to_string(expr: &Expression) -> String {
-  match expr {
-    Expression::Identifier(ident) => ident.name.as_str().to_string(),
-    Expression::StaticMemberExpression(member) => {
-      let obj = expr_to_string(&member.object);
-      format!("{}.{}", obj, member.property.name.as_str())
+fn eval_pat_prop_name(
+  prop: &PropName,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<String, ConfTSError> {
+  match prop {
+    PropName::Computed(comp) => {
+      let val = evaluate(&comp.expr, file_ctx, ctx, local_context, options)?;
+      Ok(val.to_display_string())
     }
-    Expression::ComputedMemberExpression(member) => {
-      let obj = expr_to_string(&member.object);
-      format!("{}[...]", obj)
+    _ => Ok(prop_name_to_string(prop)),
+  }
+}
+
+fn prop_name_to_string(prop: &PropName) -> String {
+  match prop {
+    PropName::Ident(id) => id.sym.as_str().to_string(),
+    PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+    PropName::Num(n) => n.value.to_string(),
+    PropName::BigInt(bi) => bi.value.to_string(),
+    PropName::Computed(_) => String::new(),
+  }
+}
+
+/// Convert an expression to a display string (for error messages).
+pub fn expr_to_string(expr: &Expr) -> String {
+  match expr {
+    Expr::Ident(ident) => ident_name(ident).to_string(),
+    Expr::Member(member) => {
+      let obj = expr_to_string(&member.obj);
+      match &member.prop {
+        MemberProp::Ident(id) => format!("{}.{}", obj, id.sym.as_str()),
+        _ => format!("{}[...]", obj),
+      }
     }
     _ => "<expression>".to_string(),
   }
 }
 
 /// Get the callee name from a call expression.
-pub fn call_expr_callee_name(call: &CallExpression) -> String {
-  expr_to_string(&call.callee)
-}
-
-/// Collect macro imports from a program's import declarations.
-pub fn collect_macro_imports(program: &Program, _file_path: &str) -> HashSet<String> {
-  let mut imports = HashSet::new();
-  for stmt in &program.body {
-    if let Statement::ImportDeclaration(import_decl) = stmt {
-      let module_specifier = import_decl.source.value.as_str();
-      if module_specifier == "@conf-ts/macro" {
-        if let Some(specifiers) = &import_decl.specifiers {
-          for specifier in specifiers {
-            if let ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
-              imports.insert(named.local.name.as_str().to_string());
-            }
-          }
-        }
-      }
-    }
+pub fn call_expr_callee_name(call: &CallExpr) -> String {
+  match &call.callee {
+    Callee::Expr(expr) => expr_to_string(expr),
+    _ => "<unknown>".to_string(),
   }
-  imports
 }
 
 /// Import info for a named import.
@@ -1715,67 +1659,65 @@ pub struct ImportInfo {
   pub original_name: Option<String>,
 }
 
-/// Collect all imports from a program.
-pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
+/// Collect all imports from a module.
+pub fn collect_imports(module: &Module) -> HashMap<String, ImportInfo> {
   let mut imports = HashMap::new();
   let mut export_source_index = 0;
-  for stmt in &program.body {
-    match stmt {
-      Statement::ImportDeclaration(import_decl) => {
-        let source = import_decl.source.value.as_str().to_string();
-        if let Some(specifiers) = &import_decl.specifiers {
-          for specifier in specifiers {
-            match specifier {
-              ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                let local_name = named.local.name.as_str().to_string();
-                let original_name = Some(module_export_name_to_string(&named.imported));
-                imports.insert(
-                  local_name,
-                  ImportInfo {
-                    source: source.clone(),
-                    original_name,
-                  },
-                );
-              }
-              ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                imports.insert(
-                  default.local.name.as_str().to_string(),
-                  ImportInfo {
-                    source: source.clone(),
-                    original_name: Some("default".to_string()),
-                  },
-                );
-              }
-              ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
-                imports.insert(
-                  ns.local.name.as_str().to_string(),
-                  ImportInfo {
-                    source: source.clone(),
-                    original_name: Some("*".to_string()),
-                  },
-                );
-              }
+  for item in &module.body {
+    match item {
+      ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl)) => {
+        let source = import_decl.src.value.as_str().unwrap_or("").to_string();
+        for specifier in &import_decl.specifiers {
+          match specifier {
+            ImportSpecifier::Named(named) => {
+              let local_name = ident_name(&named.local).to_string();
+              let original_name = named.imported.as_ref().map(module_export_name_to_string);
+              imports.insert(
+                local_name,
+                ImportInfo {
+                  source: source.clone(),
+                  original_name,
+                },
+              );
+            }
+            ImportSpecifier::Default(default) => {
+              imports.insert(
+                ident_name(&default.local).to_string(),
+                ImportInfo {
+                  source: source.clone(),
+                  original_name: Some("default".to_string()),
+                },
+              );
+            }
+            ImportSpecifier::Namespace(ns) => {
+              imports.insert(
+                ident_name(&ns.local).to_string(),
+                ImportInfo {
+                  source: source.clone(),
+                  original_name: Some("*".to_string()),
+                },
+              );
             }
           }
         }
       }
-      Statement::ExportNamedDeclaration(named_export) => {
-        if let Some(src) = &named_export.source {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(named_export)) => {
+        if let Some(src) = &named_export.src {
           imports.insert(
             format!("__conf_ts_export_source_{}", export_source_index),
             ImportInfo {
-              source: src.value.as_str().to_string(),
+              source: src.value.as_str().unwrap_or("").to_string(),
               original_name: None,
             },
           );
           export_source_index += 1;
         }
       }
-      Statement::ExportAllDeclaration(export_all) => {
+      ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
         imports.insert(
           format!("__conf_ts_export_source_{}", export_source_index),
           ImportInfo {
-            source: export_all.source.value.as_str().to_string(),
+            source: export_all.src.value.as_str().unwrap_or("").to_string(),
             original_name: None,
           },
         );
@@ -1787,54 +1729,43 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
   imports
 }
 
+pub type ModuleResolver = dyn Fn(&str, &str) -> Option<String>;
+pub type CallEvaluator = fn(
+  &CallExpr,
+  &FileContext,
+  &mut EvalContext,
+  Option<&HashMap<String, Value>>,
+  &CompileOptions,
+) -> Result<Value, ConfTSError>;
+
 /// Evaluation context shared across all files during compilation.
 pub struct EvalContext {
   pub enum_map: HashMap<String, HashMap<String, Value>>,
-  pub macro_imports_map: HashMap<String, HashSet<String>>,
   pub evaluated_files: HashSet<String>,
   pub file_contexts: HashMap<String, FileContext>,
-  pub resolver: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
-  /// Set only by a macro pre-evaluation pass (see @conf-ts/macro-transformer-native)
-  /// to intercept call-expression evaluation instead of the default
-  /// "only allowed in macro mode" error. compiler-native's own compile
-  /// paths never set this — macro evaluation lives entirely in the
-  /// transformer crate. A bare `fn` pointer (not a capturing closure) is
-  /// used deliberately: reading it out of `ctx.macro_evaluator` is a
-  /// value copy, not a borrow, so `eval_call_expr` can pass `ctx` on to it
-  /// mutably with no aliasing conflict, at any recursion depth.
-  pub macro_evaluator: Option<
-    fn(
-      &CallExpression,
-      &FileContext,
-      &mut EvalContext,
-      Option<&HashMap<String, Value>>,
-      &CompileOptions,
-    ) -> Result<Value, ConfTSError>,
-  >,
-  /// Accumulator used by the macro evaluator above to track nesting depth
-  /// and record source-text replacements. `Rc<RefCell<_>>` so it can be
-  /// cheaply cloned out of `ctx` (never borrowed) and mutated only in
-  /// brief scopes that are always closed before any recursive evaluation
-  /// call, which is what keeps nested macro calls reentrant-safe.
-  pub transform_state: Option<Rc<RefCell<TransformState>>>,
+  pub resolver: Option<Box<ModuleResolver>>,
+  pub call_evaluator: Option<CallEvaluator>,
+  pub extension: Option<Rc<dyn Any>>,
 }
 
-fn is_strictly_nullish_expr(expr: &Expression, file_ctx: &FileContext) -> bool {
+/// Check if an expression is strictly typed as null or undefined.
+fn is_strictly_nullish_expr(expr: &Expr, file_ctx: &FileContext) -> bool {
   match expr {
-    Expression::NullLiteral(_) => true,
-    Expression::Identifier(ident) if ident.name.as_str() == "undefined" => true,
-    Expression::Identifier(ident) => {
-      for stmt in &file_ctx.program().body {
-        match stmt {
-          Statement::ExportNamedDeclaration(export_decl) => {
-            if let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration {
-              if let Some(type_ann) = find_type_ann_in_var_decl(ident.name.as_str(), var_decl) {
-                return is_nullish_type(type_ann);
-              }
+    Expr::Lit(Lit::Null(_)) => true,
+    Expr::Ident(ident) if ident.sym == "undefined" => true,
+    Expr::Ident(ident) => {
+      // Look for variable declaration in the current file
+      for item in &file_ctx.module.body {
+        match item {
+          ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
+            if let Decl::Var(var_decl) = &export_decl.decl
+              && let Some(type_ann) = find_type_ann_in_var_decl(&ident.sym, var_decl)
+            {
+              return is_nullish_type(type_ann);
             }
           }
-          Statement::VariableDeclaration(var_decl) => {
-            if let Some(type_ann) = find_type_ann_in_var_decl(ident.name.as_str(), var_decl) {
+          ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) => {
+            if let Some(type_ann) = find_type_ann_in_var_decl(&ident.sym, var_decl) {
               return is_nullish_type(type_ann);
             }
           }
@@ -1843,35 +1774,36 @@ fn is_strictly_nullish_expr(expr: &Expression, file_ctx: &FileContext) -> bool {
       }
       false
     }
-    Expression::TSAsExpression(ts_as) => is_nullish_type(&ts_as.type_annotation),
-    Expression::TSSatisfiesExpression(ts_sat) => is_nullish_type(&ts_sat.type_annotation),
-    Expression::ParenthesizedExpression(paren) => {
-      is_strictly_nullish_expr(&paren.expression, file_ctx)
-    }
+    Expr::TsAs(ts_as) => is_nullish_type(&ts_as.type_ann),
+    Expr::TsSatisfies(ts_sat) => is_nullish_type(&ts_sat.type_ann),
+    Expr::Paren(paren) => is_strictly_nullish_expr(&paren.expr, file_ctx),
     _ => false,
   }
 }
 
-fn find_type_ann_in_var_decl<'a>(
-  name: &str,
-  var_decl: &'a VariableDeclaration<'a>,
-) -> Option<&'a TSType<'a>> {
-  for decl in &var_decl.declarations {
-    if let BindingPattern::BindingIdentifier(binding_ident) = &decl.id {
-      if binding_ident.name.as_str() == name {
-        return decl.type_annotation.as_ref().map(|at| &at.type_annotation);
-      }
+/// Find the type annotation for a variable in a declaration.
+fn find_type_ann_in_var_decl<'a>(name: &str, var_decl: &'a VarDecl) -> Option<&'a TsType> {
+  for decl in &var_decl.decls {
+    if let Pat::Ident(binding_ident) = &decl.name
+      && binding_ident.id.sym == name
+    {
+      return binding_ident.type_ann.as_ref().map(|at| &*at.type_ann);
     }
   }
   None
 }
 
-fn is_nullish_type(t: &TSType) -> bool {
+/// Check if a TypeScript type is strictly null or undefined (or a union of them).
+fn is_nullish_type(t: &TsType) -> bool {
   match t {
-    TSType::TSNullKeyword(_) => true,
-    TSType::TSUndefinedKeyword(_) => true,
-    TSType::TSUnionType(ut) => ut.types.iter().all(|sub_t| is_nullish_type(sub_t)),
-    TSType::TSParenthesizedType(pt) => is_nullish_type(&pt.type_annotation),
+    TsType::TsKeywordType(kt) => {
+      kt.kind == TsKeywordTypeKind::TsNullKeyword
+        || kt.kind == TsKeywordTypeKind::TsUndefinedKeyword
+    }
+    TsType::TsUnionOrIntersectionType(TsUnionOrIntersectionType::TsUnionType(ut)) => {
+      ut.types.iter().all(|sub_t| is_nullish_type(sub_t))
+    }
+    TsType::TsParenthesizedType(pt) => is_nullish_type(&pt.type_ann),
     _ => false,
   }
 }
@@ -1919,43 +1851,43 @@ fn jsx_child_value(children: Vec<Value>) -> Value {
   }
 }
 
-fn jsx_member_object_name(obj: &JSXMemberExpressionObject) -> String {
+fn is_intrinsic_jsx_identifier(name: &str) -> bool {
+  name.contains('-') || matches!(name.chars().next(), Some(c) if c.is_ascii_lowercase())
+}
+
+fn jsx_member_object_name(obj: &JSXObject) -> String {
   match obj {
-    JSXMemberExpressionObject::IdentifierReference(ident) => ident.name.as_str().to_string(),
-    JSXMemberExpressionObject::MemberExpression(member) => jsx_member_name(member),
-    JSXMemberExpressionObject::ThisExpression(_) => "this".to_string(),
+    JSXObject::Ident(ident) => ident_name(ident).to_string(),
+    JSXObject::JSXMemberExpr(member) => jsx_member_name(member),
   }
 }
 
-fn jsx_member_name(member: &JSXMemberExpression) -> String {
+fn jsx_member_name(member: &JSXMemberExpr) -> String {
   format!(
     "{}.{}",
-    jsx_member_object_name(&member.object),
-    member.property.name.as_str()
+    jsx_member_object_name(&member.obj),
+    member.prop.sym.as_str()
   )
 }
 
 fn get_jsx_element_type(name: &JSXElementName) -> JsxTypeInfo {
   match name {
-    JSXElementName::Identifier(ident) => JsxTypeInfo {
-      kind: JsxTypeKind::Intrinsic,
-      name: ident.name.as_str().to_string(),
-    },
-    JSXElementName::IdentifierReference(ident) => JsxTypeInfo {
-      kind: JsxTypeKind::Component,
-      name: ident.name.as_str().to_string(),
-    },
-    JSXElementName::MemberExpression(member) => JsxTypeInfo {
+    JSXElementName::Ident(ident) => {
+      let name = ident.sym.as_str().to_string();
+      let kind = if is_intrinsic_jsx_identifier(&name) {
+        JsxTypeKind::Intrinsic
+      } else {
+        JsxTypeKind::Component
+      };
+      JsxTypeInfo { kind, name }
+    }
+    JSXElementName::JSXMemberExpr(member) => JsxTypeInfo {
       kind: JsxTypeKind::Component,
       name: jsx_member_name(member),
     },
-    JSXElementName::NamespacedName(ns) => JsxTypeInfo {
+    JSXElementName::JSXNamespacedName(ns) => JsxTypeInfo {
       kind: JsxTypeKind::Intrinsic,
-      name: format!("{}:{}", ns.namespace.name.as_str(), ns.name.name.as_str()),
-    },
-    JSXElementName::ThisExpression(_) => JsxTypeInfo {
-      kind: JsxTypeKind::Component,
-      name: "this".to_string(),
+      name: format!("{}:{}", ns.ns.sym.as_str(), ns.name.sym.as_str()),
     },
   }
 }
@@ -1977,7 +1909,7 @@ fn assert_no_flat_jsx_prop_collision(
   props: &[(String, Value)],
   jsx_output: &NormalizedJsxOutputOptions,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<(), ConfTSError> {
   let mut protected_fields: HashSet<String> = HashSet::new();
   protected_fields.insert(jsx_output.type_name.clone());
@@ -1988,7 +1920,7 @@ fn assert_no_flat_jsx_prop_collision(
 
   for (key, _) in props {
     if protected_fields.contains(key) {
-      let (line, character) = get_location(&file_ctx.line_index, offset);
+      let (line, character) = get_location(&file_ctx.source_map, pos);
       return Err(ConfTSError::new(
         format!(
           "JSX prop \"{}\" conflicts with JSX output field \"{}\"",
@@ -2008,14 +1940,14 @@ fn create_jsx_node(
   attrs: EvaluatedJsxAttributes,
   children: Vec<Value>,
   file_ctx: &FileContext,
-  offset: u32,
+  pos: BytePos,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  let jsx_output = normalize_jsx_output_options(options, file_ctx, offset)?;
+  let jsx_output = normalize_jsx_output_options(options, file_ctx, pos)?;
   let output_type = format_jsx_type(&type_info, &jsx_output);
 
   if jsx_output.props.is_none() {
-    assert_no_flat_jsx_prop_collision(&attrs.props, &jsx_output, file_ctx, offset)?;
+    assert_no_flat_jsx_prop_collision(&attrs.props, &jsx_output, file_ctx, pos)?;
     let mut output = vec![(jsx_output.type_name, output_type)];
     for (key, value) in attrs.props {
       set_object_prop(&mut output, key, value, options.preserve_key_order);
@@ -2028,15 +1960,15 @@ fn create_jsx_node(
         options.preserve_key_order,
       );
     }
-    if !children.is_empty() {
-      if let Some(children_name) = jsx_output.children {
-        set_object_prop(
-          &mut output,
-          children_name,
-          jsx_child_value(children),
-          options.preserve_key_order,
-        );
-      }
+    if !children.is_empty()
+      && let Some(children_name) = jsx_output.children
+    {
+      set_object_prop(
+        &mut output,
+        children_name,
+        jsx_child_value(children),
+        options.preserve_key_order,
+      );
     }
     return Ok(Value::Object(output));
   }
@@ -2050,15 +1982,15 @@ fn create_jsx_node(
       options.preserve_key_order,
     );
   }
-  if !children.is_empty() {
-    if let Some(children_name) = &jsx_output.children {
-      set_object_prop(
-        &mut props,
-        children_name.clone(),
-        jsx_child_value(children),
-        options.preserve_key_order,
-      );
-    }
+  if !children.is_empty()
+    && let Some(children_name) = &jsx_output.children
+  {
+    set_object_prop(
+      &mut props,
+      children_name.clone(),
+      jsx_child_value(children),
+      options.preserve_key_order,
+    );
   }
 
   Ok(Value::Object(vec![
@@ -2067,26 +1999,26 @@ fn create_jsx_node(
   ]))
 }
 
-fn meaningful_jsx_child_pos(child: &JSXChild) -> Option<u32> {
+fn meaningful_jsx_child_pos(child: &JSXElementChild) -> Option<BytePos> {
   match child {
-    JSXChild::Text(text) => clean_jsx_text(text.value.as_str()).map(|_| text.span.start),
-    JSXChild::ExpressionContainer(expr_container) => match &expr_container.expression {
-      JSXExpression::EmptyExpression(_) => None,
-      _ => Some(expr_container.span.start),
+    JSXElementChild::JSXText(text) => clean_jsx_text(text.value.as_str()).map(|_| text.span.lo),
+    JSXElementChild::JSXExprContainer(expr_container) => match &expr_container.expr {
+      JSXExpr::Expr(_) => Some(expr_container.span.lo),
+      JSXExpr::JSXEmptyExpr(_) => None,
     },
-    JSXChild::Element(el) => Some(el.opening_element.span.start),
-    JSXChild::Fragment(frag) => {
+    JSXElementChild::JSXElement(el) => Some(el.opening.span.lo),
+    JSXElementChild::JSXFragment(frag) => {
       if frag
         .children
         .iter()
         .any(|child| meaningful_jsx_child_pos(child).is_some())
       {
-        Some(frag.span.start)
+        Some(frag.span.lo)
       } else {
         None
       }
     }
-    JSXChild::Spread(spread) => Some(spread.span.start),
+    JSXElementChild::JSXSpreadChild(spread) => Some(spread.span.lo),
   }
 }
 
@@ -2097,16 +2029,16 @@ fn evaluate_jsx_element(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  assert_jsx_enabled(options, file_ctx, element.opening_element.span.start)?;
-  let type_info = get_jsx_element_type(&element.opening_element.name);
+  assert_jsx_enabled(options, file_ctx, element.opening.span.lo)?;
+  let type_info = get_jsx_element_type(&element.opening.name);
 
   let props = evaluate_jsx_attributes(
-    &element.opening_element.attributes,
+    &element.opening.attrs,
     file_ctx,
     ctx,
     local_context,
     options,
-    element.opening_element.span.start,
+    element.opening.span.lo,
   )?;
 
   let children = evaluate_jsx_children(&element.children, file_ctx, ctx, local_context, options)?;
@@ -2115,54 +2047,46 @@ fn evaluate_jsx_element(
     props,
     children,
     file_ctx,
-    element.opening_element.span.start,
+    element.opening.span.lo,
     options,
   )
 }
 
 fn evaluate_jsx_attributes(
-  attrs: &[JSXAttributeItem],
+  attrs: &[JSXAttrOrSpread],
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
-  offset: u32,
+  pos: BytePos,
 ) -> Result<EvaluatedJsxAttributes, ConfTSError> {
-  let jsx_output = normalize_jsx_output_options(options, file_ctx, offset)?;
+  let jsx_output = normalize_jsx_output_options(options, file_ctx, pos)?;
   let mut props: Vec<(String, Value)> = Vec::new();
   let mut key: Option<Value> = None;
   for attr in attrs {
     match attr {
-      JSXAttributeItem::Attribute(jsx_attr) => {
+      JSXAttrOrSpread::JSXAttr(jsx_attr) => {
         let name = match &jsx_attr.name {
-          JSXAttributeName::Identifier(ident) => ident.name.as_str().to_string(),
-          JSXAttributeName::NamespacedName(ns) => {
-            format!("{}:{}", ns.namespace.name.as_str(), ns.name.name.as_str())
+          JSXAttrName::Ident(ident) => ident.sym.as_str().to_string(),
+          JSXAttrName::JSXNamespacedName(ns) => {
+            format!("{}:{}", ns.ns.sym.as_str(), ns.name.sym.as_str())
           }
         };
         let value = match &jsx_attr.value {
           None => Value::Bool(true),
-          Some(JSXAttributeValue::StringLiteral(s)) => Value::String(s.value.as_str().to_string()),
-          Some(JSXAttributeValue::ExpressionContainer(expr_container)) => {
-            match &expr_container.expression {
-              JSXExpression::EmptyExpression(_) => Value::Undefined,
-              other => {
-                if let Some(expr) = other.as_expression() {
-                  evaluate(expr, file_ctx, ctx, local_context, options)?
-                } else {
-                  Value::Undefined
-                }
-              }
-            }
-          }
-          Some(JSXAttributeValue::Element(el)) => {
+          Some(JSXAttrValue::Str(s)) => Value::String(s.value.as_str().unwrap_or("").to_string()),
+          Some(JSXAttrValue::JSXExprContainer(expr_container)) => match &expr_container.expr {
+            JSXExpr::Expr(expr) => evaluate(expr, file_ctx, ctx, local_context, options)?,
+            JSXExpr::JSXEmptyExpr(_) => Value::Undefined,
+          },
+          Some(JSXAttrValue::JSXElement(el)) => {
             evaluate_jsx_element(el, file_ctx, ctx, local_context, options)?
           }
-          Some(JSXAttributeValue::Fragment(frag)) => {
-            assert_jsx_enabled(options, file_ctx, frag.span.start)?;
+          Some(JSXAttrValue::JSXFragment(frag)) => {
+            assert_jsx_enabled(options, file_ctx, frag.span.lo)?;
             let children =
               evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
-            let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.start)?;
+            let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.lo)?;
             create_jsx_node(
               JsxTypeInfo {
                 kind: JsxTypeKind::Fragment,
@@ -2174,7 +2098,7 @@ fn evaluate_jsx_attributes(
               },
               children,
               file_ctx,
-              frag.span.start,
+              frag.span.lo,
               options,
             )?
           }
@@ -2185,8 +2109,8 @@ fn evaluate_jsx_attributes(
           set_object_prop(&mut props, name, value, options.preserve_key_order);
         }
       }
-      JSXAttributeItem::SpreadAttribute(spread) => {
-        let val = evaluate(&spread.argument, file_ctx, ctx, local_context, options)?;
+      JSXAttrOrSpread::SpreadElement(spread) => {
+        let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
         if let Value::Object(spread_map) = val {
           for (k, v) in spread_map {
             set_object_prop(&mut props, k, v, options.preserve_key_order);
@@ -2211,16 +2135,16 @@ fn evaluate_jsx_attributes(
 }
 
 fn evaluate_jsx_children(
-  children: &[JSXChild],
+  children: &[JSXElementChild],
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Vec<Value>, ConfTSError> {
-  let jsx_output = normalize_jsx_output_options(options, file_ctx, 0)?;
+  let jsx_output = normalize_jsx_output_options(options, file_ctx, BytePos(0))?;
   if jsx_output.children.is_none() {
     if let Some(pos) = children.iter().find_map(meaningful_jsx_child_pos) {
-      let (line, character) = get_location(&file_ctx.line_index, pos);
+      let (line, character) = get_location(&file_ctx.source_map, pos);
       return Err(ConfTSError::new(
         "JSX children are disabled by jsxOutput.children: false",
         &file_ctx.file_path,
@@ -2234,20 +2158,18 @@ fn evaluate_jsx_children(
   let mut result = Vec::new();
   for child in children {
     match child {
-      JSXChild::Text(text) => {
+      JSXElementChild::JSXText(text) => {
         if let Some(cleaned) = clean_jsx_text(text.value.as_str()) {
           result.push(Value::String(cleaned));
         }
       }
-      JSXChild::ExpressionContainer(expr_container) => match &expr_container.expression {
-        JSXExpression::EmptyExpression(_) => {}
-        other => {
-          if let Some(expr) = other.as_expression() {
-            result.push(evaluate(expr, file_ctx, ctx, local_context, options)?);
-          }
+      JSXElementChild::JSXExprContainer(expr_container) => match &expr_container.expr {
+        JSXExpr::Expr(expr) => {
+          result.push(evaluate(expr, file_ctx, ctx, local_context, options)?);
         }
+        JSXExpr::JSXEmptyExpr(_) => {}
       },
-      JSXChild::Element(el) => {
+      JSXElementChild::JSXElement(el) => {
         result.push(evaluate_jsx_element(
           el,
           file_ctx,
@@ -2256,11 +2178,11 @@ fn evaluate_jsx_children(
           options,
         )?);
       }
-      JSXChild::Fragment(frag) => {
-        assert_jsx_enabled(options, file_ctx, frag.span.start)?;
+      JSXElementChild::JSXFragment(frag) => {
+        assert_jsx_enabled(options, file_ctx, frag.span.lo)?;
         let children =
           evaluate_jsx_children(&frag.children, file_ctx, ctx, local_context, options)?;
-        let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.start)?;
+        let jsx_output = normalize_jsx_output_options(options, file_ctx, frag.span.lo)?;
         result.push(create_jsx_node(
           JsxTypeInfo {
             kind: JsxTypeKind::Fragment,
@@ -2272,12 +2194,12 @@ fn evaluate_jsx_children(
           },
           children,
           file_ctx,
-          frag.span.start,
+          frag.span.lo,
           options,
         )?);
       }
-      JSXChild::Spread(spread) => {
-        let val = evaluate(&spread.expression, file_ctx, ctx, local_context, options)?;
+      JSXElementChild::JSXSpreadChild(spread) => {
+        let val = evaluate(&spread.expr, file_ctx, ctx, local_context, options)?;
         if let Value::Array(items) = val {
           result.extend(items);
         }
@@ -2287,79 +2209,21 @@ fn evaluate_jsx_children(
   Ok(result)
 }
 
+impl Default for EvalContext {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl EvalContext {
   pub fn new() -> Self {
     Self {
       enum_map: HashMap::new(),
-      macro_imports_map: HashMap::new(),
       evaluated_files: HashSet::new(),
       file_contexts: HashMap::new(),
       resolver: None,
-      macro_evaluator: None,
-      transform_state: None,
+      call_evaluator: None,
+      extension: None,
     }
   }
-}
-
-/// Find and evaluate the default export from an entry file.
-pub fn find_default_export(
-  entry_ctx: &FileContext,
-  eval_ctx: &mut EvalContext,
-  options: &CompileOptions,
-) -> Result<Value, ConfTSError> {
-  for stmt in &entry_ctx.program().body {
-    match stmt {
-      Statement::ExportDefaultDeclaration(export) => {
-        if let Some(expr) = export.declaration.as_expression() {
-          return evaluate(expr, entry_ctx, eval_ctx, None, options);
-        } else {
-          let (line, character) = entry_ctx.line_index.get_location(export.span.start);
-          return Err(ConfTSError::new(
-            "Unsupported default export declaration",
-            &entry_ctx.file_path,
-            line,
-            character,
-          ));
-        }
-      }
-      Statement::ExportNamedDeclaration(named_export) => {
-        for specifier in &named_export.specifiers {
-          let original_name = module_export_name_to_string(&specifier.local);
-          let exported_name = module_export_name_to_string(&specifier.exported);
-          if exported_name != "default" {
-            continue;
-          }
-          eval_ctx.evaluated_files.insert(entry_ctx.file_path.clone());
-          let target_ctx = match &named_export.source {
-            Some(src) => {
-              let resolved = eval_ctx
-                .resolver
-                .as_ref()
-                .and_then(|r| r(src.value.as_str(), &entry_ctx.file_path));
-              resolved.and_then(|path| eval_ctx.file_contexts.get(&path).cloned())
-            }
-            None => Some(entry_ctx.clone()),
-          };
-          if let Some(target_ctx) = target_ctx {
-            if let Some(value) =
-              resolve_in_file(&original_name, &target_ctx, eval_ctx, None, options)?
-            {
-              return Ok(value);
-            }
-          }
-        }
-      }
-      _ => {}
-    }
-  }
-
-  Err(ConfTSError::new(
-    format!(
-      "No default export found in the entry file: {}",
-      entry_ctx.file_path
-    ),
-    &entry_ctx.file_path,
-    1,
-    1,
-  ))
 }

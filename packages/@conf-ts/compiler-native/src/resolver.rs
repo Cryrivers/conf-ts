@@ -233,7 +233,7 @@ fn resolve_file_path(base: &Path) -> Option<PathBuf> {
   for ext in &extensions {
     let with_ext = base.with_extension(&ext[1..]); // Remove the leading dot
     if with_ext.is_file() {
-      return Some(with_ext.canonicalize().unwrap_or_else(|_| with_ext));
+      return Some(with_ext.canonicalize().unwrap_or(with_ext));
     }
   }
 
@@ -241,7 +241,7 @@ fn resolve_file_path(base: &Path) -> Option<PathBuf> {
   for ext in &extensions {
     let index = base.join(format!("index{}", ext));
     if index.is_file() {
-      return Some(index.canonicalize().unwrap_or_else(|_| index));
+      return Some(index.canonicalize().unwrap_or(index));
     }
   }
 
@@ -259,8 +259,52 @@ pub fn resolve_module_in_memory(
   }
 
   let from_dir = Path::new(from_file).parent().unwrap_or(Path::new("/"));
-  let base = from_dir.join(specifier);
-  let base_str = normalize_virtual_path(&base);
+  resolve_virtual_file(&from_dir.join(specifier), files)
+}
+
+/// In-memory module resolution with the `baseUrl` and `paths` subset of
+/// TypeScript compiler options. Explicit project resolution tables should be
+/// consulted before this function.
+pub fn resolve_module_in_memory_with_options(
+  specifier: &str,
+  from_file: &str,
+  files: &HashMap<String, String>,
+  compiler_options: Option<&TsCompilerOptions>,
+) -> Option<String> {
+  if let Some(relative) = resolve_module_in_memory(specifier, from_file, files) {
+    return Some(relative);
+  }
+  if specifier.starts_with('.') {
+    return None;
+  }
+
+  let options = compiler_options?;
+  let paths = options.paths.as_ref()?;
+  let current_dir = Path::new(from_file).parent().unwrap_or(Path::new("/"));
+  let base_url = options.base_url.as_deref().unwrap_or(".");
+  let base_dir = if Path::new(base_url).is_absolute() {
+    PathBuf::from(base_url)
+  } else {
+    current_dir.join(base_url)
+  };
+
+  for (pattern, targets) in paths {
+    let Some(matched) = match_path_pattern(pattern, specifier) else {
+      continue;
+    };
+    for target in targets {
+      let resolved_target = target.replace('*', matched);
+      if let Some(resolved) = resolve_virtual_file(&base_dir.join(resolved_target), files) {
+        return Some(resolved);
+      }
+    }
+  }
+
+  None
+}
+
+fn resolve_virtual_file(base: &Path, files: &HashMap<String, String>) -> Option<String> {
+  let base_str = normalize_virtual_path(base);
 
   // Try exact
   if files.contains_key(base_str.as_str()) && is_supported_source_path(&base_str) {

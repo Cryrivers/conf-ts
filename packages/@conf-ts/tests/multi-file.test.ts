@@ -18,12 +18,9 @@ describe('Multi-file test', () => {
     const { output: resultJs, dependencies: dependenciesJs } = compileJs(
       path.join(configPath, 'index.ts'),
       'json',
-      { macroMode: false },
     );
     const { output: resultNative, dependencies: dependenciesNative } =
-      compileNative(path.join(configPath, 'index.ts'), 'json', {
-        macroMode: false,
-      });
+      compileNative(path.join(configPath, 'index.ts'), 'json');
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'index.json'), 'utf8'),
     );
@@ -49,12 +46,9 @@ describe('Multi-file test', () => {
     const { output: resultJs, dependencies: dependenciesJs } = compileJs(
       path.join(configPath, 'index-with-aliases.ts'),
       'json',
-      { macroMode: false },
     );
     const { output: resultNative, dependencies: dependenciesNative } =
-      compileNative(path.join(configPath, 'index-with-aliases.ts'), 'json', {
-        macroMode: false,
-      });
+      compileNative(path.join(configPath, 'index-with-aliases.ts'), 'json');
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'index-with-aliases.json'), 'utf8'),
     );
@@ -80,12 +74,9 @@ describe('Multi-file test', () => {
     const { output: resultJs, dependencies: dependenciesJs } = compileJs(
       path.join(configPath, 'complex-aliases.ts'),
       'json',
-      { macroMode: false },
     );
     const { output: resultNative, dependencies: dependenciesNative } =
-      compileNative(path.join(configPath, 'complex-aliases.ts'), 'json', {
-        macroMode: false,
-      });
+      compileNative(path.join(configPath, 'complex-aliases.ts'), 'json');
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'complex-aliases.json'), 'utf8'),
     );
@@ -112,12 +103,10 @@ describe('Multi-file test', () => {
     const { output: resultJs } = compileJs(
       path.join(configPath, 'numeric-enum.ts'),
       'json',
-      { macroMode: false },
     );
     const { output: resultNative } = compileNative(
       path.join(configPath, 'numeric-enum.ts'),
       'json',
-      { macroMode: false },
     );
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'numeric-enum.json'), 'utf8'),
@@ -131,12 +120,10 @@ describe('Multi-file test', () => {
     const { dependencies: dependenciesJs } = compileJs(
       path.join(configPath, 'numeric-enum.ts'),
       'json',
-      { macroMode: false },
     );
     const { dependencies: nativeDependencies } = compileNative(
       path.join(configPath, 'numeric-enum.ts'),
       'json',
-      { macroMode: false },
     );
     expect(dependenciesJs).toEqual(
       expect.arrayContaining([
@@ -163,12 +150,9 @@ describe('Multi-file test', () => {
     const { output: resultJs, dependencies: dependenciesJs } = compileJs(
       path.join(configPath, 'reexports.ts'),
       'json',
-      { macroMode: false },
     );
     const { output: resultNative, dependencies: dependenciesNative } =
-      compileNative(path.join(configPath, 'reexports.ts'), 'json', {
-        macroMode: false,
-      });
+      compileNative(path.join(configPath, 'reexports.ts'), 'json');
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'reexports.json'), 'utf8'),
     );
@@ -194,12 +178,9 @@ describe('Multi-file test', () => {
     const { output: resultJs, dependencies: dependenciesJs } = compileJs(
       path.join(configPath, 'default-reexport.ts'),
       'json',
-      { macroMode: false },
     );
     const { output: resultNative, dependencies: dependenciesNative } =
-      compileNative(path.join(configPath, 'default-reexport.ts'), 'json', {
-        macroMode: false,
-      });
+      compileNative(path.join(configPath, 'default-reexport.ts'), 'json');
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'default-reexport.json'), 'utf8'),
     );
@@ -224,12 +205,12 @@ describe('Multi-file test', () => {
     const { output: resultJs } = compileJsWithMacro(
       path.join(configPath, 'expr-import.ts'),
       'json',
-      { macroMode: true },
+      { macro: true },
     );
     const { output: resultNative } = compileNativeWithMacro(
       path.join(configPath, 'expr-import.ts'),
       'json',
-      { macroMode: true },
+      { macro: true },
     );
     const expected = JSON.parse(
       fs.readFileSync(path.join(configPath, 'expr-import.json'), 'utf8'),
@@ -244,7 +225,7 @@ describe('Multi-file test', () => {
       '/source.ts': "export default { name: 'default-config' };",
     };
     const { output: resultJs, dependencies: dependenciesJs } =
-      compileInMemoryJs(files, '/index.ts', 'json', false);
+      compileInMemoryJs(files, '/index.ts', 'json');
     const { output: resultNative, dependencies: dependenciesNative } =
       compileInMemoryNative(files, '/index.ts', 'json');
 

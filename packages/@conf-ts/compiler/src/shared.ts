@@ -1,64 +1,31 @@
-import ts from 'typescript';
-
-import { MACRO_PACKAGE } from './constants';
 import { ConfTSError } from './error';
 
 /**
  * Compile options for both filesystem and in-memory compilation.
  */
-export type QuoteStyle = 'single' | 'double';
-
-export const INVALID_QUOTE_OPTION_MESSAGE =
-  "Invalid option: quote must be 'single' or 'double'";
-
 export interface CompileOptions {
   preserveKeyOrder?: boolean;
-  macroMode?: boolean;
   jsx?: boolean;
-  env?: Record<string, string>;
   jsxOutput?: JsxOutputOptions;
-  quote?: QuoteStyle;
 }
 
 export type InMemoryFiles = { [fileName: string]: string };
 
-/**
- * The result of a macro pre-evaluation pass: the subset of files that had
- * macro calls rewritten to literal source, plus every file that was read
- * while resolving them (for build-system dependency tracking).
- */
-export interface TransformResult {
+/** A serializable TypeScript project supplied by a build tool or WASI host. */
+export interface SourceProject {
   files: Record<string, string>;
-  dependencies: string[];
+  resolutions?: Record<string, Record<string, string>>;
+  compilerOptions?: Record<string, unknown>;
 }
 
-export interface EvaluationState {
-  typeChecker: ts.TypeChecker;
-  enumMap: { [filePath: string]: { [key: string]: any } };
-  macroImportsMap: { [filePath: string]: Set<string> };
-  evaluatedFiles: Set<string>;
+/** Source-first compiler input. `code` always wins over the project snapshot. */
+export interface SourceCompileInput {
+  filename: string;
+  code: string;
+  project?: SourceProject;
 }
 
-/**
- * @internal
- * Extends the public CompileOptions with a hook used exclusively by
- * @conf-ts/macro-transformer to intercept call-expression evaluation during
- * the constant-expansion walk, so it can record source-text replacements
- * instead of inlining values. Not part of the public API contract.
- */
-export interface InternalEvaluationOptions extends CompileOptions {
-  /** @internal */
-  evaluateCallExpression?: (
-    expression: ts.CallExpression,
-    sourceFile: ts.SourceFile,
-    typeChecker: ts.TypeChecker,
-    enumMap: { [filePath: string]: { [key: string]: any } },
-    macroImportsMap: { [filePath: string]: Set<string> },
-    evaluatedFiles: Set<string>,
-    context: { [name: string]: any } | undefined,
-    options?: CompileOptions,
-  ) => any;
-}
+export type CompileInput = string | SourceCompileInput;
 
 export interface JsxOutputOptions {
   type?: string;
@@ -74,7 +41,7 @@ export function validateCompileOptions(options?: CompileOptions): void {
     return;
   }
 
-  for (const key of ['macroMode', 'jsx'] as const) {
+  for (const key of ['jsx'] as const) {
     if (Object.prototype.hasOwnProperty.call(options, key)) {
       const value: any = options[key];
       if (value !== undefined && typeof value !== 'boolean') {
@@ -84,17 +51,6 @@ export function validateCompileOptions(options?: CompileOptions): void {
           character: 1,
         });
       }
-    }
-  }
-
-  if (options && Object.prototype.hasOwnProperty.call(options, 'quote')) {
-    const v: any = options.quote;
-    if (v !== undefined && v !== 'single' && v !== 'double') {
-      throw new ConfTSError(INVALID_QUOTE_OPTION_MESSAGE, {
-        file: 'unknown',
-        line: 1,
-        character: 1,
-      });
     }
   }
 }
@@ -194,41 +150,4 @@ export function jsonStringify(value: any, space: number | string = 2): string {
   }
 
   return serialize(value, '') ?? 'null';
-}
-
-/**
- * Validate and collect macro imports from a source file.
- * Returns a Set of imported macro function names.
- */
-export function validateMacroImports(
-  sourceFile: ts.SourceFile,
-  macro: boolean,
-): Set<string> {
-  const macroImports = new Set<string>();
-
-  if (!macro) {
-    return macroImports;
-  }
-
-  ts.forEachChild(sourceFile, node => {
-    if (ts.isImportDeclaration(node) && node.moduleSpecifier) {
-      const moduleSpecifier = node.moduleSpecifier
-        .getText(sourceFile)
-        .slice(1, -1); // Remove quotes
-      if (moduleSpecifier === MACRO_PACKAGE) {
-        if (node.importClause && node.importClause.namedBindings) {
-          if (ts.isNamedImports(node.importClause.namedBindings)) {
-            node.importClause.namedBindings.elements.forEach(
-              importSpecifier => {
-                const importedName = importSpecifier.name.getText(sourceFile);
-                macroImports.add(importedName);
-              },
-            );
-          }
-        }
-      }
-    }
-  });
-
-  return macroImports;
 }

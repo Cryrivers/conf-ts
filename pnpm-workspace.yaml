@@ -1,9 +1,11 @@
 packages:
   - packages/@conf-ts/*
   - packages/@conf-ts/compiler-native/npm/*
+  - packages/@conf-ts/macro-transformer-native/npm/*
   - packages/playground
 
 allowBuilds:
+  '@swc/core': true
   esbuild: true
   sharp: true
 

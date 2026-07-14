@@ -13,15 +13,36 @@
   },
   "main": "dist/cjs/index.js",
   "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/cjs/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/cjs/index.js"
+    },
+    "./macro-transform-plugin/typescript": {
+      "types": "./dist/cjs/macro-transform-plugin/typescript.d.ts",
+      "import": "./dist/cjs/macro-transform-plugin/typescript.js",
+      "require": "./dist/cjs/macro-transform-plugin/typescript.js",
+      "default": "./dist/cjs/macro-transform-plugin/typescript.js"
+    },
+    "./macro-transform-plugin/swc": {
+      "types": "./dist/cjs/macro-transform-plugin/swc.d.ts",
+      "import": "./dist/cjs/macro-transform-plugin/swc.js",
+      "require": "./dist/cjs/macro-transform-plugin/swc.js",
+      "default": "./dist/cjs/macro-transform-plugin/swc.js"
+    }
+  },
   "scripts": {
     "build": "pnpm run build:cjs",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.cjs.json",
     "test": "vitest run",
     "format": "prettier --write ."
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
     "@conf-ts/macro-transformer": "workspace:*",
+    "@jridgewell/remapping": "^2.3.5",
     "piscina": "^5.2.0"
   },
   "optionalDependencies": {

@@ -5,7 +5,9 @@
   "description": "A mini webpack project to test @conf-ts/webpack-plugin",
   "main": "dist/index.js",
   "scripts": {
-    "build": "webpack --config webpack.config.js"
+    "build": "pnpm run build:typescript && pnpm run build:native",
+    "build:typescript": "webpack --config webpack.config.js && node dist/bundle.js",
+    "build:native": "webpack --config webpack.native.config.js && node dist/native/bundle.js"
   },
   "keywords": [],
   "author": {
@@ -19,12 +21,15 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@swc/core": "1.15.43",
+    "swc-loader": "^0.2.7",
     "ts-loader": "^9.6.2",
     "typescript": "^6.0.3",
     "webpack": "^5.108.4",
     "webpack-cli": "^7.2.1"
   },
   "dependencies": {
+    "@conf-ts/macro": "workspace:^",
     "@conf-ts/webpack-plugin": "workspace:^"
   }
 }

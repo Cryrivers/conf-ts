@@ -7,17 +7,9 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Must stay pinned to the exact same versions as compiler-native's Cargo.toml —
-# macro-transformer-native embeds compiler-native's compiled code via this
-# path dependency, so both crates must agree on one compiled copy of oxc's
-# AST types. Enforced automatically by the shared workspace Cargo.lock (see
-# ../Cargo.toml), not just by convention.
-compiler_native = { path = "../compiler-native", default-features = false }
-napi = "3.8.5"
+macro_transformer_core = { path = "../macro-transformer-core" }
+napi = { version = "3.8.5", features = ["serde-json"] }
 napi-derive = "3.5.4"
-oxc_allocator = "0.139.0"
-oxc_ast = "0.139.0"
-oxc_span = "0.139.0"
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 
 [build-dependencies]

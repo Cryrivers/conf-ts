@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["compiler-native", "macro-transformer-native"]
+members = [
+  "compiler-native",
+  "macro-transformer-core",
+  "macro-transformer-native",
+  "swc-plugin",
+]
 
 [profile.release]
 lto = true
 strip = "symbols"
 
-# Keeping compiler-native and macro-transformer-native in one Cargo workspace
-# (one shared Cargo.lock/target dir) is required so their oxc/napi/serde
-# dependency versions can never drift apart: macro-transformer-native embeds
-# compiler-native's compiled code via a path dependency (Rust has no
-# npm-style dynamic linking), so a version mismatch would otherwise only
-# surface as a hard-to-diagnose type error, or worse, silently link two
-# incompatible copies of oxc's AST types.
+# All native entry points share one SWC version and one lockfile so the N-API
+# adapters and the standard SWC plugin consume the exact same AST types.

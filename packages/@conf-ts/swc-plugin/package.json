@@ -1,0 +1,27 @@
+{
+  "name": "@conf-ts/swc-plugin",
+  "version": "0.0.12",
+  "description": "Standard SWC WASM plugin for evaluating conf-ts macros.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cryrivers/conf-ts"
+  },
+  "main": "conf_ts_swc_plugin.wasm",
+  "files": [
+    "conf_ts_swc_plugin.wasm",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "build:debug": "node ./scripts/build.mjs --debug",
+    "format:prettier": "prettier . -w && cargo fmt && taplo format",
+    "test": "node --test ./test/plugin.test.mjs",
+    "prepublishOnly": "node -e \"require('node:fs').accessSync('conf_ts_swc_plugin.wasm')\""
+  },
+  "devDependencies": {
+    "@swc/core": "1.15.43",
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "prettier": "^3.9.5"
+  }
+}

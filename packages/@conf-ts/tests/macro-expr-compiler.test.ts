@@ -86,7 +86,7 @@ describe('Expr Macro', () => {
     const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-const.conf.ts'),
       'json',
-      { macroMode: true },
+      { macro: true },
     );
     const output = JSON.parse(result.output);
     const compiled = expression(output.constNumber);
@@ -98,7 +98,7 @@ describe('Expr Macro', () => {
     const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-quote-single.conf.ts'),
       'json',
-      { macroMode: true, quote: 'single' },
+      { macro: true, quote: 'single' },
     );
     const output = JSON.parse(result.output);
 
@@ -115,7 +115,7 @@ describe('Expr Macro', () => {
     const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-macro.conf.ts'),
       'json',
-      { macroMode: true },
+      { macro: true },
     );
     const output = JSON.parse(result.output);
     // An object key or property access spelled `ctx` isn't a reference to
@@ -131,7 +131,7 @@ describe('Expr Macro', () => {
     const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-macro-runtime.conf.ts'),
       'json',
-      { macroMode: true },
+      { macro: true },
     );
     const output = JSON.parse(result.output);
     expect(expression(output.runtimeString)({ a: '5', n: 5 })).toBe(true);

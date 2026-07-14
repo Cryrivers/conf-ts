@@ -132,9 +132,9 @@ const evaluateCall = (
 //
 // This must stay in sync with its two counterparts, since nothing enforces
 // agreement across the package boundary between them (@conf-ts/expression
-// has no dependency on the compiler packages):
-//   - compiler/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
-//   - compiler-native/src/macro_eval.rs: EXPR_RUNTIME_FALLBACK_MACROS
+// has no dependency on the macro transformer packages):
+//   - macro-transformer/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
+//   - macro-transformer-core/src/lib.rs: runtime fallback macro matching
 // If a name is added to those two but not here, the compiler emits runtime
 // call text for it that this evaluator can't resolve, and it throws
 // "Expression value is not callable" at request time instead of compile time.

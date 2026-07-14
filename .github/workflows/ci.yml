@@ -2,18 +2,17 @@ name: CI
 
 env:
   DEBUG: napi:*
-  APP_NAME: compiler-native
-  MACOSX_DEPLOYMENT_TARGET: '10.13'
-  CARGO_INCREMENTAL: '1'
+  MACOSX_DEPLOYMENT_TARGET: "10.13"
+  CARGO_INCREMENTAL: "1"
 
 on:
   push:
     branches: [main]
-    tags-ignore: ['**']
+    tags-ignore: ["**"]
     paths-ignore:
-      - '**/*.md'
+      - "**/*.md"
       - LICENSE
-      - '**/*.gitignore'
+      - "**/*.gitignore"
       - .editorconfig
       - docs/**
   pull_request:
@@ -30,7 +29,7 @@ permissions:
 jobs:
   build:
     name: Build and Test
-    timeout-minutes: 15
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -43,6 +42,8 @@ jobs:
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1, wasm32-wasip1-threads
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -54,6 +55,46 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Test compiler WASI target
+        run: pnpm --filter @conf-ts/compiler-native test:wasi
+
+      - name: Upload compiler WASI artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: compiler-wasi
+          path: |
+            packages/@conf-ts/compiler-native/compiler-native.wasm32-wasi.wasm
+            packages/@conf-ts/compiler-native/compiler-native.wasi.cjs
+            packages/@conf-ts/compiler-native/compiler-native.wasi-browser.js
+            packages/@conf-ts/compiler-native/browser.js
+            packages/@conf-ts/compiler-native/wasi-worker.mjs
+            packages/@conf-ts/compiler-native/wasi-worker-browser.mjs
+            packages/@conf-ts/compiler-native/index.js
+            packages/@conf-ts/compiler-native/index.d.ts
+          if-no-files-found: error
+
+      - name: Upload macro transformer WASI artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: macro-wasi
+          path: |
+            packages/@conf-ts/macro-transformer-native/macro-transformer-native.wasm32-wasi.wasm
+            packages/@conf-ts/macro-transformer-native/macro-transformer-native.wasi.cjs
+            packages/@conf-ts/macro-transformer-native/macro-transformer-native.wasi-browser.js
+            packages/@conf-ts/macro-transformer-native/browser.js
+            packages/@conf-ts/macro-transformer-native/wasi-worker.mjs
+            packages/@conf-ts/macro-transformer-native/wasi-worker-browser.mjs
+            packages/@conf-ts/macro-transformer-native/index.js
+            packages/@conf-ts/macro-transformer-native/index.d.ts
+          if-no-files-found: error
+
+      - name: Upload SWC plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: swc-plugin-wasm
+          path: packages/@conf-ts/swc-plugin/conf_ts_swc_plugin.wasm
+          if-no-files-found: error
 
       - name: Test
         run: pnpm test
@@ -86,15 +127,15 @@ jobs:
       #   run: pnpm --filter @conf-ts/compiler-native lint
 
       - name: Cargo fmt
-        run: cargo fmt -- --check
-        working-directory: packages/@conf-ts/compiler-native
+        run: cargo fmt --all -- --check
+        working-directory: packages/@conf-ts
 
       - name: Clippy
-        run: cargo clippy
-        working-directory: packages/@conf-ts/compiler-native
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: packages/@conf-ts
 
   native-build:
-    name: stable - ${{ matrix.settings.target }} - node@24
+    name: Native - ${{ matrix.settings.target }} - node@24
     runs-on: ${{ matrix.settings.host }}
     strategy:
       fail-fast: false
@@ -102,19 +143,19 @@ jobs:
         settings:
           - host: macos-latest
             target: x86_64-apple-darwin
-            build: pnpm --filter @conf-ts/compiler-native build -- --target x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-            build: pnpm --filter @conf-ts/compiler-native build --target x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            build: pnpm --filter @conf-ts/compiler-native build --target x86_64-unknown-linux-gnu --use-napi-cross
+            args: --target x86_64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            build: pnpm --filter @conf-ts/compiler-native build --target x86_64-unknown-linux-musl -x
+            args: --target x86_64-unknown-linux-musl --cross-compile
           - host: macos-latest
             target: aarch64-apple-darwin
-            build: pnpm --filter @conf-ts/compiler-native build --target aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v6
 
@@ -133,9 +174,6 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.settings.target }}
-
-      - name: Add Rust target for active toolchain
-        run: rustup target add ${{ matrix.settings.target }}
 
       - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
@@ -159,23 +197,28 @@ jobs:
             ~/.cargo/git/db/
             ~/.napi-rs
             packages/@conf-ts/compiler-native/.cargo-cache
-            packages/@conf-ts/compiler-native/target
+            packages/@conf-ts/target
           key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
 
       - name: Install dependencies
         run: pnpm install
 
       - name: Build
-        run: ${{ matrix.settings.build }}
+        run: pnpm --filter @conf-ts/compiler-native --filter @conf-ts/macro-transformer-native exec napi build --platform --release ${{ matrix.settings.args }}
         shell: bash
 
-      - name: Upload artifact
+      - name: Upload compiler artifact
         uses: actions/upload-artifact@v7
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: |
-            packages/@conf-ts/compiler-native/${{ env.APP_NAME }}.*.node
-            packages/@conf-ts/compiler-native/${{ env.APP_NAME }}.*.wasm
+          path: packages/@conf-ts/compiler-native/compiler-native.*.node
+          if-no-files-found: error
+
+      - name: Upload macro transformer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macro-bindings-${{ matrix.settings.target }}
+          path: packages/@conf-ts/macro-transformer-native/macro-transformer-native.*.node
           if-no-files-found: error
 
   # test-macOS-windows-binding:
@@ -307,7 +350,7 @@ jobs:
       contents: write
       id-token: write
     # needs: [native-lint, test-macOS-windows-binding, test-linux-binding]
-    needs: [native-lint, native-build]
+    needs: [build, native-lint, native-build]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     steps:
       - uses: actions/checkout@v6
@@ -325,21 +368,67 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Create npm dirs
+      - name: Create compiler npm dirs
         run: pnpm --filter @conf-ts/compiler-native exec napi create-npm-dirs
 
-      - name: Download all artifacts
+      - name: Create macro transformer npm dirs
+        run: pnpm --filter @conf-ts/macro-transformer-native exec napi create-npm-dirs
+
+      - name: Download compiler native artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: bindings-*
+          path: packages/@conf-ts/compiler-native/artifacts
+          merge-multiple: true
+
+      - name: Download compiler WASI artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: compiler-wasi
           path: packages/@conf-ts/compiler-native/artifacts
 
-      - name: Move artifacts
-        run: pnpm --filter @conf-ts/compiler-native exec napi artifacts
+      - name: Download macro transformer native artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: macro-bindings-*
+          path: packages/@conf-ts/macro-transformer-native/artifacts
+          merge-multiple: true
 
-      - name: List packages
+      - name: Download macro transformer WASI artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: macro-wasi
+          path: packages/@conf-ts/macro-transformer-native/artifacts
+
+      - name: Download SWC plugin artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: swc-plugin-wasm
+          path: packages/@conf-ts/swc-plugin
+
+      - name: Assemble compiler native packages
+        run: pnpm --filter @conf-ts/compiler-native exec napi artifacts --build-output-dir artifacts
+
+      - name: Restore generated compiler entrypoints
+        run: cp artifacts/* .
+        working-directory: packages/@conf-ts/compiler-native
+
+      - name: Assemble macro transformer native packages
+        run: pnpm --filter @conf-ts/macro-transformer-native exec napi artifacts --build-output-dir artifacts
+
+      - name: Restore generated macro transformer outputs
+        run: cp artifacts/* .
+        working-directory: packages/@conf-ts/macro-transformer-native
+
+      - name: List compiler native packages
         run: ls -R ./npm
         shell: bash
         working-directory: packages/@conf-ts/compiler-native
+
+      - name: List macro transformer native packages
+        run: ls -R ./npm
+        shell: bash
+        working-directory: packages/@conf-ts/macro-transformer-native
 
       - name: Build packages
         run: |
@@ -347,6 +436,8 @@ jobs:
           pnpm --filter @conf-ts/expression build
           pnpm --filter @conf-ts/macro build
           pnpm --filter @conf-ts/compiler build
+          pnpm --filter @conf-ts/macro-transformer build
+          pnpm --filter @conf-ts/cli build
           pnpm --filter @conf-ts/webpack-plugin build
 
       - name: Configure npm registry
@@ -379,13 +470,17 @@ jobs:
           git status
           git diff
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/macro-transformer-native*" --access public ${{ steps.tag.outputs.tag }}
           git status
           git diff
           pnpm publish -r --filter "@conf-ts/expr-core" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/expression" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/compiler" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/macro-transformer" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/cli" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/webpack-plugin" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/swc-plugin" --access public ${{ steps.tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

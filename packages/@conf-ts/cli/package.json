@@ -13,6 +13,9 @@
     "url": "https://github.com/Cryrivers/conf-ts"
   },
   "main": "dist/index.js",
+  "bin": {
+    "conf-ts": "./dist/index.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -10,7 +10,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 
 - **Type-safe configs**: Author in TypeScript with enums, constants, spreads, and expressions.
 - **Deterministic output**: Produces JSON/YAML with no runtime TypeScript.
-- **Macro mode (opt-in)**: Compile-time helpers for casting, array transforms, env injection, and typed runtime expressions.
+- **Macro transform (opt-in)**: Compile-time helpers for casting, array transforms, env injection, and typed runtime expressions.
 - **Multi-file + path aliases**: Works across files and honors `tsconfig.json` path aliases.
 
 ## Packages in this monorepo
@@ -20,7 +20,10 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
 - `@conf-ts/expr-core`: Shared expression lexer, parser, AST types, and parse errors
 - `@conf-ts/expression`: JavaScript-like runtime expression evaluator
-- `@conf-ts/macro`: Macro functions and JSX runtime available in macro mode
+- `@conf-ts/macro`: Macro functions and JSX runtime consumed by the transform
+- `@conf-ts/macro-transformer`: TypeScript source transformer for macros
+- `@conf-ts/macro-transformer-native`: SWC-backed native source transformer
+- `@conf-ts/swc-plugin`: Standard SWC WASM macro transform plugin
 - `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
 
 ### Performance: JS vs compiler-native
@@ -59,7 +62,7 @@ conf-ts src/config.conf.ts
 # YAML
 conf-ts -f yaml src/config.conf.ts
 
-# Macro mode
+# Macro transform
 conf-ts --macro src/config.conf.ts
 
 # Enable compiler JSX support
@@ -74,7 +77,7 @@ conf-ts --jsx --jsx-output '{"type":"$type","props":false}' src/config.conf.tsx
 
 The compiled output is printed to stdout.
 
-## Macro mode
+## Macro transform
 
 Enable with `--macro`. All macros must be imported from `@conf-ts/macro`.
 
@@ -158,7 +161,7 @@ export default {
 
 `expr()` marks a typed arrow expression for configuration compilation. During normal runtime execution it preserves and returns the callback, including its closure. During JSON/YAML compilation it emits a portable expression string: accesses to the callback parameter become root identifiers, and serializable `const` and enum values are resolved.
 
-Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set compile option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native compilers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
+Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set macro transform option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and SWC transformers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
 
 ```ts
 import { expr } from '@conf-ts/macro';
@@ -447,30 +450,42 @@ const { output, dependencies } = compileInMemory(
   files,
   '/index.conf.ts',
   'json',
-  false,
 );
 ```
 
+The compiler also accepts source supplied by a loader, editor, or WASI host.
+The supplied `code` wins over the matching file in the optional project
+snapshot, so compilation never needs a macro-specific API:
+
+```ts
+compile(
+  {
+    filename: '/index.conf.ts',
+    code: "export default { foo: 'bar' }",
+    project: { files: { '/index.conf.ts': "export default { foo: 'bar' }" } },
+  },
+  'json',
+);
+```
+
+`@conf-ts/compiler-native` also ships a `wasm32-wasip1-threads` target. WASI
+hosts must use source/project input or `compileInMemory`; path-based compilation
+is intentionally unavailable because the compiler does not assume filesystem
+access there.
+
 ### Options
 
-| Option             | Description                                                                                   |
-| ------------------ | --------------------------------------------------------------------------------------------- |
+| Option             | Description                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
 | `preserveKeyOrder` | Preserves object key insertion order during object creation, serialization, cloning, and merge |
-| `macroMode`        | Enables macro mode programmatically; must be a boolean                                        |
-| `quote`            | Controls generated `expr()` string literal quotes: `'double'` default, or `'single'`          |
-| `jsx`              | Enables JSX support programmatically; must be a boolean                                       |
-| `jsxOutput`        | Configures JSX output fields                                                                  |
+| `jsx`              | Enables JSX support programmatically; must be a boolean                                        |
+| `jsxOutput`        | Configures JSX output fields                                                                   |
 
 ```ts
 import { compile, compileInMemory } from '@conf-ts/compiler';
 
 compile('path/to/index.conf.ts', 'json', { preserveKeyOrder: true });
-compile('path/to/index.conf.ts', 'json', { macroMode: true });
 compile('path/to/index.conf.tsx', 'json', { jsx: true });
-compile('path/to/index.conf.ts', 'json', {
-  macroMode: true,
-  quote: 'single',
-});
 compile('path/to/index.conf.tsx', 'json', {
   jsx: true,
   jsxOutput: { type: '$type', props: false },
@@ -480,20 +495,38 @@ compileInMemory(
   { '/index.conf.ts': 'export default { a: 1, b: 2, c: 3 }' },
   '/index.conf.ts',
   'json',
-  false,
   undefined,
   { preserveKeyOrder: true },
 );
-
-compileInMemory(
-  { '/index.conf.ts': 'export default { a: 1 }' },
-  '/index.conf.ts',
-  'json',
-  false,
-  undefined,
-  { macroMode: true },
-);
 ```
+
+### Macro transform
+
+Macros are a source transform, not a compiler mode. Transform the current
+module first, then pass the resulting ordinary TypeScript to either compiler:
+
+```ts
+import { readFileSync } from 'node:fs';
+import { compile } from '@conf-ts/compiler';
+import {
+  createMacroProjectSnapshot,
+  transform,
+} from '@conf-ts/macro-transformer';
+
+const filename = 'path/to/index.conf.ts';
+const code = readFileSync(filename, 'utf8');
+const project = createMacroProjectSnapshot([filename]);
+const transformed = transform(
+  { filename, code, project },
+  { quote: 'single', env: process.env },
+);
+
+const result = compile({ filename, code: transformed.code, project }, 'json');
+```
+
+For a multi-file project, transform every module that contains macros and put
+each transformed source back into `project.files` before calling `compile`.
+The compiler only receives ordinary TypeScript and never expands macros.
 
 ## Webpack plugin
 
@@ -501,10 +534,17 @@ compileInMemory(
 
 ```js
 // webpack.config.js
-const { ConfTsWebpackPlugin } = require('@conf-ts/webpack-plugin');
+const {
+  ConfTsWebpackPlugin,
+  TypeScriptMacroTransformPlugin,
+} = require('@conf-ts/webpack-plugin');
 
 module.exports = {
   plugins: [
+    new TypeScriptMacroTransformPlugin({
+      // A pre-loader that expands macros in JS/TS modules.
+      quote: 'double',
+    }),
     new ConfTsWebpackPlugin({
       // All options are optional.
       test: /\.conf\.ts$/, // default; use /\.conf\.tsx?$/ for TS + TSX
@@ -513,9 +553,7 @@ module.exports = {
       name: '[path][name].generated.json', // default; see template tokens below
       jsx: true, // opt in to JSX during compiler evaluation
       jsxOutput: { type: '$type', props: false },
-      macro: false,
       preserveKeyOrder: false,
-      quote: 'double',
       check: false, // verify-only mode for CI; reads sidecar file next to source
       useWorkers: true, // off-thread compile via piscina; set false for small builds
       compiler: 'auto', // 'auto' | 'native' | 'js' — 'auto' prefers @conf-ts/compiler-native if available
@@ -537,7 +575,11 @@ new ConfTsWebpackPlugin({
 
 With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
 
-The plugin passes compile options including `quote` through to the selected compiler, so `quote: 'single'` produces single-quoted `expr()` output in generated sidecar files.
+Use `SwcMacroTransformPlugin` instead when the native SWC-backed transformer is
+installed. It intentionally does not fall back to the TypeScript transformer.
+The same plugins are available from
+`@conf-ts/webpack-plugin/macro-transform-plugin/typescript` and
+`@conf-ts/webpack-plugin/macro-transform-plugin/swc`.
 
 ## Supported config TypeScript
 
