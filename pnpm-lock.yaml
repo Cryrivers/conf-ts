@@ -111,16 +111,6 @@ importers:
         specifier: workspace:*
         version: link:npm/win32-x64-msvc
 
-  packages/@conf-ts/compiler-native/npm/darwin-arm64: {}
-
-  packages/@conf-ts/compiler-native/npm/darwin-x64: {}
-
-  packages/@conf-ts/compiler-native/npm/linux-x64-gnu: {}
-
-  packages/@conf-ts/compiler-native/npm/linux-x64-musl: {}
-
-  packages/@conf-ts/compiler-native/npm/win32-x64-msvc: {}
-
   packages/@conf-ts/expr-core:
     devDependencies:
       '@ianvs/prettier-plugin-sort-imports':
@@ -255,16 +245,6 @@ importers:
       '@conf-ts/macro-transformer-native-win32-x64-msvc':
         specifier: workspace:*
         version: link:npm/win32-x64-msvc
-
-  packages/@conf-ts/macro-transformer-native/npm/darwin-arm64: {}
-
-  packages/@conf-ts/macro-transformer-native/npm/darwin-x64: {}
-
-  packages/@conf-ts/macro-transformer-native/npm/linux-x64-gnu: {}
-
-  packages/@conf-ts/macro-transformer-native/npm/linux-x64-musl: {}
-
-  packages/@conf-ts/macro-transformer-native/npm/win32-x64-msvc: {}
 
   packages/@conf-ts/tests:
     dependencies:
