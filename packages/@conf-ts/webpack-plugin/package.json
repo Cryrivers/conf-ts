@@ -26,11 +26,11 @@
       "require": "./dist/cjs/macro-transform-plugin/typescript.js",
       "default": "./dist/cjs/macro-transform-plugin/typescript.js"
     },
-    "./macro-transform-plugin/swc": {
-      "types": "./dist/cjs/macro-transform-plugin/swc.d.ts",
-      "import": "./dist/cjs/macro-transform-plugin/swc.js",
-      "require": "./dist/cjs/macro-transform-plugin/swc.js",
-      "default": "./dist/cjs/macro-transform-plugin/swc.js"
+    "./macro-transform-plugin/native": {
+      "types": "./dist/cjs/macro-transform-plugin/native.d.ts",
+      "import": "./dist/cjs/macro-transform-plugin/native.js",
+      "require": "./dist/cjs/macro-transform-plugin/native.js",
+      "default": "./dist/cjs/macro-transform-plugin/native.js"
     }
   },
   "scripts": {

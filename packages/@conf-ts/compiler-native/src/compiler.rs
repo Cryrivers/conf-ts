@@ -1,26 +1,27 @@
-use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
-use std::collections::HashSet;
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use swc_core::common::{FileName, SourceMap, sync::Lrc};
-use swc_core::ecma::ast::{EsVersion, Module};
-use swc_core::ecma::parser::{Syntax, TsSyntax, parse_file_as_module};
+use oxc_allocator::Allocator;
+use oxc_ast::ast::*;
+use oxc_parser::Parser;
+use oxc_semantic::SemanticBuilder;
+use oxc_span::SourceType;
 
-use crate::browser::{ProjectResolutions, compile_project};
 use crate::error::ConfTSError;
-#[cfg(not(target_family = "wasm"))]
-use crate::eval::collect_imports;
-#[cfg(not(target_family = "wasm"))]
-use crate::resolver::{find_tsconfig, read_tsconfig, resolve_module};
-use crate::types::CompileOptions;
+use crate::eval::{
+  EvalContext, collect_imports, collect_macro_imports, evaluate, find_default_export,
+};
+use crate::resolver::{TsConfig, find_tsconfig, read_tsconfig, resolve_module};
+use crate::types::{
+  CompileOptions, FileContext, FileOwner, LineIndex, ParsedFile, ParsedProgram, TransformResult,
+  Value, serialize_output,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct SourceProject {
   pub files: HashMap<String, String>,
-  pub resolutions: ProjectResolutions,
+  pub resolutions: crate::browser::ProjectResolutions,
   pub compiler_options: Option<serde_json::Value>,
 }
 
@@ -31,51 +32,49 @@ pub struct SourceCompileInput {
   pub project: Option<SourceProject>,
 }
 
+/// Parse a TypeScript source file into a ParsedFile + LineIndex.
 pub fn parse_ts_file(
   source: &str,
   file_name: &str,
-  source_map: &Lrc<SourceMap>,
-) -> Result<Module, ConfTSError> {
-  let source_file = source_map.new_source_file(
-    Lrc::new(FileName::Real(PathBuf::from(file_name))),
-    source.to_string(),
-  );
-  let syntax = Syntax::Typescript(TsSyntax {
-    decorators: true,
-    ..Default::default()
-  });
-  let mut recoverable_errors = Vec::new();
-  parse_file_as_module(
-    &source_file,
-    syntax,
-    EsVersion::Es2022,
-    None,
-    &mut recoverable_errors,
-  )
-  .map_err(|error| {
-    ConfTSError::new(
-      format!("Failed to parse file {}: {:?}", file_name, error.kind()),
-      file_name,
-      1,
-      1,
-    )
-  })
+) -> Result<(Rc<ParsedFile>, LineIndex), ConfTSError> {
+  let line_index = LineIndex::new(source);
+  let source_type = SourceType::from_path(file_name).unwrap_or_default();
+  let parsed = ParsedFile::try_new(
+    FileOwner {
+      allocator: Allocator::default(),
+      source: source.to_string(),
+    },
+    |owner| {
+      let ret = Parser::new(&owner.allocator, &owner.source, source_type).parse();
+      if ret.panicked {
+        Err(ConfTSError::new(
+          format!("Failed to parse file: {}", file_name),
+          file_name,
+          1,
+          1,
+        ))
+      } else {
+        let scoping = {
+          let semantic = SemanticBuilder::new().build(&ret.program).semantic;
+          semantic.into_scoping()
+        };
+        Ok(ParsedProgram {
+          program: ret.program,
+          scoping,
+        })
+      }
+    },
+  )?;
+  Ok((Rc::new(parsed), line_index))
 }
 
-#[cfg(not(target_family = "wasm"))]
 fn decode_source(bytes: &[u8], file_path: &str) -> Result<String, ConfTSError> {
-  if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-    return String::from_utf8(bytes[3..].to_vec()).map_err(|error| {
-      ConfTSError::new(
-        format!("Failed to decode UTF-8: {}", error),
-        file_path,
-        1,
-        1,
-      )
-    });
+  if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+    return String::from_utf8(bytes[3..].to_vec())
+      .map_err(|e| ConfTSError::new(format!("Failed to decode UTF-8: {}", e), file_path, 1, 1));
   }
-  if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
-    let little_endian = bytes.starts_with(&[0xff, 0xfe]);
+  if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+    let is_le = bytes.starts_with(&[0xFF, 0xFE]);
     let body = &bytes[2..];
     if !body.len().is_multiple_of(2) {
       return Err(ConfTSError::new(
@@ -85,25 +84,21 @@ fn decode_source(bytes: &[u8], file_path: &str) -> Result<String, ConfTSError> {
         1,
       ));
     }
-    let units = body.chunks_exact(2).map(|chunk| {
-      if little_endian {
+    let mut units = Vec::with_capacity(body.len() / 2);
+    for chunk in body.chunks_exact(2) {
+      let unit = if is_le {
         u16::from_le_bytes([chunk[0], chunk[1]])
       } else {
         u16::from_be_bytes([chunk[0], chunk[1]])
-      }
-    });
-    return String::from_utf16(&units.collect::<Vec<_>>()).map_err(|error| {
-      ConfTSError::new(
-        format!("Failed to decode UTF-16: {}", error),
-        file_path,
-        1,
-        1,
-      )
-    });
+      };
+      units.push(unit);
+    }
+    return String::from_utf16(&units)
+      .map_err(|e| ConfTSError::new(format!("Failed to decode UTF-16: {}", e), file_path, 1, 1));
   }
-  String::from_utf8(bytes.to_vec()).map_err(|error| {
+  String::from_utf8(bytes.to_vec()).map_err(|e| {
     ConfTSError::new(
-      format!("Failed to decode file as UTF-8: {}", error),
+      format!("Failed to decode file as UTF-8 or UTF-16: {}", e),
       file_path,
       1,
       1,
@@ -111,119 +106,271 @@ fn decode_source(bytes: &[u8], file_path: &str) -> Result<String, ConfTSError> {
   })
 }
 
-#[cfg(not(target_family = "wasm"))]
-fn read_source(path: &Path) -> Result<String, ConfTSError> {
-  let display = path.display().to_string();
-  let bytes = std::fs::read(path)
-    .map_err(|error| ConfTSError::new(format!("Failed to read file: {}", error), &display, 1, 1))?;
-  decode_source(&bytes, &display)
+fn load_file(
+  file_path: &str,
+  overrides: &HashMap<String, String>,
+) -> Result<FileContext, ConfTSError> {
+  let source = match overrides.get(file_path) {
+    Some(text) => text.clone(),
+    None => {
+      let bytes = std::fs::read(file_path)
+        .map_err(|e| ConfTSError::new(format!("Failed to read file: {}", e), file_path, 1, 1))?;
+      decode_source(&bytes, file_path)?
+    }
+  };
+  let (parsed, line_index) = parse_ts_file(&source, file_path)?;
+  let imports = collect_imports(parsed.program());
+  Ok(FileContext {
+    file_path: file_path.to_string(),
+    parsed,
+    line_index,
+    imports,
+  })
 }
 
-#[cfg(not(target_family = "wasm"))]
-fn absolute_path(path: &str) -> Result<PathBuf, ConfTSError> {
-  let input = Path::new(path);
-  let absolute = if input.is_absolute() {
-    input.to_path_buf()
+/// Collect enum values from a program.
+pub fn collect_enums(
+  program: &Program,
+  file_path: &str,
+  ctx: &mut EvalContext,
+  file_ctx: &FileContext,
+  options: &CompileOptions,
+) {
+  for stmt in &program.body {
+    let decl = match stmt {
+      Statement::TSEnumDeclaration(e) => Some(e.as_ref()),
+      Statement::ExportNamedDeclaration(export) => {
+        if let Some(Declaration::TSEnumDeclaration(e)) = &export.declaration {
+          Some(e.as_ref())
+        } else {
+          None
+        }
+      }
+      _ => None,
+    };
+
+    if let Some(enum_decl) = decl {
+      let enum_name = enum_decl.id.name.as_str();
+      let mut next_enum_value: i64 = 0;
+      let mut local_context: HashMap<String, Value> = HashMap::new();
+      for member in &enum_decl.body.members {
+        let member_name = match &member.id {
+          TSEnumMemberName::Identifier(ident) => ident.name.as_str().to_string(),
+          TSEnumMemberName::String(s) => s.value.as_str().to_string(),
+          _ => continue,
+        };
+        let full_name = format!("{}.{}", enum_name, member_name);
+
+        let val = if let Some(ref init) = member.initializer {
+          let mut enum_eval_files = HashSet::new();
+          std::mem::swap(&mut ctx.evaluated_files, &mut enum_eval_files);
+          let res = match evaluate(init, file_ctx, ctx, Some(&local_context), options) {
+            Ok(v) => v,
+            Err(_) => Value::number(next_enum_value as f64),
+          };
+          std::mem::swap(&mut ctx.evaluated_files, &mut enum_eval_files);
+          res
+        } else {
+          Value::number(next_enum_value as f64)
+        };
+
+        if let Value::Number(n) = &val {
+          next_enum_value = n.value as i64 + 1;
+        } else {
+          next_enum_value += 1;
+        }
+
+        local_context.insert(member_name.clone(), val.clone());
+        ctx
+          .enum_map
+          .entry(file_path.to_string())
+          .or_default()
+          .insert(full_name, val);
+      }
+    }
+  }
+}
+
+/// A fully-loaded, resolved filesystem project ready for evaluation: every
+/// reachable file starting from `entry_file`, plus the tsconfig used to
+/// resolve them. Shared by the plain constants-only compile and by
+/// @conf-ts/macro-transformer-native's macro pre-evaluation pass.
+pub struct LoadedProgram {
+  pub file_contexts: HashMap<String, FileContext>,
+  pub entry_file: String,
+  pub tsconfig_path: PathBuf,
+  pub tsconfig_dir: PathBuf,
+  pub tsconfig: TsConfig,
+}
+
+/// Load `input_file` and every file it (transitively) imports from the
+/// filesystem, following tsconfig path-alias resolution.
+pub fn load_file_program(input_file: &str) -> Result<LoadedProgram, ConfTSError> {
+  load_file_program_with_overrides(input_file, &HashMap::new())
+}
+
+/// Same as `load_file_program`, but `overrides` (keyed by absolute file
+/// path) is checked before falling back to the filesystem for each file's
+/// source text — used to feed macro-transformed source back into the
+/// ordinary constants-only pipeline via `compile_transformed`.
+pub fn load_file_program_with_overrides(
+  input_file: &str,
+  overrides: &HashMap<String, String>,
+) -> Result<LoadedProgram, ConfTSError> {
+  let input_path = Path::new(input_file);
+  let abs_input = if input_path.is_absolute() {
+    input_path.to_path_buf()
   } else {
     std::env::current_dir()
-      .map_err(|error| ConfTSError::new(format!("Failed to get CWD: {}", error), path, 1, 1))?
-      .join(input)
+      .map_err(|e| ConfTSError::new(format!("Failed to get CWD: {}", e), input_file, 1, 1))?
+      .join(input_path)
   };
-  Ok(absolute.canonicalize().unwrap_or(absolute))
-}
+  let abs_input_str = abs_input.display().to_string();
 
-fn load_filesystem_project(
-  filename: &str,
-  entry_override: Option<&str>,
-) -> Result<(SourceProject, String, String), ConfTSError> {
-  #[cfg(target_family = "wasm")]
-  {
-    let _ = (filename, entry_override);
-    return Err(ConfTSError::new(
-      "Path-based compile is unavailable in the WASI build; pass { filename, code, project } or use compileInMemory",
-      filename,
-      1,
-      1,
-    ));
-  }
+  let tsconfig_path = find_tsconfig(&abs_input).ok_or_else(|| {
+    ConfTSError::new("Could not find a tsconfig.json file.", &abs_input_str, 1, 1)
+  })?;
+  let tsconfig = read_tsconfig(&tsconfig_path)?;
+  let tsconfig_dir = tsconfig_path.parent().unwrap().to_path_buf();
 
-  #[cfg(not(target_family = "wasm"))]
-  {
-    let entry = absolute_path(filename)?;
-    let entry_name = entry.display().to_string();
-    let tsconfig_path = find_tsconfig(&entry)
-      .ok_or_else(|| ConfTSError::new("Could not find a tsconfig.json file.", &entry_name, 1, 1))?;
-    let tsconfig = read_tsconfig(&tsconfig_path)?;
-    let tsconfig_dir = tsconfig_path
-      .parent()
-      .unwrap_or(Path::new("."))
-      .to_path_buf();
-    let source_map: Lrc<SourceMap> = Lrc::new(SourceMap::default());
-    let mut project = SourceProject::default();
-    let mut queue = vec![entry.clone()];
-    let mut loaded = HashSet::new();
+  // Load all reachable files
+  let mut file_contexts: HashMap<String, FileContext> = HashMap::new();
+  let mut files_to_load = vec![abs_input_str.clone()];
+  let mut loaded = HashSet::new();
 
-    while let Some(path) = queue.pop() {
-      let path = path.canonicalize().unwrap_or(path);
-      let path_name = path.display().to_string();
-      if !loaded.insert(path_name.clone()) {
-        continue;
-      }
-      let source = if path_name == entry_name {
-        match entry_override {
-          Some(source) => source.to_string(),
-          None => read_source(&path)?,
-        }
-      } else {
-        read_source(&path)?
-      };
-      let module = parse_ts_file(&source, &path_name, &source_map)?;
-      let mut table = HashMap::new();
-      for import in collect_imports(&module).values() {
-        if let Some(resolved) = resolve_module(&import.source, &path, &tsconfig_dir, &tsconfig) {
-          let resolved = resolved.canonicalize().unwrap_or(resolved);
-          let resolved_name = resolved.display().to_string();
-          table.insert(import.source.clone(), resolved_name);
-          queue.push(resolved);
-        }
-      }
-      project.resolutions.insert(path_name.clone(), table);
-      project.files.insert(path_name, source);
+  while let Some(file_path) = files_to_load.pop() {
+    if loaded.contains(&file_path) {
+      continue;
     }
+    loaded.insert(file_path.clone());
 
-    Ok((project, entry_name, tsconfig_path.display().to_string()))
+    let ctx = load_file(&file_path, overrides)?;
+    for import_info in ctx.imports.values() {
+      if let Some(resolved) = resolve_module(
+        &import_info.source,
+        Path::new(&file_path),
+        &tsconfig_dir,
+        &tsconfig,
+      ) {
+        let resolved_str = resolved.display().to_string();
+        if !loaded.contains(&resolved_str) {
+          files_to_load.push(resolved_str);
+        }
+      }
+    }
+    file_contexts.insert(file_path, ctx);
+  }
+
+  Ok(LoadedProgram {
+    file_contexts,
+    entry_file: abs_input_str,
+    tsconfig_path,
+    tsconfig_dir,
+    tsconfig,
+  })
+}
+
+/// Build an `EvalContext` for `loaded`, wiring up its module resolver and
+/// eagerly collecting macro imports for every file (bookkeeping only —
+/// compiler-native's own compile paths never set `macro_evaluator`, so this
+/// map is only ever consulted by a downstream macro evaluator).
+pub fn create_eval_context(loaded: &LoadedProgram) -> EvalContext {
+  let mut eval_ctx = EvalContext::new();
+  eval_ctx.file_contexts = loaded.file_contexts.clone();
+
+  let tsconfig_dir_clone = loaded.tsconfig_dir.clone();
+  let tsconfig_for_resolver = loaded.tsconfig.clone();
+  eval_ctx.resolver = Some(Box::new(move |specifier: &str, from_file: &str| {
+    resolve_module(
+      specifier,
+      Path::new(from_file),
+      &tsconfig_dir_clone,
+      &tsconfig_for_resolver,
+    )
+    .map(|p| p.display().to_string())
+  }));
+
+  for (file_path, ctx) in &loaded.file_contexts {
+    let imports = collect_macro_imports(ctx.program(), file_path);
+    eval_ctx
+      .macro_imports_map
+      .insert(file_path.clone(), imports);
+  }
+
+  eval_ctx
+}
+
+/// Run the enum-collection pass over every file in `loaded`.
+pub fn collect_enums_for_all(
+  loaded: &LoadedProgram,
+  eval_ctx: &mut EvalContext,
+  options: &CompileOptions,
+) {
+  let file_paths: Vec<String> = loaded.file_contexts.keys().cloned().collect();
+  for file_path in &file_paths {
+    let ctx = loaded.file_contexts.get(file_path).unwrap().clone();
+    collect_enums(ctx.program(), file_path, eval_ctx, &ctx, options);
   }
 }
 
-fn compile_loaded_project(
-  project: &SourceProject,
-  entry_file: &str,
+fn compile_loaded(
+  loaded: &LoadedProgram,
+  format: &str,
+  options: &CompileOptions,
+  extra_dependencies: &[String],
+) -> Result<(String, Vec<String>), ConfTSError> {
+  let mut eval_ctx = create_eval_context(loaded);
+  collect_enums_for_all(loaded, &mut eval_ctx, options);
+
+  let entry_ctx = loaded
+    .file_contexts
+    .get(&loaded.entry_file)
+    .ok_or_else(|| {
+      ConfTSError::new(
+        format!("Entry file not found: {}", loaded.entry_file),
+        &loaded.entry_file,
+        1,
+        1,
+      )
+    })?
+    .clone();
+
+  let output = find_default_export(&entry_ctx, &mut eval_ctx, options)?;
+
+  eval_ctx
+    .evaluated_files
+    .insert(loaded.tsconfig_path.display().to_string());
+  for dep in extra_dependencies {
+    eval_ctx.evaluated_files.insert(dep.clone());
+  }
+
+  let file_names: Vec<String> = eval_ctx.evaluated_files.into_iter().collect();
+  let serialized = serialize_output(&output, format)?;
+  Ok((serialized, file_names))
+}
+
+/// Public compile function matching the TS API. Always constants-only —
+/// compiler-native no longer evaluates macros itself; see
+/// @conf-ts/macro-transformer-native for macro pre-evaluation.
+pub fn compile(
+  input_file: &str,
   format: &str,
   options: &CompileOptions,
 ) -> Result<(String, Vec<String>), ConfTSError> {
-  compile_project(
-    &project.files,
-    entry_file,
-    Some(&project.resolutions),
-    project.compiler_options.as_ref(),
-    format,
-    options,
-  )
+  let loaded = load_file_program(input_file)?;
+  compile_loaded(&loaded, format, options, &[])
 }
 
+/// Compile ordinary TypeScript from a filesystem path.
 pub fn compile_path(
   input_file: &str,
   format: &str,
   options: &CompileOptions,
 ) -> Result<(String, Vec<String>), ConfTSError> {
-  let (project, entry, tsconfig) = load_filesystem_project(input_file, None)?;
-  let (output, mut dependencies) = compile_loaded_project(&project, &entry, format, options)?;
-  dependencies.push(tsconfig);
-  dependencies.sort();
-  dependencies.dedup();
-  Ok((output, dependencies))
+  compile(input_file, format, options)
 }
 
+/// Compile an injected source payload, optionally backed by a source-project snapshot.
 pub fn compile_source(
   input: &SourceCompileInput,
   format: &str,
@@ -234,34 +381,45 @@ pub fn compile_source(
     project
       .files
       .insert(input.filename.clone(), input.code.clone());
-    return compile_loaded_project(&project, &input.filename, format, options);
+    return crate::browser::compile_project(
+      &project.files,
+      &input.filename,
+      Some(&project.resolutions),
+      project.compiler_options.as_ref(),
+      format,
+      options,
+    );
   }
 
-  #[cfg(target_family = "wasm")]
-  {
-    let project = SourceProject {
-      files: HashMap::from([(input.filename.clone(), input.code.clone())]),
-      ..Default::default()
-    };
-    return compile_loaded_project(&project, &input.filename, format, options);
-  }
-
-  #[cfg(not(target_family = "wasm"))]
-  {
-    let (project, entry, tsconfig) = load_filesystem_project(&input.filename, Some(&input.code))?;
-    let (output, mut dependencies) = compile_loaded_project(&project, &entry, format, options)?;
-    dependencies.push(tsconfig);
-    dependencies.sort();
-    dependencies.dedup();
-    Ok((output, dependencies))
-  }
+  let absolute = if Path::new(&input.filename).is_absolute() {
+    PathBuf::from(&input.filename)
+  } else {
+    std::env::current_dir()
+      .map_err(|error| {
+        ConfTSError::new(
+          format!("Failed to get CWD: {}", error),
+          &input.filename,
+          1,
+          1,
+        )
+      })?
+      .join(&input.filename)
+  };
+  let entry = absolute.display().to_string();
+  let overrides = HashMap::from([(entry, input.code.clone())]);
+  let loaded = load_file_program_with_overrides(&input.filename, &overrides)?;
+  compile_loaded(&loaded, format, options, &[])
 }
 
-/// Legacy Rust entry point retained for embedders.
-pub fn compile(
+/// Compile an entry file given a pre-computed macro `TransformResult`
+/// (`transformed.files` overrides the original source for whichever files
+/// had macro calls rewritten to literal source).
+pub fn compile_transformed(
   input_file: &str,
   format: &str,
+  transformed: &TransformResult,
   options: &CompileOptions,
 ) -> Result<(String, Vec<String>), ConfTSError> {
-  compile_path(input_file, format, options)
+  let loaded = load_file_program_with_overrides(input_file, &transformed.files)?;
+  compile_loaded(&loaded, format, options, &transformed.dependencies)
 }

@@ -508,8 +508,8 @@ function referencedModuleNames(sourceFile: ts.SourceFile): string[] {
 
 /**
  * Capture the filesystem-backed TypeScript graph as JSON-friendly source and
- * resolution tables. The returned snapshot can be passed to JS, native, or
- * WASM transformers without granting them filesystem access.
+ * resolution tables. The returned snapshot can be passed to either transformer
+ * implementation without granting it filesystem access.
  */
 export function createMacroProjectSnapshot(
   entryFiles: string[],

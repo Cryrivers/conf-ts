@@ -8,11 +8,6 @@
         ".next/**",
         "target/**",
         "*.node",
-        "*.wasm",
-        "*.wasi.cjs",
-        "*.wasi-browser.js",
-        "browser.js",
-        "wasi-worker*.mjs",
         "index.js",
         "index.d.ts"
       ]

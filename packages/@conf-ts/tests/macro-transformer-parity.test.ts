@@ -89,5 +89,11 @@ describe('macro-transformer / macro-transformer-native parity', () => {
         options,
       ).code,
     ).toBe(jsResult.code);
+    expect(
+      transformMacrosNative(
+        { filename: inputFile, code: nativeResult.code, project },
+        options,
+      ).code,
+    ).toBe(nativeResult.code);
   });
 });

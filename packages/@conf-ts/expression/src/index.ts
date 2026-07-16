@@ -5,9 +5,15 @@ import {
   tokenize,
   type ASTNode,
 } from '@conf-ts/expr-core';
+import type { Expr, LooseExpr, RuntimeEnv } from '@conf-ts/macro';
 
 import { evaluate, type EvalOptions } from './eval';
-import type { Expr, ExpressionOptions, LooseExpr, RuntimeEnv } from './types';
+
+type ExpressionOptions = {
+  optionalMemberAccess?: boolean;
+  /** Alias for `optionalMemberAccess`. */
+  loose?: boolean;
+};
 
 type Compiled<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown> = (
   env: Context,

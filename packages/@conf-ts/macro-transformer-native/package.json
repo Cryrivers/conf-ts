@@ -1,7 +1,7 @@
 {
   "name": "@conf-ts/macro-transformer-native",
   "version": "0.0.12",
-  "description": "SWC-backed native source transformer for conf-ts macros.",
+  "description": "Oxc-backed native source transformer for conf-ts macros.",
   "author": {
     "name": "Zhongliang Wang",
     "email": "hello@zhongliang.wang",
@@ -12,29 +12,17 @@
     "url": "https://github.com/Cryrivers/conf-ts"
   },
   "main": "index.js",
-  "browser": "browser.js",
   "exports": {
     ".": {
       "types": "./index.d.ts",
       "import": "./index.js",
       "require": "./index.js"
-    },
-    "./browser": {
-      "types": "./index.d.ts",
-      "import": "./browser.js",
-      "default": "./browser.js"
     }
   },
   "types": "index.d.ts",
   "files": [
     "index.d.ts",
-    "index.js",
-    "browser.js",
-    "macro-transformer-native.wasi.cjs",
-    "macro-transformer-native.wasi-browser.js",
-    "macro-transformer-native.wasm32-wasi.wasm",
-    "wasi-worker.mjs",
-    "wasi-worker-browser.mjs"
+    "index.js"
   ],
   "napi": {
     "binaryName": "macro-transformer-native",
@@ -43,32 +31,23 @@
       "x86_64-apple-darwin",
       "x86_64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl",
-      "aarch64-apple-darwin",
-      "wasm32-wasip1-threads"
+      "aarch64-apple-darwin"
     ]
   },
   "engines": {
     "node": ">= 12.22.0 < 13 || >= 14.17.0 < 15 || >= 15.12.0 < 16 || >= 16.0.0"
   },
   "scripts": {
-    "artifacts": "napi artifacts",
-    "build": "pnpm run build:native && pnpm run build:wasi",
-    "build:native": "napi build --platform --release",
-    "build:debug": "napi build --platform",
-    "build:wasi": "napi build --platform --release --target wasm32-wasip1-threads && node ../scripts/finalize-wasi-browser.mjs",
-    "format:prettier": "prettier . -w && cargo fmt && taplo format",
+    "build": "napi build --platform --release --no-js",
+    "build:debug": "napi build --platform --no-js",
+    "format": "prettier . -w && cargo fmt",
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm -p ../../native-bindings",
-    "preversion": "napi build --platform && git add .",
+    "preversion": "pnpm run build:debug && git add .",
     "version": "napi version"
   },
-  "dependencies": {
-    "@emnapi/core": "^1.11.1",
-    "@emnapi/runtime": "^1.11.1",
-    "@napi-rs/wasm-runtime": "^1.1.6",
-    "@napi-rs/cli": "^3.7.3"
-  },
   "devDependencies": {
+    "@napi-rs/cli": "^3.7.3",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@types/node": "^26.1.1",
     "oxlint": "^1.73.0",

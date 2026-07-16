@@ -22,8 +22,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - `@conf-ts/expression`: JavaScript-like runtime expression evaluator
 - `@conf-ts/macro`: Macro functions consumed by the transform
 - `@conf-ts/macro-transformer`: TypeScript source transformer for macros
-- `@conf-ts/macro-transformer-native`: SWC-backed native source transformer
-- `@conf-ts/swc-plugin`: Standard SWC WASM macro transform plugin
+- `@conf-ts/macro-transformer-native`: Oxc-backed native source transformer
 - `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
 
 ### Performance: JS vs compiler-native
@@ -155,7 +154,7 @@ export default {
 
 `expr()` marks a typed arrow expression for configuration compilation. During normal runtime execution it preserves and returns the callback, including its closure. During JSON/YAML compilation it emits a portable expression string: accesses to the callback parameter become root identifiers, and serializable `const` and enum values are resolved.
 
-Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set macro transform option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and SWC transformers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
+Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set macro transform option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native Oxc transformers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
 
 ```ts
 import { expr } from '@conf-ts/macro';
@@ -360,7 +359,7 @@ const { output, dependencies } = compileInMemory(
 );
 ```
 
-The compiler also accepts source supplied by a loader, editor, or WASI host.
+The compiler also accepts source supplied by a loader or editor.
 The supplied `code` wins over the matching file in the optional project
 snapshot, so compilation never needs a macro-specific API:
 
@@ -374,11 +373,6 @@ compile(
   'json',
 );
 ```
-
-`@conf-ts/compiler-native` also ships a `wasm32-wasip1-threads` target. WASI
-hosts must use source/project input or `compileInMemory`; path-based compilation
-is intentionally unavailable because the compiler does not assume filesystem
-access there.
 
 ### Options
 
@@ -473,11 +467,11 @@ new ConfTsWebpackPlugin({
 
 With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
 
-Use `SwcMacroTransformPlugin` instead when the native SWC-backed transformer is
+Use `NativeMacroTransformPlugin` instead when the native Oxc-backed transformer is
 installed. It intentionally does not fall back to the TypeScript transformer.
 The same plugins are available from
 `@conf-ts/webpack-plugin/macro-transform-plugin/typescript` and
-`@conf-ts/webpack-plugin/macro-transform-plugin/swc`.
+`@conf-ts/webpack-plugin/macro-transform-plugin/native`.
 
 ## Supported config TypeScript
 

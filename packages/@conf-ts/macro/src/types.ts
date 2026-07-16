@@ -1,19 +1,4 @@
-export type RuntimeEnv = Record<string, unknown>;
-
-export type ExpressionOptions = {
-  optionalMemberAccess?: boolean;
-  /** Alias for `optionalMemberAccess`. */
-  loose?: boolean;
-};
-
 declare const EXPR_CALLBACK: unique symbol;
-
-export type Expr<Context extends RuntimeEnv, ReturnType> = ((
-  ctx: Context,
-) => ReturnType) &
-  string & {
-    readonly [EXPR_CALLBACK]: true;
-  };
 
 type IsPlainObject<T> = T extends readonly unknown[]
   ? false
@@ -55,6 +40,15 @@ type LooseContext<
     : Loosened extends true
       ? T | undefined
       : T;
+
+export type RuntimeEnv = Record<string, unknown>;
+
+export type Expr<Context extends RuntimeEnv, ReturnType> = ((
+  ctx: Context,
+) => ReturnType) &
+  string & {
+    readonly [EXPR_CALLBACK]: true;
+  };
 
 // Presents a deeply-required view of Context to the expr(...) callback for
 // type-checking only; the compiled output is identical to Expr and must be

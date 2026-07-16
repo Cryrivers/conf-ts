@@ -82,8 +82,8 @@ function PageContent() {
     setError(null);
     try {
       const [{ compileInMemory }, { transform }] = await Promise.all([
-        import('@conf-ts/compiler-native/browser'),
-        import('@conf-ts/macro-transformer-native/browser'),
+        import('@conf-ts/compiler/browser'),
+        import('@conf-ts/macro-transformer'),
       ]);
       const compileFiles = macro
         ? {

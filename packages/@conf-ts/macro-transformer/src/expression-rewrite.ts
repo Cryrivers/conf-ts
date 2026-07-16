@@ -53,7 +53,7 @@ function contextProperty(tokens: Token[], index: number): [string, number] {
   );
 }
 
-// Keep this in sync with macro-transformer-core/src/lib.rs encode_string.
+// Keep this in sync with macro-transformer-native/src/transform.rs encode_string.
 export function encodeStringLiteral(
   value: string,
   quote: QuoteStyle = 'double',

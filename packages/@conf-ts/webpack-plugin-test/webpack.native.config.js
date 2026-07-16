@@ -1,7 +1,7 @@
 const path = require('path');
 const {
   ConfTsWebpackPlugin,
-  SwcMacroTransformPlugin,
+  NativeMacroTransformPlugin,
 } = require('@conf-ts/webpack-plugin');
 
 module.exports = {
@@ -32,7 +32,7 @@ module.exports = {
     ],
   },
   plugins: [
-    new SwcMacroTransformPlugin(),
+    new NativeMacroTransformPlugin(),
     new ConfTsWebpackPlugin({
       compiler: 'native',
       extensionToRemove: '.conf.ts',

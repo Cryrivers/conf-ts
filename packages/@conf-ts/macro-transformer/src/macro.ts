@@ -39,7 +39,7 @@ function isInlineableMacroCall(
 //
 // This set must stay in sync with its two counterparts, since nothing
 // enforces agreement across the language/package boundary between them:
-//   - macro-transformer-core/src/lib.rs: runtime fallback macro matching
+//   - macro-transformer-native/src/transform.rs: runtime fallback macro matching
 //   - expression/src/eval.ts: GLOBAL_BUILTINS (the runtime side backing
 //     these names — the compiler emits e.g. `Number(x)` as literal runtime
 //     call text, so @conf-ts/expression's evaluator must know how to

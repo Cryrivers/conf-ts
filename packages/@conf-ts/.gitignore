@@ -1,4 +1,4 @@
-# Shared build output for compiler-native, macro-transformer-core,
-# macro-transformer-native, and swc-plugin. Cargo.lock is intentionally
-# committed at this workspace root so all SWC entry points stay in sync.
+# Shared build output for compiler-native and macro-transformer-native.
+# Cargo.lock is committed at this workspace root so both native entry points
+# stay in sync.
 /target

@@ -1,10 +1,10 @@
+mod transform;
+
 use std::collections::HashMap;
 
-use macro_transformer_core::{
-  ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions, transform_source,
-};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use transform::{ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions, transform_source};
 
 #[napi(object)]
 pub struct JsProjectSnapshot {

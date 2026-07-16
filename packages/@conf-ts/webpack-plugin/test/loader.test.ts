@@ -6,7 +6,7 @@ import webpack from 'webpack';
 
 import {
   ConfTsWebpackPlugin,
-  SwcMacroTransformPlugin,
+  NativeMacroTransformPlugin,
   TypeScriptMacroTransformPlugin,
 } from '../src/index';
 import {
@@ -20,6 +20,17 @@ import { CONF_TS_MACRO_TRANSFORM_META } from '../src/macro-transform-plugin/type
 import compileTask from '../src/worker';
 
 describe('loader generated file path interpolation', () => {
+  it('exports the native macro plugin from the root and /native subpath only', () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'),
+    );
+
+    expect(NativeMacroTransformPlugin).toBeTypeOf('function');
+    expect(packageJson.exports).toHaveProperty(
+      './macro-transform-plugin/native',
+    );
+  });
+
   it('keeps string extensionToRemove behavior', () => {
     const resourcePath = path.join('/project', 'src', 'app.conf.ts');
 
@@ -97,14 +108,14 @@ describe('loader generated file path interpolation', () => {
 
   it('rejects legacy macro and quote options with migration guidance', () => {
     expect(() => new ConfTsWebpackPlugin({ macro: true } as any)).toThrow(
-      'TypeScriptMacroTransformPlugin or SwcMacroTransformPlugin',
+      'TypeScriptMacroTransformPlugin or NativeMacroTransformPlugin',
     );
     expect(() => new ConfTsWebpackPlugin({ quote: 'single' } as any)).toThrow(
       'pass it to a MacroTransformPlugin',
     );
   });
 
-  it.each([TypeScriptMacroTransformPlugin, SwcMacroTransformPlugin])(
+  it.each([TypeScriptMacroTransformPlugin, NativeMacroTransformPlugin])(
     'installs %s as a pre-loader for JS and TS',
     Plugin => {
       const rules: any[] = [];
@@ -199,10 +210,10 @@ describe('loader generated file path interpolation', () => {
     expect(dependencies).toContain(resourcePath);
   });
 
-  it('runs the SWC macro pre-transform before ordinary compilation', async () => {
+  it('runs the native macro pre-transform before ordinary compilation', async () => {
     const builtPlugin = require('../dist/cjs/index.js') as {
       ConfTsWebpackPlugin: typeof ConfTsWebpackPlugin;
-      SwcMacroTransformPlugin: typeof SwcMacroTransformPlugin;
+      NativeMacroTransformPlugin: typeof NativeMacroTransformPlugin;
     };
     const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-webpack-'));
     const filename = path.join(context, 'config.conf.ts');
@@ -224,7 +235,7 @@ describe('loader generated file path interpolation', () => {
       entry: './config.conf.ts',
       output: { path: path.join(context, 'dist'), filename: 'bundle.js' },
       plugins: [
-        new builtPlugin.SwcMacroTransformPlugin(),
+        new builtPlugin.NativeMacroTransformPlugin(),
         new builtPlugin.ConfTsWebpackPlugin({
           compiler: 'js',
           useWorkers: false,

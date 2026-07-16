@@ -49,15 +49,15 @@ function loadTransformer(
     return typescript;
   }
 
-  // Intentionally no fallback: choosing the SWC plugin is an explicit request
-  // for the native SWC-backed transformer.
-  const swc = require('@conf-ts/macro-transformer-native') as Pick<
+  // Intentionally no fallback: choosing the native plugin is an explicit
+  // request for the native Oxc-backed transformer.
+  const native = require('@conf-ts/macro-transformer-native') as Pick<
     Transformer,
     'transform'
   >;
   return {
     createMacroProjectSnapshot: typescript.createMacroProjectSnapshot,
-    transform: swc.transform,
+    transform: native.transform,
   };
 }
 

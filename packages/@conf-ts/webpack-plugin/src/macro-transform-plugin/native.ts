@@ -7,10 +7,10 @@ import {
 
 export type { MacroTransformPluginOptions } from './shared';
 
-export class SwcMacroTransformPlugin {
+export class NativeMacroTransformPlugin {
   constructor(private readonly options: MacroTransformPluginOptions = {}) {}
 
   apply(compiler: Compiler): void {
-    applyMacroTransformPlugin(compiler, 'swc', this.options);
+    applyMacroTransformPlugin(compiler, 'native', this.options);
   }
 }

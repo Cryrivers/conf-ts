@@ -7,7 +7,7 @@ export interface CompileOptions {
 
 export type InMemoryFiles = { [fileName: string]: string };
 
-/** A serializable TypeScript project supplied by a build tool or WASI host. */
+/** A serializable TypeScript project supplied by a build tool or editor. */
 export interface SourceProject {
   files: Record<string, string>;
   resolutions?: Record<string, Record<string, string>>;

@@ -51,7 +51,7 @@ function validateOptions(options: ConfTsWebpackPluginOptions): void {
   };
   if (Object.prototype.hasOwnProperty.call(legacyOptions, 'macro')) {
     reject(
-      'the macro option was removed; add TypeScriptMacroTransformPlugin or SwcMacroTransformPlugin instead',
+      'the macro option was removed; add TypeScriptMacroTransformPlugin or NativeMacroTransformPlugin instead',
     );
   }
   if (Object.prototype.hasOwnProperty.call(legacyOptions, 'quote')) {
@@ -143,4 +143,4 @@ export {
   TypeScriptMacroTransformPlugin,
   type MacroTransformPluginOptions,
 } from './macro-transform-plugin/typescript';
-export { SwcMacroTransformPlugin } from './macro-transform-plugin/swc';
+export { NativeMacroTransformPlugin } from './macro-transform-plugin/native';

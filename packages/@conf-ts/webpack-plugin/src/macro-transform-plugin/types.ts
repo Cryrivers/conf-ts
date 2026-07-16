@@ -10,4 +10,4 @@ export interface MacroTransformLoaderMeta {
   [key: string]: unknown;
 }
 
-export type MacroTransformImplementation = 'typescript' | 'swc';
+export type MacroTransformImplementation = 'typescript' | 'native';

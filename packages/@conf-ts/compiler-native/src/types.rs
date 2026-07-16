@@ -1,12 +1,73 @@
 use std::collections::HashMap;
-use swc_core::common::{BytePos, SourceMap, sync::Lrc};
-use swc_core::ecma::ast::Module;
+use std::rc::Rc;
+
+use oxc_allocator::Allocator;
+use oxc_ast::ast::Program;
+use oxc_semantic::Scoping;
 
 use crate::error::ConfTSError;
 use crate::eval::ImportInfo;
 
 const RAW_NUMBER_PREFIX: &str = "__CONF_TS_NUMBER__";
 const RAW_NUMBER_SUFFIX: &str = "__CONF_TS_NUMBER_END__";
+
+pub struct FileOwner {
+  pub allocator: Allocator,
+  pub source: String,
+}
+
+pub struct ParsedProgram<'a> {
+  pub program: Program<'a>,
+  pub scoping: Scoping,
+}
+
+self_cell::self_cell! {
+  pub struct ParsedFile {
+    owner: FileOwner,
+    #[covariant]
+    dependent: ParsedProgram,
+  }
+}
+
+impl ParsedFile {
+  pub fn program(&self) -> &Program<'_> {
+    &self.borrow_dependent().program
+  }
+
+  pub fn source(&self) -> &str {
+    &self.borrow_owner().source
+  }
+
+  pub fn scoping(&self) -> &Scoping {
+    &self.borrow_dependent().scoping
+  }
+}
+
+#[derive(Clone)]
+pub struct LineIndex {
+  line_starts: Vec<u32>,
+}
+
+impl LineIndex {
+  pub fn new(source: &str) -> Self {
+    let mut line_starts = vec![0u32];
+    for (i, byte) in source.bytes().enumerate() {
+      if byte == b'\n' {
+        line_starts.push((i + 1) as u32);
+      }
+    }
+    LineIndex { line_starts }
+  }
+
+  pub fn get_location(&self, offset: u32) -> (usize, usize) {
+    let line = match self.line_starts.binary_search(&offset) {
+      Ok(idx) => idx,
+      Err(idx) => idx.saturating_sub(1),
+    };
+    let col = offset.saturating_sub(self.line_starts[line]);
+    (line + 1, col as usize + 1)
+  }
+}
 
 #[derive(Debug, Clone)]
 pub struct NumberValue {
@@ -249,35 +310,58 @@ pub fn serialize_output(output: &Value, format: &str) -> Result<String, ConfTSEr
       let yaml_str = serde_yaml::to_string(&yaml_value).map_err(|e| {
         ConfTSError::new(format!("Failed to serialize YAML: {}", e), "unknown", 1, 1)
       })?;
-      let processed = yaml_str.strip_prefix("---\n").unwrap_or(&yaml_str);
-      let mut output = String::new();
+
+      let processed = yaml_str
+        .strip_prefix("---\n")
+        .unwrap_or(&yaml_str)
+        .to_string();
+
+      let mut processed_lines = String::new();
       for line in processed.lines() {
-        let mut rendered = line.to_string();
-        let indent = rendered.len() - rendered.trim_start().len();
-        if rendered[indent..].starts_with('\'')
-          && let Some(relative_end) = rendered[indent + 1..].find("':")
+        let mut new_line = line.to_string();
+        let indent_len = new_line.len() - new_line.trim_start().len();
+        if new_line[indent_len..].starts_with('\'')
+          && let Some(rel_key_end) = new_line[indent_len + 1..].find("':")
         {
-          let end = indent + 1 + relative_end;
-          rendered.replace_range(end..end + 1, "\"");
-          rendered.replace_range(indent..indent + 1, "\"");
+          let key_end = indent_len + 1 + rel_key_end;
+          new_line.replace_range(key_end..key_end + 1, "\"");
+          new_line.replace_range(indent_len..indent_len + 1, "\"");
         }
-        if rendered.ends_with('\'')
-          && let Some(marker) = rendered.find(": '").or_else(|| rendered.find("- '"))
-        {
-          let value_start = marker + 2;
-          let value_end = rendered.len() - 1;
-          if value_end > value_start {
-            let inner = &rendered[value_start + 1..value_end];
-            let decoded = inner.replace("''", "'");
-            if !decoded.contains('"') && !decoded.contains('\\') {
-              rendered = format!("{}\"{}\"", &rendered[..value_start], decoded);
+        if new_line.ends_with('\'') {
+          // Use the FIRST occurrence of the marker, not the last: a YAML
+          // key (plain or already-double-quoted above) can never itself
+          // contain `: ` unescaped, but the single-quoted *value* can
+          // legitimately contain further `: '`-like substrings once its
+          // internal `'` characters are doubled for escaping (e.g. the
+          // value `Say: 'hi' now` serializes to `'Say: ''hi'' now'`), so
+          // searching from the end can land inside the value instead of at
+          // the real key/value boundary.
+          let marker = new_line.find(": '").or_else(|| new_line.find("- '"));
+          if let Some(marker_idx) = marker {
+            let value_start = marker_idx + 2;
+            let value_end = new_line.len() - 1;
+            if value_end > value_start {
+              // Decode YAML single-quote escaping (`''` -> `'`) before
+              // re-encoding, and only switch to double-quote style when
+              // that's lossless: single-quoted scalars never need to
+              // escape `"` or `\`, so if either is present, re-encoding
+              // as double-quoted would require adding escapes we don't
+              // perform here — keep the single-quoted form, which is
+              // exactly what the `yaml` npm package also picks in that
+              // case.
+              let inner = &new_line[value_start + 1..value_end];
+              let decoded = inner.replace("''", "'");
+              if !decoded.contains('"') && !decoded.contains('\\') {
+                new_line = format!("{}\"{}\"", &new_line[..value_start], decoded);
+              }
             }
           }
         }
-        output.push_str(&rendered);
-        output.push('\n');
+        processed_lines.push_str(&new_line);
+        processed_lines.push('\n');
       }
-      Ok(replace_raw_number_markers(&output))
+
+      Ok(replace_raw_number_markers(&processed_lines))
     }
     _ => Err(ConfTSError::new(
       format!("Unsupported format: {}", format),
@@ -302,15 +386,48 @@ impl Value {
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
   pub preserve_key_order: bool,
+  pub env: Option<HashMap<String, String>>,
+  pub quote: QuoteStyle,
+}
+
+/// The result of a macro pre-evaluation pass (see @conf-ts/macro-transformer-native):
+/// the subset of files that had macro calls rewritten to literal source, plus
+/// every file that was read while resolving them.
+#[derive(Debug, Clone, Default)]
+pub struct TransformResult {
+  pub files: HashMap<String, String>,
+  pub dependencies: Vec<String>,
+}
+
+/// Accumulator threaded through `EvalContext` while a macro evaluator is
+/// active: tracks call-expression nesting depth (so only the outermost
+/// macro call in a nested expression gets a source-text replacement
+/// recorded) and the replacements themselves, as `(start, end, source)`
+/// byte-offset spans per file.
+#[derive(Debug, Clone, Default)]
+pub struct TransformState {
+  pub depth: u32,
+  pub replacements: HashMap<String, Vec<(u32, u32, String)>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum QuoteStyle {
+  #[default]
+  Double,
+  Single,
 }
 
 /// Per-file context containing parsed AST and metadata.
 #[derive(Clone)]
 pub struct FileContext {
   pub file_path: String,
-  pub source: String,
-  pub start_pos: BytePos,
-  pub module: Module,
-  pub source_map: Lrc<SourceMap>,
+  pub parsed: Rc<ParsedFile>,
+  pub line_index: LineIndex,
   pub imports: HashMap<String, ImportInfo>,
+}
+
+impl FileContext {
+  pub fn program(&self) -> &Program<'_> {
+    self.parsed.program()
+  }
 }

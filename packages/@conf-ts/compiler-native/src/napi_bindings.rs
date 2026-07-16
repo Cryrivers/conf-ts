@@ -39,6 +39,7 @@ pub struct JsTsConfig {
 fn convert_options(options: Option<JsCompileOptions>) -> CompileOptions {
   options.map_or_else(CompileOptions::default, |options| CompileOptions {
     preserve_key_order: options.preserve_key_order.unwrap_or(false),
+    ..CompileOptions::default()
   })
 }
 
