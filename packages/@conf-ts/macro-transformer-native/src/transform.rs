@@ -258,7 +258,7 @@ fn const_initializer_by_name<'a>(
         || identifier.name.as_str() == name,
         |symbol| identifier.symbol_id.get() == Some(symbol),
       );
-      matches_binding.then(|| declarator.init.as_ref()).flatten()
+      matches_binding.then_some(declarator.init.as_ref()).flatten()
     })
   }
 
