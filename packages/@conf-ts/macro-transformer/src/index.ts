@@ -755,15 +755,12 @@ export function transform(
 ): MacroTransformResult {
   validateOptions(options, input.filename);
   const project = input.project ?? createMacroProjectSnapshot([input.filename]);
-  const normalizedInput: MacroTransformInput = {
-    ...input,
-    project: {
-      ...project,
-      files: { ...project.files, [input.filename]: input.code },
-    },
+  const projectWithInput: MacroProjectSnapshot = {
+    ...project,
+    files: { ...project.files, [input.filename]: input.code },
   };
   const result = transformProject(
-    { project: normalizedInput.project!, files: [input.filename] },
+    { project: projectWithInput, files: [input.filename] },
     options,
   ).transformed[input.filename];
   const transformed =

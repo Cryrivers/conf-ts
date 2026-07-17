@@ -8,8 +8,9 @@ import type {
   MacroTransformResult,
   RawSourceMap,
 } from '@conf-ts/macro-transformer';
-import type { Compiler, LoaderContext } from 'webpack';
+import type { LoaderContext } from 'webpack';
 
+import { environmentForCompiler } from './environment';
 import {
   CONF_TS_MACRO_TRANSFORM_META,
   type MacroTransformImplementation,
@@ -69,9 +70,28 @@ interface CompilerCache {
   inFlight?: Promise<ProjectCache>;
 }
 
-const cachesByCompiler = new WeakMap<object, CompilerCache>();
-const fallbackCachesByCompilation = new WeakMap<object, CompilerCache>();
-const environmentsByCompiler = new WeakMap<object, Record<string, string>>();
+interface FileSystemInfoLike {
+  createSnapshot(
+    startTime: undefined,
+    files: Iterable<string>,
+    directories: undefined,
+    missing: Iterable<string>,
+    options: { hash: boolean; timestamp: boolean },
+    callback: (error: Error | null, snapshot: object | null) => void,
+  ): void;
+  checkSnapshotValid(
+    snapshot: object,
+    callback: (error: Error | null, valid?: boolean) => void,
+  ): void;
+}
+
+interface CompilationState {
+  fileSystemInfo?: FileSystemInfoLike;
+  fileDependencies?: { add(dependency: string): unknown };
+  missingDependencies?: { add(dependency: string): unknown };
+}
+
+const cachesByOwner = new WeakMap<object, CompilerCache>();
 const MACRO_PACKAGE = '@conf-ts/macro';
 
 function mightContainMacroImport(source: string): boolean {
@@ -101,34 +121,6 @@ function loadTransformer(
   };
 }
 
-export function readEnvironment(): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) {
-      environment[key] = value;
-    }
-  }
-  return environment;
-}
-
-export function freezeCompilerEnvironment(compiler: Compiler): {
-  environment: Record<string, string>;
-  fingerprint: string;
-} {
-  const environment = readEnvironment();
-  environmentsByCompiler.set(compiler, environment);
-  const fingerprint = createHash('sha256')
-    .update(
-      JSON.stringify(
-        Object.entries(environment).sort(([left], [right]) =>
-          left.localeCompare(right),
-        ),
-      ),
-    )
-    .digest('hex');
-  return { environment, fingerprint };
-}
-
 function transformOptionsKey(options: MacroTransformOptions): string {
   return JSON.stringify({
     env: Object.entries(options.env ?? {}).sort(([left], [right]) =>
@@ -138,6 +130,36 @@ function transformOptionsKey(options: MacroTransformOptions): string {
     quote: options.quote ?? 'double',
     sourceMap: options.sourceMap === true,
   });
+}
+
+function currentCompilation(
+  context: LoaderContext<MacroTransformLoaderOptions>,
+): CompilationState | undefined {
+  return (
+    context as LoaderContext<MacroTransformLoaderOptions> & {
+      _compilation?: CompilationState;
+    }
+  )._compilation;
+}
+
+function readOptionalFile(filename: string): string | undefined {
+  try {
+    return fs.readFileSync(filename, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+function projectWithSource(
+  project: MacroProjectSnapshot,
+  resourcePath: string,
+  source: string,
+): MacroProjectSnapshot {
+  if (project.files[resourcePath] === source) return project;
+  return {
+    ...project,
+    files: { ...project.files, [resourcePath]: source },
+  };
 }
 
 function affectedFiles(
@@ -211,7 +233,7 @@ async function prepareProject(
 }
 
 function createFileSystemSnapshot(
-  compilation: any,
+  compilation: CompilationState | undefined,
   project: MacroProjectSnapshot,
 ): Promise<object | undefined> {
   const fileSystemInfo = compilation?.fileSystemInfo;
@@ -232,19 +254,20 @@ function createFileSystemSnapshot(
 }
 
 function checkSnapshotValid(
-  compilation: any,
+  compilation: CompilationState | undefined,
   project: ProjectCache,
 ): Promise<boolean> {
   if (project.validatedCompilation === compilation)
     return Promise.resolve(true);
   const fileSystemInfo = compilation?.fileSystemInfo;
-  if (!project.snapshot || !fileSystemInfo?.checkSnapshotValid) {
+  const snapshot = project.snapshot;
+  if (!snapshot || !fileSystemInfo?.checkSnapshotValid) {
     project.validatedCompilation = compilation;
     return Promise.resolve(true);
   }
   return new Promise((resolve, reject) => {
     fileSystemInfo.checkSnapshotValid(
-      project.snapshot,
+      snapshot,
       (error: Error | null, valid?: boolean) => {
         if (error) reject(error);
         else {
@@ -265,21 +288,16 @@ function sourceChanges(
   const overrides: Record<string, string> = {};
   let requiresFullScan = false;
   for (const [filename, oldSource] of Object.entries(previous.files)) {
-    try {
-      const current =
-        filename === resourcePath ? source : fs.readFileSync(filename, 'utf8');
-      if (current !== oldSource) overrides[filename] = current;
-    } catch {
+    const current =
+      filename === resourcePath ? source : readOptionalFile(filename);
+    if (current === undefined) {
       requiresFullScan = true;
+    } else if (current !== oldSource) {
+      overrides[filename] = current;
     }
   }
   for (const [dependency, oldContent] of previousCache.dependencyContents) {
-    let current: string | undefined;
-    try {
-      current = fs.readFileSync(dependency, 'utf8');
-    } catch {
-      current = undefined;
-    }
+    const current = readOptionalFile(dependency);
     if (current !== oldContent) requiresFullScan = true;
   }
   if (
@@ -293,7 +311,7 @@ function sourceChanges(
 async function createProjectCache(
   resourcePath: string,
   source: string,
-  compilation?: object,
+  compilation?: CompilationState,
   previous?: ProjectCache,
 ): Promise<ProjectCache> {
   const transformer = loadTransformer('typescript');
@@ -318,11 +336,9 @@ async function createProjectCache(
   } else {
     baseProject = transformer.createMacroProjectSnapshot([resourcePath]);
   }
-  if (baseProject.files[resourcePath] !== source) {
-    baseProject = {
-      ...baseProject,
-      files: { ...baseProject.files, [resourcePath]: source },
-    };
+  const sourceProject = projectWithSource(baseProject, resourcePath, source);
+  if (sourceProject !== baseProject) {
+    baseProject = sourceProject;
     changedFiles ??= new Set();
     changedFiles.add(resourcePath);
   }
@@ -337,14 +353,7 @@ async function createProjectCache(
   };
   for (const dependency of baseProject.dependencies) {
     if (dependency in baseProject.files) continue;
-    try {
-      cache.dependencyContents.set(
-        dependency,
-        fs.readFileSync(dependency, 'utf8'),
-      );
-    } catch {
-      cache.dependencyContents.set(dependency, undefined);
-    }
+    cache.dependencyContents.set(dependency, readOptionalFile(dependency));
   }
   cache.snapshot = await createFileSystemSnapshot(compilation, baseProject);
   return cache;
@@ -353,21 +362,22 @@ async function createProjectCache(
 function compilerCache(
   context: LoaderContext<MacroTransformLoaderOptions>,
 ): CompilerCache {
-  const compiler = (context as any)._compiler as object | undefined;
-  const compilation = (context as any)._compilation as object | undefined;
+  const compiler = context._compiler;
+  const compilation = currentCompilation(context);
   const owner = compiler ?? compilation;
   if (!owner) {
-    return { environment: readEnvironment(), projectsByFile: new Map() };
-  }
-  const caches = compiler ? cachesByCompiler : fallbackCachesByCompilation;
-  let cache = caches.get(owner);
-  if (!cache) {
-    cache = {
-      environment:
-        (compiler && environmentsByCompiler.get(compiler)) ?? readEnvironment(),
+    return {
+      environment: environmentForCompiler(undefined),
       projectsByFile: new Map(),
     };
-    caches.set(owner, cache);
+  }
+  let cache = cachesByOwner.get(owner);
+  if (!cache) {
+    cache = {
+      environment: environmentForCompiler(compiler),
+      projectsByFile: new Map(),
+    };
+    cachesByOwner.set(owner, cache);
   }
   return cache;
 }
@@ -376,7 +386,7 @@ async function projectCacheFor(
   cache: CompilerCache,
   resourcePath: string,
   source: string,
-  compilation?: object,
+  compilation?: CompilationState,
 ): Promise<ProjectCache> {
   let existing = cache.projectsByFile.get(resourcePath);
   if (existing && (await checkSnapshotValid(compilation, existing))) {
@@ -416,19 +426,14 @@ function preparedProjectFor(
   options: MacroTransformOptions,
   environment: Record<string, string>,
 ): Promise<PreparedProject> {
-  const sourceMatchesSnapshot = cache.project.files[resourcePath] === source;
-  const sourceKey = sourceMatchesSnapshot
-    ? ''
-    : `\0${resourcePath}\0${createHash('sha256').update(source).digest('hex')}`;
+  const project = projectWithSource(cache.project, resourcePath, source);
+  const sourceKey =
+    project === cache.project
+      ? ''
+      : `\0${resourcePath}\0${createHash('sha256').update(source).digest('hex')}`;
   const key = `${implementation}\0${transformOptionsKey(options)}${sourceKey}`;
   let prepared = cache.preparedByOptions.get(key);
   if (!prepared) {
-    const project = sourceMatchesSnapshot
-      ? cache.project
-      : {
-          ...cache.project,
-          files: { ...cache.project.files, [resourcePath]: source },
-        };
     // Store the promise before doing the expensive transform so concurrent
     // loader calls share the same work as well as the same final project.
     prepared = Promise.resolve().then(() =>
@@ -471,19 +476,7 @@ async function getPreparedTransform(
   implementation: MacroTransformImplementation,
   options: MacroTransformOptions,
 ): Promise<PreparedTransform> {
-  const compilation = (context as any)._compilation as object | undefined;
-  if (!compilation) {
-    const cache = await createProjectCache(context.resourcePath, source);
-    return preparedTransformFor(
-      cache,
-      context.resourcePath,
-      source,
-      implementation,
-      options,
-      readEnvironment(),
-    );
-  }
-
+  const compilation = currentCompilation(context);
   const compilationState = compilerCache(context);
   const projectCache = await projectCacheFor(
     compilationState,
@@ -555,7 +548,7 @@ function registerGraphDependencies(
   context: LoaderContext<MacroTransformLoaderOptions>,
   project: MacroProjectSnapshot,
 ): void {
-  const compilation = (context as any)._compilation;
+  const compilation = currentCompilation(context);
   for (const dependency of project.dependencies) {
     compilation?.fileDependencies?.add(dependency);
   }

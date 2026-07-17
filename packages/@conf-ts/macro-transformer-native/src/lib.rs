@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use transform::{
-  ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions, TransformProjectInput,
+  ProjectSnapshot, QuoteStyle, TransformOptions, TransformOutput,
   transform_project as transform_project_inner, transform_source,
 };
 
@@ -27,6 +27,7 @@ pub struct JsTransformInput {
   pub project: Option<JsProjectSnapshot>,
 }
 
+#[derive(Default)]
 #[napi(object)]
 pub struct JsTransformOptions {
   pub env: Option<HashMap<String, String>>,
@@ -73,19 +74,20 @@ fn project(value: JsProjectSnapshot) -> ProjectSnapshot {
     files: value.files,
     resolutions: value.resolutions.unwrap_or_default(),
     compiler_options: value.compiler_options,
-    entry_files: value.entry_files.unwrap_or_default(),
     dependencies: value.dependencies.unwrap_or_default(),
   }
 }
 
+fn js_result(value: TransformOutput) -> TransformResult {
+  TransformResult {
+    code: value.code,
+    map: value.map.unwrap_or(serde_json::Value::Null),
+    dependencies: value.dependencies,
+  }
+}
+
 fn options(value: Option<JsTransformOptions>) -> Result<TransformOptions> {
-  let value = value.unwrap_or(JsTransformOptions {
-    env: None,
-    quote: None,
-    preserve_key_order: None,
-    source_map: None,
-    inherit_process_env: None,
-  });
+  let value = value.unwrap_or_default();
   Ok(TransformOptions {
     env: value.env.unwrap_or_default(),
     quote: quote(value.quote)?,
@@ -102,10 +104,8 @@ pub fn transform_project(
   transform_options: Option<JsTransformOptions>,
 ) -> Result<TransformProjectResult> {
   let output = transform_project_inner(
-    TransformProjectInput {
-      project: project(input.project),
-      files: input.files,
-    },
+    project(input.project),
+    input.files,
     options(transform_options)?,
   )
   .map_err(|error| Error::new(Status::GenericFailure, error.message))?;
@@ -113,16 +113,7 @@ pub fn transform_project(
     transformed: output
       .transformed
       .into_iter()
-      .map(|(filename, result)| {
-        (
-          filename,
-          TransformResult {
-            code: result.code,
-            map: result.map.unwrap_or(serde_json::Value::Null),
-            dependencies: result.dependencies,
-          },
-        )
-      })
+      .map(|(filename, value)| (filename, js_result(value)))
       .collect(),
     dependencies: output.dependencies,
   })
@@ -135,17 +126,11 @@ pub fn transform(
   transform_options: Option<JsTransformOptions>,
 ) -> Result<TransformResult> {
   let output = transform_source(
-    TransformInput {
-      filename: input.filename,
-      code: input.code,
-      project: input.project.map(project),
-    },
+    input.filename,
+    input.code,
+    input.project.map(project),
     options(transform_options)?,
   )
   .map_err(|error| Error::new(Status::GenericFailure, error.message))?;
-  Ok(TransformResult {
-    code: output.code,
-    map: output.map.unwrap_or(serde_json::Value::Null),
-    dependencies: output.dependencies,
-  })
+  Ok(js_result(output))
 }

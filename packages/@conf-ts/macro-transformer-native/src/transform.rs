@@ -16,7 +16,6 @@ use compiler_native::types::{CompileOptions, FileContext, TransformState, Value}
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
 use oxc_semantic::SymbolId;
-use serde::{Deserialize, Serialize};
 
 pub use compiler_native::types::QuoteStyle;
 
@@ -32,7 +31,6 @@ const MACRO_FUNCTIONS: &[&str] = &[
   "expr",
 ];
 
-#[derive(Debug, Clone)]
 pub struct TransformOptions {
   pub env: HashMap<String, String>,
   pub quote: QuoteStyle,
@@ -41,51 +39,20 @@ pub struct TransformOptions {
   pub inherit_process_env: bool,
 }
 
-impl Default for TransformOptions {
-  fn default() -> Self {
-    Self {
-      env: HashMap::new(),
-      quote: QuoteStyle::Double,
-      preserve_key_order: false,
-      source_map: false,
-      inherit_process_env: false,
-    }
-  }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Default)]
 pub struct ProjectSnapshot {
   pub files: HashMap<String, String>,
   pub resolutions: ProjectResolutions,
   pub compiler_options: Option<serde_json::Value>,
-  pub entry_files: Vec<String>,
   pub dependencies: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct TransformInput {
-  pub filename: String,
-  pub code: String,
-  pub project: Option<ProjectSnapshot>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TransformProjectInput {
-  pub project: ProjectSnapshot,
-  pub files: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TransformOutput {
   pub code: String,
   pub map: Option<serde_json::Value>,
   pub dependencies: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TransformProjectOutput {
   pub transformed: HashMap<String, TransformOutput>,
   pub dependencies: Vec<String>,
@@ -855,7 +822,8 @@ fn transform_context(
 }
 
 pub fn transform_project(
-  input: TransformProjectInput,
+  snapshot: ProjectSnapshot,
+  files: Option<Vec<String>>,
   mut options: TransformOptions,
 ) -> Result<TransformProjectOutput, ConfTSError> {
   if options.inherit_process_env {
@@ -864,10 +832,7 @@ pub fn transform_project(
     options.env.extend(explicit);
   }
 
-  let snapshot = input.project;
-  let mut targets = input
-    .files
-    .unwrap_or_else(|| snapshot.files.keys().cloned().collect());
+  let mut targets = files.unwrap_or_else(|| snapshot.files.keys().cloned().collect());
   targets.sort();
   targets.dedup();
   for filename in &targets {
@@ -995,39 +960,30 @@ pub fn transform_project(
 }
 
 pub fn transform_source(
-  input: TransformInput,
+  filename: String,
+  code: String,
+  project: Option<ProjectSnapshot>,
   options: TransformOptions,
 ) -> Result<TransformOutput, ConfTSError> {
-  let mut snapshot = input.project.unwrap_or_default();
-  snapshot
-    .files
-    .insert(input.filename.clone(), input.code.clone());
+  let mut snapshot = project.unwrap_or_default();
+  snapshot.files.insert(filename.clone(), code.clone());
   let legacy_dependencies = snapshot.dependencies.clone();
   let source_map = options.source_map;
-  let mut output = transform_project(
-    TransformProjectInput {
-      project: snapshot,
-      files: Some(vec![input.filename.clone()]),
-    },
-    options,
-  )?;
-  let mut result = output
-    .transformed
-    .remove(&input.filename)
-    .unwrap_or_else(|| {
-      let (code, map) = if source_map {
-        let (code, map) = apply_replacements_with_map(&input.filename, &input.code, Vec::new())
-          .expect("an empty replacement source map should be valid");
-        (code, Some(map))
-      } else {
-        (input.code, None)
-      };
-      TransformOutput {
-        code,
-        map,
-        dependencies: vec![input.filename.clone()],
-      }
-    });
+  let mut output = transform_project(snapshot, Some(vec![filename.clone()]), options)?;
+  let mut result = output.transformed.remove(&filename).unwrap_or_else(|| {
+    let (code, map) = if source_map {
+      let (code, map) = apply_replacements_with_map(&filename, &code, Vec::new())
+        .expect("an empty replacement source map should be valid");
+      (code, Some(map))
+    } else {
+      (code, None)
+    };
+    TransformOutput {
+      code,
+      map,
+      dependencies: vec![filename.clone()],
+    }
+  });
   result.dependencies.extend(legacy_dependencies);
   result.dependencies.sort();
   result.dependencies.dedup();

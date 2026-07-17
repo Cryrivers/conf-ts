@@ -8,7 +8,6 @@
  */
 export {
   createEvaluationState,
-  createFileProgram,
   createSourceProgram,
   resolveProgramOptions,
 } from './compiler';

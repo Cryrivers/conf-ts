@@ -71,22 +71,21 @@ export function resolveProgramOptions(inputFile: string): {
   return { tsConfigPath, compilerOptions: compilerOptions.options };
 }
 
-/** Build a `ts.Program` for a config entry file from its nearest tsconfig.json. */
-export function createFileProgram(inputFile: string): {
+/** Build a filesystem program, optionally replacing selected source files. */
+function createFileProgram(
+  inputFile: string,
+  overrides?: Record<string, string>,
+): {
   program: ts.Program;
   tsConfigPath: string;
 } {
   const { tsConfigPath, compilerOptions } = resolveProgramOptions(inputFile);
-  const program = ts.createProgram([inputFile], compilerOptions);
-  return { program, tsConfigPath };
-}
-
-/** Build a `ts.Program` whose sources are the originals with `overrides` spliced in by filename. */
-function createFileProgramWithOverrides(
-  inputFile: string,
-  overrides: Record<string, string>,
-): { program: ts.Program; tsConfigPath: string } {
-  const { tsConfigPath, compilerOptions } = resolveProgramOptions(inputFile);
+  if (!overrides) {
+    return {
+      program: ts.createProgram([inputFile], compilerOptions),
+      tsConfigPath,
+    };
+  }
   const host = ts.createCompilerHost(compilerOptions, true);
   const originalGetSourceFile = host.getSourceFile.bind(host);
   const originalReadFile = host.readFile.bind(host);
@@ -405,7 +404,7 @@ export function compile(
   } else if (input.project) {
     program = createSourceProgram(input);
   } else {
-    ({ program, tsConfigPath } = createFileProgramWithOverrides(inputFile, {
+    ({ program, tsConfigPath } = createFileProgram(inputFile, {
       [inputFile]: input.code,
     }));
   }
