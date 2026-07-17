@@ -233,6 +233,20 @@ describe('source-oriented architecture', () => {
     expect(nativeResult.code).toBe(code);
   });
 
+  it('leaves unimported macro-like calls entirely untouched', () => {
+    const filename = '/virtual/config.ts';
+    const code =
+      'export default { cast: String(1), value: expr(ctx => ctx.a) };';
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(typescriptResult.code).toBe(code);
+    expect(nativeResult.code).toBe(code);
+  });
+
   it('removes only macro specifiers from mixed imports', () => {
     const filename = path.resolve(
       __dirname,
@@ -256,5 +270,29 @@ describe('source-oriented architecture', () => {
     );
     expect(typescriptResult.code).not.toContain('{ String,');
     expect(typescriptResult.code).not.toContain('String(42)');
+  });
+
+  it('keeps calls and imports that cannot be transformed', () => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { String, arrayMap } from '@conf-ts/macro';",
+      'const values = getValues();',
+      'export const transformed = String(42);',
+      'export const untouched = arrayMap(values, function (value) { return value; });',
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toContain(
+      "import { String, arrayMap } from '@conf-ts/macro';",
+    );
+    expect(typescriptResult.code).toContain('transformed = "42"');
+    expect(typescriptResult.code).toContain(
+      'arrayMap(values, function (value) { return value; })',
+    );
   });
 });

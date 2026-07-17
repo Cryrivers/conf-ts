@@ -1,12 +1,6 @@
-import path from 'path';
-import { describe, expect, it } from 'vitest';
+import { describe, it } from 'vitest';
 
-import {
-  assertMacroError,
-  assertMacroOutput,
-  compileJsWithMacro,
-  compileNativeWithMacro,
-} from './test-utils';
+import { assertMacroError, assertMacroOutput } from './test-utils';
 
 describe('Macro Test', () => {
   it('should handle type casting using String(), Number(), and Boolean() in Macro Mode', () => {
@@ -26,66 +20,32 @@ describe('Macro Test', () => {
   });
 
   it('should throw error when arrayMap callback is a function expression', () => {
-    assertMacroError(
-      'invalid-array-map-callback',
-      'arrayMap: callback must be an arrow function',
-    );
+    assertMacroError('invalid-array-map-callback', {
+      typescript: 'Unsupported call expression: arrayMap',
+      native: 'Function "arrayMap" is only allowed in macro mode',
+    });
   });
 
   it('should throw error when arrayFilter callback is a function expression', () => {
-    assertMacroError(
-      'invalid-array-filter-callback',
-      'arrayFilter: callback must be an arrow function',
-    );
+    assertMacroError('invalid-array-filter-callback', {
+      typescript: 'Unsupported call expression: arrayFilter',
+      native: 'Function "arrayFilter" is only allowed in macro mode',
+    });
   });
 
   it('should throw error when arrayFlatMap callback is a function expression', () => {
-    assertMacroError(
-      'invalid-array-flat-map-callback',
-      'arrayFlatMap: callback must be an arrow function',
-    );
+    assertMacroError('invalid-array-flat-map-callback', {
+      typescript: 'Unsupported call expression: arrayFlatMap',
+      native: 'Function "arrayFlatMap" is only allowed in macro mode',
+    });
   });
 
-  it('should throw error when type casting functions are not imported from @conf-ts/macro', () => {
-    expect(() => {
-      compileJsWithMacro(
-        path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
-        'json',
-        { macro: true },
-      );
-    }).toThrow(
-      "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
-    );
-    expect(() => {
-      compileNativeWithMacro(
-        path.resolve(__dirname, 'fixtures/macros/invalid-imports.conf.ts'),
-        'json',
-        { macro: true },
-      );
-    }).toThrow(
-      "Type casting function 'String' must be imported from '@conf-ts/macro' to use in macro mode",
-    );
+  it('should let the compiler validate calls not imported from @conf-ts/macro', () => {
+    assertMacroError('invalid-imports', 'String');
   });
 
-  it('should throw error when only some type casting functions are imported', () => {
-    expect(() => {
-      compileJsWithMacro(
-        path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
-        'json',
-        { macro: true },
-      );
-    }).toThrow(
-      "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",
-    );
-    expect(() => {
-      compileNativeWithMacro(
-        path.resolve(__dirname, 'fixtures/macros/partial-imports.conf.ts'),
-        'json',
-        { macro: true },
-      );
-    }).toThrow(
-      "Type casting function 'Boolean' must be imported from '@conf-ts/macro' to use in macro mode",
-    );
+  it('should let the compiler validate unimported calls alongside imported macros', () => {
+    assertMacroError('partial-imports', 'Boolean');
   });
 
   it('should handle ternary operator in macro mode', () => {

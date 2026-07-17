@@ -10,7 +10,7 @@ use std::rc::Rc;
 use compiler_native::browser::{ProjectResolutions, build_file_contexts};
 use compiler_native::compiler::collect_enums;
 use compiler_native::error::ConfTSError;
-use compiler_native::eval::{EvalContext, get_location};
+use compiler_native::eval::EvalContext;
 use compiler_native::resolver::{TsCompilerOptions, resolve_module_in_memory_with_options};
 use compiler_native::types::{CompileOptions, FileContext, TransformState, Value};
 use oxc_ast::ast::*;
@@ -296,65 +296,21 @@ fn macro_evaluator(
   result
 }
 
-struct MissingMacroCalls<'a> {
-  file_ctx: &'a FileContext,
-  error: Option<ConfTSError>,
-}
-
-impl<'a> Visit<'a> for MissingMacroCalls<'_> {
-  fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-    if self.error.is_some() {
-      return;
-    }
-    if let Expression::Identifier(identifier) = &call.callee {
-      let name = identifier.name.as_str();
-      let unresolved = reference_symbol(identifier, self.file_ctx).is_none();
-      let valid_shape = match name {
-        "String" | "Number" | "Boolean" => call.arguments.len() == 1,
-        "expr" => true,
-        "env" => matches!(call.arguments.len(), 1 | 2),
-        "arrayMap" | "arrayFilter" | "arrayFlatMap" => call.arguments.len() == 2,
-        _ => false,
-      };
-      if unresolved && MACRO_FUNCTIONS.contains(&name) && valid_shape {
-        let message = if matches!(name, "String" | "Number" | "Boolean") {
-          format!(
-            "Type casting function '{name}' must be imported from '@conf-ts/macro' to use in macro mode"
-          )
-        } else {
-          format!(
-            "Macro function '{name}' must be imported from '@conf-ts/macro' to use in macro mode"
-          )
-        };
-        let (line, column) = get_location(&self.file_ctx.line_index, call.span.start);
-        self.error = Some(ConfTSError::new(
-          message,
-          &self.file_ctx.file_path,
-          line,
-          column,
-        ));
-        return;
-      }
-    }
-    walk::walk_call_expression(self, call);
-  }
-}
-
 struct EvaluateMacroCalls<'a, 'b> {
   file_ctx: &'a FileContext,
   eval_ctx: &'b mut EvalContext,
   options: &'a CompileOptions,
-  error: Option<ConfTSError>,
+  skipped_macro: bool,
 }
 
 impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
   fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-    if self.error.is_some() {
-      return;
-    }
     if canonical_callee(call, self.file_ctx, self.eval_ctx).is_some() {
-      if let Err(error) = macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options) {
-        self.error = Some(error);
+      if macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options).is_err() {
+        // Leave calls that cannot be statically evaluated (including their
+        // nested calls) untouched. The import is retained below so the
+        // resulting source remains structurally valid.
+        self.skipped_macro = true;
       }
       return;
     }
@@ -683,25 +639,14 @@ pub fn transform_source(
     );
   }
 
-  let mut missing = MissingMacroCalls {
-    file_ctx: &entry,
-    error: None,
-  };
-  missing.visit_program(entry.program());
-  if let Some(error) = missing.error {
-    return Err(error);
-  }
-
   let mut calls = EvaluateMacroCalls {
     file_ctx: &entry,
     eval_ctx: &mut eval_ctx,
     options: &evaluation_options,
-    error: None,
+    skipped_macro: false,
   };
   calls.visit_program(entry.program());
-  if let Some(error) = calls.error {
-    return Err(error);
-  }
+  let skipped_macro = calls.skipped_macro;
 
   let state = eval_ctx
     .transform_state
@@ -719,7 +664,9 @@ pub fn transform_source(
       source,
     })
     .collect::<Vec<_>>();
-  replacements.extend(import_replacements(&entry));
+  if !skipped_macro {
+    replacements.extend(import_replacements(&entry));
+  }
 
   let (code, map) = if options.source_map {
     let (code, map) = apply_replacements_with_map(&input.filename, &input.code, replacements)?;

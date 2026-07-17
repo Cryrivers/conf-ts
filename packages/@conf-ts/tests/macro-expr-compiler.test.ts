@@ -12,8 +12,10 @@ import {
   compileJsWithMacro,
 } from './test-utils';
 
-const callbackError =
-  'expr callback must be an arrow function with a single identifier parameter and expression body';
+const unsupportedExprError = {
+  typescript: 'Unsupported call expression: expr',
+  native: 'Function "expr" is only allowed in macro mode',
+};
 
 describe('Expr Macro', () => {
   it('should convert context property access into expression strings', () => {
@@ -142,46 +144,34 @@ describe('Expr Macro', () => {
   });
 
   it('should reject macro calls referencing an identifier that is neither a constant nor sourced from the context', () => {
-    assertMacroError(
-      'expr-invalid-macro-context',
-      'Unsupported variable type for identifier: someUndeclaredVar',
-    );
+    assertMacroError('expr-invalid-macro-context', unsupportedExprError);
   });
 
   it('should reject a type-casting macro call with the wrong number of arguments even when it touches the context', () => {
-    assertMacroError(
-      'expr-invalid-macro-arity',
-      'Unsupported call expression in macro mode: String',
-    );
+    assertMacroError('expr-invalid-macro-arity', unsupportedExprError);
   });
 
   it('should reject block bodies', () => {
-    assertMacroError('expr-invalid-block', callbackError);
+    assertMacroError('expr-invalid-block', unsupportedExprError);
   });
 
   it('should reject function expressions', () => {
-    assertMacroError('expr-invalid-function', callbackError);
+    assertMacroError('expr-invalid-function', unsupportedExprError);
   });
 
   it('should reject async arrows', () => {
-    assertMacroError('expr-invalid-async', callbackError);
+    assertMacroError('expr-invalid-async', unsupportedExprError);
   });
 
   it('should reject direct context parameter usage', () => {
-    assertMacroError(
-      'expr-invalid-direct-ctx',
-      'expr callback cannot use the context parameter directly',
-    );
+    assertMacroError('expr-invalid-direct-ctx', unsupportedExprError);
   });
 
   it('should reject syntax unsupported by @conf-ts/expression', () => {
-    assertMacroError('expr-invalid-syntax', 'parse expression error');
+    assertMacroError('expr-invalid-syntax', unsupportedExprError);
   });
 
   it('should require expr to be imported from @conf-ts/macro', () => {
-    assertMacroError(
-      'expr-invalid-no-import',
-      "Macro function 'expr' must be imported from '@conf-ts/macro' to use in macro mode",
-    );
+    assertMacroError('expr-invalid-no-import', unsupportedExprError);
   });
 });

@@ -222,25 +222,6 @@ function importedMacroName(
   return undefined;
 }
 
-function missingImportMacroName(
-  expression: ts.CallExpression,
-  checker: ts.TypeChecker,
-): string | undefined {
-  if (
-    !ts.isIdentifier(expression.expression) ||
-    !MACRO_FUNCTION_NAME_SET.has(expression.expression.text)
-  ) {
-    return undefined;
-  }
-  const symbol = checker.getSymbolAtLocation(expression.expression);
-  // An unresolved well-known macro name is the useful diagnostic case. A
-  // locally declared/shadowing function is ordinary TypeScript and is left
-  // untouched.
-  return !symbol || !symbol.declarations?.length
-    ? expression.expression.text
-    : undefined;
-}
-
 function namespaceIsMacroOnly(
   sourceFile: ts.SourceFile,
   checker: ts.TypeChecker,
@@ -426,11 +407,8 @@ function transformProgram(
     named: new Map(),
     namespaces: new Map(),
   };
-  const replacements = macroImportReplacements(
-    sourceFile,
-    state.typeChecker,
-    sourceBindings,
-  );
+  const replacements: Replacement[] = [];
+  let skippedMacro = false;
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const macroName = importedMacroName(
@@ -440,42 +418,41 @@ function transformProgram(
         bindingsByFile,
       );
       if (macroName) {
-        const value = evaluateMacro(
-          node,
-          sourceFile,
-          state.typeChecker,
-          state.enumMap,
-          state.importBindingsMap,
-          state.evaluatedFiles,
-          undefined,
-          evaluationOptions,
-          macroName,
-        );
-        replacements.push({
-          start: node.getStart(sourceFile),
-          end: node.getEnd(),
-          source: valueToSource(value),
-        });
+        try {
+          const value = evaluateMacro(
+            node,
+            sourceFile,
+            state.typeChecker,
+            state.enumMap,
+            state.importBindingsMap,
+            state.evaluatedFiles,
+            undefined,
+            evaluationOptions,
+            macroName,
+          );
+          replacements.push({
+            start: node.getStart(sourceFile),
+            end: node.getEnd(),
+            source: valueToSource(value),
+          });
+        } catch {
+          // A source transformer must be safe to run over files containing
+          // macros it cannot statically evaluate. Keep the entire call
+          // subtree untouched and retain the macro import below.
+          skippedMacro = true;
+        }
         return;
-      }
-      const missingImportName = missingImportMacroName(node, state.typeChecker);
-      if (missingImportName) {
-        evaluateMacro(
-          node,
-          sourceFile,
-          state.typeChecker,
-          state.enumMap,
-          state.importBindingsMap,
-          state.evaluatedFiles,
-          undefined,
-          evaluationOptions,
-          missingImportName,
-        );
       }
     }
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(sourceFile, visit);
+
+  if (!skippedMacro) {
+    replacements.push(
+      ...macroImportReplacements(sourceFile, state.typeChecker, sourceBindings),
+    );
+  }
 
   const dependencies = Array.from(
     new Set([...(input.project?.dependencies ?? []), ...state.evaluatedFiles]),

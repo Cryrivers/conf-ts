@@ -142,19 +142,27 @@ function assertOutput(
   expect(yamlResultNative).toBe(expectedYamlOutput);
 }
 
+type ExpectedCompileError = string | { typescript: string; native: string };
+
 function assertError(
   inputFolder: string,
   testName: string,
-  expectedError: string,
+  expectedError: ExpectedCompileError,
   options?: TestCompileOptions,
   suffix: string = '.conf.ts',
 ) {
   const inputFilePath = path.join(inputFolder, `${testName}${suffix}`);
+  const typescriptError =
+    typeof expectedError === 'string'
+      ? expectedError
+      : expectedError.typescript;
+  const nativeError =
+    typeof expectedError === 'string' ? expectedError : expectedError.native;
   expect(() => compileJsWithMacro(inputFilePath, 'json', options)).toThrow(
-    expectedError,
+    typescriptError,
   );
   expect(() => compileNativeWithMacro(inputFilePath, 'json', options)).toThrow(
-    expectedError,
+    nativeError,
   );
 }
 
@@ -192,7 +200,7 @@ export function assertEdgeCaseOutput(
 
 export function assertMacroError(
   testName: string,
-  expectedError: string,
+  expectedError: ExpectedCompileError,
   options?: TestCompileOptions,
 ) {
   assertError(MACRO_DIR, testName, expectedError, {
