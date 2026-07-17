@@ -295,4 +295,98 @@ describe('source-oriented architecture', () => {
       'arrayMap(values, function (value) { return value; })',
     );
   });
+
+  it('composes local aliases and directly imported Expr values', () => {
+    const filename = '/virtual/config.ts';
+    const rulesFilename = '/virtual/rules.ts';
+    const rulesCode = [
+      "import { expr } from '@conf-ts/macro';",
+      'export const named = expr(ctx => ctx.b);',
+      'const fallback = expr(ctx => ctx.c);',
+      'export default fallback;',
+    ].join('\n');
+    const code = [
+      "import { expr } from '@conf-ts/macro';",
+      "import fallback, { named as imported } from './rules';",
+      'const alias = imported;',
+      'export default expr(ctx => ctx.a && alias(ctx) && fallback(ctx));',
+    ].join('\n');
+    const project = {
+      files: { [filename]: code, [rulesFilename]: rulesCode },
+      resolutions: { [filename]: { './rules': rulesFilename } },
+    };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toContain(
+      'export default "a && (b) && (c)";',
+    );
+    expect([...typescriptResult.dependencies].sort()).toEqual(
+      [...nativeResult.dependencies].sort(),
+    );
+    expect(typescriptResult.dependencies).toContain(rulesFilename);
+  });
+
+  it('preserves quote style while composing Expr values', () => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { expr } from '@conf-ts/macro';",
+      "const subExpr = expr(ctx => ctx.name === 'ready');",
+      'export default expr(ctx => subExpr(ctx) && ctx.a);',
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input, {
+      quote: 'single',
+    });
+    const nativeResult = nativeMacroTransform(input, { quote: 'single' });
+
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toContain(
+      `export default "(name === 'ready') && a";`,
+    );
+  });
+
+  it.each([
+    'subExpr(ctx.child)',
+    'subExpr(other)',
+    'subExpr()',
+    'subExpr(ctx, ctx)',
+    'subExpr(...[ctx])',
+  ])('rejects invalid nested Expr call %s', invocation => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { expr } from '@conf-ts/macro';",
+      'const subExpr = expr(ctx => ctx.b);',
+      `export default expr(ctx => ctx.a && ${invocation});`,
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+    const message =
+      "Nested Expr 'subExpr' must be called with exactly one argument: the current expr context parameter 'ctx'.";
+
+    expect(() => macroTransformer.transform(input)).toThrow(message);
+    expect(() => nativeMacroTransform(input)).toThrow(message);
+  });
+
+  it('does not apply nested Expr validation to ordinary functions', () => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { expr } from '@conf-ts/macro';",
+      'const ordinary = (value: unknown) => Boolean(value);',
+      'export default expr(ctx => ordinary(ctx.child));',
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toBe(code);
+  });
 });

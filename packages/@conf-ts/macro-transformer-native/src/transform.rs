@@ -94,6 +94,7 @@ struct MacroBindings {
 #[derive(Debug)]
 struct CoreState {
   bindings: HashMap<String, MacroBindings>,
+  fatal_error: RefCell<Option<ConfTSError>>,
 }
 
 fn core_state(ctx: &EvalContext) -> Rc<CoreState> {
@@ -102,6 +103,14 @@ fn core_state(ctx: &EvalContext) -> Rc<CoreState> {
     .as_ref()
     .and_then(|value| value.clone().downcast::<CoreState>().ok())
     .expect("macro transformer binding state is installed")
+}
+
+pub(crate) fn record_fatal_transform_error(ctx: &EvalContext, error: ConfTSError) {
+  *core_state(ctx).fatal_error.borrow_mut() = Some(error);
+}
+
+fn take_fatal_transform_error(ctx: &EvalContext) -> Option<ConfTSError> {
+  core_state(ctx).fatal_error.borrow_mut().take()
 }
 
 fn module_export_name(value: &ModuleExportName<'_>) -> String {
@@ -217,6 +226,165 @@ pub(crate) fn canonical_callee(
     .and_then(|bindings| canonical_from_bindings(call, file_ctx, bindings))
 }
 
+fn unwrap_expr_origin<'a>(expression: &'a Expression<'a>) -> &'a Expression<'a> {
+  match expression {
+    Expression::ParenthesizedExpression(value) => unwrap_expr_origin(&value.expression),
+    Expression::TSAsExpression(value) => unwrap_expr_origin(&value.expression),
+    Expression::TSSatisfiesExpression(value) => unwrap_expr_origin(&value.expression),
+    Expression::TSNonNullExpression(value) => unwrap_expr_origin(&value.expression),
+    Expression::TSTypeAssertion(value) => unwrap_expr_origin(&value.expression),
+    _ => expression,
+  }
+}
+
+fn const_initializer_by_name<'a>(
+  program: &'a Program<'a>,
+  name: &str,
+  symbol: Option<SymbolId>,
+) -> Option<&'a Expression<'a>> {
+  fn from_declaration<'a>(
+    declaration: &'a VariableDeclaration<'a>,
+    name: &str,
+    symbol: Option<SymbolId>,
+  ) -> Option<&'a Expression<'a>> {
+    if declaration.kind != VariableDeclarationKind::Const {
+      return None;
+    }
+    declaration.declarations.iter().find_map(|declarator| {
+      let BindingPattern::BindingIdentifier(identifier) = &declarator.id else {
+        return None;
+      };
+      let matches_binding = symbol.map_or_else(
+        || identifier.name.as_str() == name,
+        |symbol| identifier.symbol_id.get() == Some(symbol),
+      );
+      matches_binding.then(|| declarator.init.as_ref()).flatten()
+    })
+  }
+
+  for statement in &program.body {
+    match statement {
+      Statement::VariableDeclaration(declaration) => {
+        if let Some(initializer) = from_declaration(declaration, name, symbol) {
+          return Some(initializer);
+        }
+      }
+      Statement::ExportNamedDeclaration(export) => {
+        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+          && let Some(initializer) = from_declaration(declaration, name, symbol)
+        {
+          return Some(initializer);
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn exported_expr_origin(
+  export_name: &str,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+  visited: &mut HashSet<(String, String)>,
+) -> bool {
+  for statement in &file_ctx.program().body {
+    match statement {
+      Statement::ExportNamedDeclaration(export) => {
+        if export.source.is_some() {
+          continue;
+        }
+        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+          && declaration.kind == VariableDeclarationKind::Const
+        {
+          for declarator in &declaration.declarations {
+            let BindingPattern::BindingIdentifier(identifier) = &declarator.id else {
+              continue;
+            };
+            if identifier.name.as_str() == export_name
+              && let Some(initializer) = &declarator.init
+            {
+              return expression_originates_from_expr_inner(initializer, file_ctx, ctx, visited);
+            }
+          }
+        }
+        for specifier in &export.specifiers {
+          if module_export_name(&specifier.exported) == export_name {
+            let local_name = module_export_name(&specifier.local);
+            if let Some(initializer) =
+              const_initializer_by_name(file_ctx.program(), &local_name, None)
+            {
+              return expression_originates_from_expr_inner(initializer, file_ctx, ctx, visited);
+            }
+          }
+        }
+      }
+      Statement::ExportDefaultDeclaration(export) if export_name == "default" => {
+        if let Some(expression) = export.declaration.as_expression() {
+          return expression_originates_from_expr_inner(expression, file_ctx, ctx, visited);
+        }
+      }
+      _ => {}
+    }
+  }
+  false
+}
+
+fn expression_originates_from_expr_inner(
+  expression: &Expression<'_>,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+  visited: &mut HashSet<(String, String)>,
+) -> bool {
+  match unwrap_expr_origin(expression) {
+    Expression::CallExpression(call) => {
+      canonical_callee(call, file_ctx, ctx).as_deref() == Some("expr")
+    }
+    Expression::Identifier(identifier) => {
+      let name = identifier.name.as_str();
+      let key = (file_ctx.file_path.clone(), name.to_string());
+      if !visited.insert(key) {
+        return false;
+      }
+      if let Some(initializer) = const_initializer_by_name(
+        file_ctx.program(),
+        name,
+        reference_symbol(identifier, file_ctx),
+      ) {
+        return expression_originates_from_expr_inner(initializer, file_ctx, ctx, visited);
+      }
+      let Some(import) = file_ctx.imports.get(name) else {
+        return false;
+      };
+      let Some(resolved_path) = ctx
+        .resolver
+        .as_ref()
+        .and_then(|resolver| resolver(&import.source, &file_ctx.file_path))
+      else {
+        return false;
+      };
+      let Some(imported_ctx) = ctx.file_contexts.get(&resolved_path) else {
+        return false;
+      };
+      exported_expr_origin(
+        import.original_name.as_deref().unwrap_or(name),
+        imported_ctx,
+        ctx,
+        visited,
+      )
+    }
+    _ => false,
+  }
+}
+
+pub(crate) fn expression_originates_from_expr(
+  expression: &Expression<'_>,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+) -> bool {
+  expression_originates_from_expr_inner(expression, file_ctx, ctx, &mut HashSet::new())
+}
+
 fn compile_options(options: &TransformOptions) -> CompileOptions {
   CompileOptions {
     preserve_key_order: options.preserve_key_order,
@@ -301,16 +469,24 @@ struct EvaluateMacroCalls<'a, 'b> {
   eval_ctx: &'b mut EvalContext,
   options: &'a CompileOptions,
   skipped_macro: bool,
+  fatal_error: Option<ConfTSError>,
 }
 
 impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
   fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+    if self.fatal_error.is_some() {
+      return;
+    }
     if canonical_callee(call, self.file_ctx, self.eval_ctx).is_some() {
       if macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options).is_err() {
-        // Leave calls that cannot be statically evaluated (including their
-        // nested calls) untouched. The import is retained below so the
-        // resulting source remains structurally valid.
-        self.skipped_macro = true;
+        if let Some(error) = take_fatal_transform_error(self.eval_ctx) {
+          self.fatal_error = Some(error);
+        } else {
+          // Leave calls that cannot be statically evaluated (including their
+          // nested calls) untouched. The import is retained below so the
+          // resulting source remains structurally valid.
+          self.skipped_macro = true;
+        }
       }
       return;
     }
@@ -620,7 +796,10 @@ pub fn transform_source(
   }));
   eval_ctx.macro_evaluator = Some(macro_evaluator);
   eval_ctx.transform_state = Some(Rc::new(RefCell::new(TransformState::default())));
-  let extension: Rc<dyn Any> = Rc::new(CoreState { bindings });
+  let extension: Rc<dyn Any> = Rc::new(CoreState {
+    bindings,
+    fatal_error: RefCell::new(None),
+  });
   eval_ctx.extension = Some(extension);
 
   let evaluation_options = compile_options(&options);
@@ -644,8 +823,12 @@ pub fn transform_source(
     eval_ctx: &mut eval_ctx,
     options: &evaluation_options,
     skipped_macro: false,
+    fatal_error: None,
   };
   calls.visit_program(entry.program());
+  if let Some(error) = calls.fatal_error {
+    return Err(error);
+  }
   let skipped_macro = calls.skipped_macro;
 
   let state = eval_ctx

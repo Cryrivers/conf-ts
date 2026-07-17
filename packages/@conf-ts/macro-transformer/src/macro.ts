@@ -87,10 +87,26 @@ function referencesContextParam(node: ts.Node, paramName: string): boolean {
 
 type MacroOptions = MacroEvaluationOptions & { quote?: QuoteStyle };
 
+const FATAL_MACRO_TRANSFORM_ERROR = Symbol('fatalMacroTransformError');
+
+class FatalMacroTransformError extends ConfTSError {
+  readonly [FATAL_MACRO_TRANSFORM_ERROR] = true;
+}
+
+export function isFatalMacroTransformError(
+  error: unknown,
+): error is ConfTSError {
+  return (
+    error instanceof ConfTSError &&
+    (error as FatalMacroTransformError)[FATAL_MACRO_TRANSFORM_ERROR] === true
+  );
+}
+
 type ExprReplacement = [start: number, end: number, value: string];
 
 type ExprReplacementContext = {
   paramName: string;
+  paramIdentifier: ts.Identifier;
   bodyStart: number;
   replacements: ExprReplacement[];
   sourceFile: ts.SourceFile;
@@ -438,7 +454,11 @@ function isAsyncArrowFunction(callback: ts.ArrowFunction): boolean {
 function getExprCallbackDetails(
   callbackExpression: ts.Expression,
   sourceFile: ts.SourceFile,
-): { paramName: string; bodyExpression: ts.Expression } {
+): {
+  paramName: string;
+  paramIdentifier: ts.Identifier;
+  bodyExpression: ts.Expression;
+} {
   if (
     !ts.isArrowFunction(callbackExpression) ||
     isAsyncArrowFunction(callbackExpression)
@@ -486,6 +506,7 @@ function getExprCallbackDetails(
 
   return {
     paramName: param.name.text,
+    paramIdentifier: param.name,
     bodyExpression: callbackExpression.body,
   };
 }
@@ -535,6 +556,170 @@ function unwrapExprSyntax(node: ts.Expression): ts.Expression {
     return unwrapExprSyntax(node.expression);
   }
   return node;
+}
+
+function containingImportDeclaration(
+  declaration: ts.Declaration,
+): ts.ImportDeclaration | undefined {
+  let current: ts.Node | undefined = declaration;
+  while (current && !ts.isSourceFile(current)) {
+    if (ts.isImportDeclaration(current)) return current;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function isImportedExprCall(
+  node: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): boolean {
+  if (ts.isIdentifier(node.expression)) {
+    const symbol = typeChecker.getSymbolAtLocation(node.expression);
+    return (
+      symbol?.declarations?.some(declaration => {
+        if (!ts.isImportSpecifier(declaration)) return false;
+        const importedName =
+          declaration.propertyName?.text ?? declaration.name.text;
+        const importDeclaration = containingImportDeclaration(declaration);
+        return (
+          importedName === 'expr' &&
+          !!importDeclaration &&
+          ts.isStringLiteral(importDeclaration.moduleSpecifier) &&
+          importDeclaration.moduleSpecifier.text === '@conf-ts/macro'
+        );
+      }) ?? false
+    );
+  }
+
+  if (
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === 'expr' &&
+    ts.isIdentifier(node.expression.expression)
+  ) {
+    const symbol = typeChecker.getSymbolAtLocation(node.expression.expression);
+    return (
+      symbol?.declarations?.some(declaration => {
+        if (!ts.isNamespaceImport(declaration)) return false;
+        const importDeclaration = containingImportDeclaration(declaration);
+        return (
+          !!importDeclaration &&
+          ts.isStringLiteral(importDeclaration.moduleSpecifier) &&
+          importDeclaration.moduleSpecifier.text === '@conf-ts/macro'
+        );
+      }) ?? false
+    );
+  }
+
+  return false;
+}
+
+function expressionOriginatesFromExpr(
+  node: ts.Expression,
+  typeChecker: ts.TypeChecker,
+  visited: Set<ts.Symbol> = new Set(),
+): boolean {
+  const expression = unwrapExprSyntax(node);
+  if (ts.isCallExpression(expression)) {
+    return isImportedExprCall(expression, typeChecker);
+  }
+  if (!ts.isIdentifier(expression)) return false;
+
+  const symbol = typeChecker.getSymbolAtLocation(expression);
+  if (!symbol) return false;
+  const resolvedSymbol =
+    symbol.flags & ts.SymbolFlags.Alias
+      ? typeChecker.getAliasedSymbol(symbol)
+      : symbol;
+  if (visited.has(resolvedSymbol)) return false;
+  visited.add(resolvedSymbol);
+
+  const declaration =
+    resolvedSymbol.valueDeclaration ?? resolvedSymbol.declarations?.[0];
+  if (
+    declaration &&
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer &&
+    ts.isVariableDeclarationList(declaration.parent) &&
+    !!(declaration.parent.flags & ts.NodeFlags.Const)
+  ) {
+    return expressionOriginatesFromExpr(
+      declaration.initializer,
+      typeChecker,
+      visited,
+    );
+  }
+  if (declaration && ts.isExportAssignment(declaration)) {
+    return expressionOriginatesFromExpr(
+      declaration.expression,
+      typeChecker,
+      visited,
+    );
+  }
+  return false;
+}
+
+function nestedExprReplacement(
+  node: ts.CallExpression,
+  context: ExprReplacementContext,
+): string | undefined {
+  if (
+    !ts.isIdentifier(node.expression) ||
+    !expressionOriginatesFromExpr(node.expression, context.typeChecker)
+  ) {
+    return undefined;
+  }
+
+  const argument = node.arguments[0];
+  const argumentSymbol =
+    argument && ts.isIdentifier(argument)
+      ? context.typeChecker.getSymbolAtLocation(argument)
+      : undefined;
+  const parameterSymbol = context.typeChecker.getSymbolAtLocation(
+    context.paramIdentifier,
+  );
+  const isCurrentContext =
+    node.arguments.length === 1 &&
+    !!argument &&
+    ts.isIdentifier(argument) &&
+    argument.text === context.paramName &&
+    (!argumentSymbol || !parameterSymbol || argumentSymbol === parameterSymbol);
+  if (!isCurrentContext) {
+    throw new FatalMacroTransformError(
+      `Nested Expr '${node.expression.text}' must be called with exactly one argument: the current expr context parameter '${context.paramName}'.`,
+      {
+        file: context.sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(
+          context.sourceFile,
+          node.getStart(),
+        ),
+      },
+    );
+  }
+
+  const value = evaluate(
+    node.expression,
+    context.sourceFile,
+    context.typeChecker,
+    context.enumMap,
+    context.macroImportsMap,
+    true,
+    context.evaluatedFiles,
+    undefined,
+    context.options,
+  );
+  if (typeof value !== 'string') {
+    throw new ConfTSError(
+      `Nested Expr '${node.expression.text}' did not evaluate to an expression string`,
+      {
+        file: context.sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(
+          context.sourceFile,
+          node.getStart(),
+        ),
+      },
+    );
+  }
+  return `(${value})`;
 }
 
 function isContextAccess(node: ts.Expression, paramName: string): boolean {
@@ -626,6 +811,14 @@ function collectConstReplacements(
   ) {
     addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
     return;
+  }
+
+  if (ts.isCallExpression(node)) {
+    const replacement = nestedExprReplacement(node, context);
+    if (replacement !== undefined) {
+      addNodeReplacement(node, replacement, context);
+      return;
+    }
   }
 
   if (ts.isCallExpression(node) && isInlineableMacroCall(node, context)) {
@@ -746,7 +939,7 @@ function evaluateExpr(
     });
   }
 
-  const { paramName, bodyExpression } = getExprCallbackDetails(
+  const { paramName, paramIdentifier, bodyExpression } = getExprCallbackDetails(
     expression.arguments[0],
     sourceFile,
   );
@@ -757,6 +950,7 @@ function evaluateExpr(
   const replacements: ExprReplacement[] = [];
   collectConstReplacements(bodyExpression, {
     paramName,
+    paramIdentifier,
     bodyStart,
     replacements,
     sourceFile,

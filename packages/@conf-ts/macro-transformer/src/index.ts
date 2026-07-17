@@ -9,7 +9,7 @@ import {
 import MagicString from 'magic-string';
 import ts from 'typescript';
 
-import { evaluateMacro } from './macro';
+import { evaluateMacro, isFatalMacroTransformError } from './macro';
 import { MACRO_FUNCTION_NAME_SET } from './macro-names';
 import type {
   MacroProjectSnapshot,
@@ -435,7 +435,8 @@ function transformProgram(
             end: node.getEnd(),
             source: valueToSource(value),
           });
-        } catch {
+        } catch (error) {
+          if (isFatalMacroTransformError(error)) throw error;
           // A source transformer must be safe to run over files containing
           // macros it cannot statically evaluate. Keep the entire call
           // subtree untouched and retain the macro import below.

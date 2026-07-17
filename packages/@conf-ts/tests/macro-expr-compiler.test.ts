@@ -113,6 +113,44 @@ describe('Expr Macro', () => {
     assertMacroOutput('expr-macro');
   });
 
+  it('should compose Expr values recursively with the current context', () => {
+    assertMacroOutput('expr-compose');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-compose.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    expect(
+      expression(output.single)({
+        a: true,
+        b: false,
+        c: true,
+        name: '',
+        score: 0,
+      }),
+    ).toBe(true);
+    expect(
+      expression(output.single)({
+        a: false,
+        b: true,
+        c: true,
+        name: '',
+        score: 0,
+      }),
+    ).toBe(false);
+    expect(
+      expression(output.multiLevel)({
+        a: false,
+        b: true,
+        c: true,
+        name: '',
+        score: 0,
+      }),
+    ).toBe(true);
+  });
+
   it('should fold a call whose argument only coincidentally shares text with the context parameter', () => {
     const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-macro.conf.ts'),

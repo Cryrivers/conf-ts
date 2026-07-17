@@ -147,6 +147,11 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
       if (value === '?' && tokens[i + 1]?.value === '.') {
         output = trimRight(output) + '?.';
         i++;
+      } else if (value === '(' && /\s$/u.test(output)) {
+        // Preserve the separator emitted after a binary/keyword operator,
+        // while calls and unary operators still render compactly (`fn()` /
+        // `!(value)`). This also matches the native expression encoder.
+        output += value;
       } else if (['.', '[', '(', '{'].includes(value)) {
         output = trimRight(output) + value;
       } else if ([']', ')', '}'].includes(value)) {

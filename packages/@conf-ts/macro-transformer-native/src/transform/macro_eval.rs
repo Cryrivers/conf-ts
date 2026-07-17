@@ -897,6 +897,49 @@ fn collect_const_replacements(
     }
 
     Expression::CallExpression(call) => {
+      if super::expression_originates_from_expr(&call.callee, file_ctx, ctx) {
+        let valid_argument = call.arguments.len() == 1
+          && matches!(
+            call.arguments[0].as_expression(),
+            Some(Expression::Identifier(identifier))
+              if identifier.name.as_str() == param_name
+          );
+        if !valid_argument {
+          let callee_name = compiler_native::eval::call_expr_callee_name(call);
+          let (line, character) = get_location(&file_ctx.line_index, call.span.start);
+          let error = ConfTSError::new(
+            format!(
+              "Nested Expr '{}' must be called with exactly one argument: the current expr context parameter '{}'.",
+              callee_name, param_name
+            ),
+            &file_ctx.file_path,
+            line,
+            character,
+          );
+          super::record_fatal_transform_error(ctx, error.clone());
+          return Err(error);
+        }
+
+        let value = evaluate(&call.callee, file_ctx, ctx, None, options)?;
+        let Value::String(source) = value else {
+          let callee_name = compiler_native::eval::call_expr_callee_name(call);
+          let (line, character) = get_location(&file_ctx.line_index, call.span.start);
+          return Err(ConfTSError::new(
+            format!(
+              "Nested Expr '{}' did not evaluate to an expression string",
+              callee_name
+            ),
+            &file_ctx.file_path,
+            line,
+            character,
+          ));
+        };
+        let start = expr.span().start as usize - body_start as usize;
+        let end = expr.span().end as usize - body_start as usize;
+        replacements.push((start, end, format!("({})", source)));
+        return Ok(());
+      }
+
       if is_inlineable_macro_call(call, file_ctx, ctx) {
         let callee_name = super::canonical_callee(call, file_ctx, ctx)
           .unwrap_or_else(|| compiler_native::eval::call_expr_callee_name(call));
@@ -1796,6 +1839,12 @@ fn collect_context_replacements(
   replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
 ) -> Result<(), ConfTSError> {
+  let start = expr.span().start as usize - body_start as usize;
+  let end = expr.span().end as usize - body_start as usize;
+  if is_span_covered_by_prior(start, end, replacements) {
+    return Ok(());
+  }
+
   match expr {
     Expression::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name) =>
     {

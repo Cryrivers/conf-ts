@@ -204,6 +204,27 @@ Constraints:
 - Nested access, calls, templates, object/array literals, and the operators listed in [Runtime expression syntax](#runtime-expression-syntax) are supported.
 - Assignment, update, function/arrow, `new`, regular expression, and other syntax outside that grammar is rejected during compilation.
 
+Compiled `Expr` values can be composed by calling them with the current
+callback context. The transformer recursively inlines the compiled expression
+and adds parentheses to preserve operator precedence:
+
+```ts
+import { expr } from '@conf-ts/macro';
+
+type Context = { a: boolean; b: boolean; c: boolean };
+
+const subCondExpr = expr<Context, boolean>(ctx => ctx.b || ctx.c);
+const condition = expr<Context, boolean>(ctx => ctx.a && subCondExpr(ctx)); // "a && (b || c)"
+```
+
+Composition supports local `const` aliases and directly named/default imported
+Expr values, at any nesting depth. The argument must be the current callback's
+bare parameter identifier (the identifier does not have to be named `ctx`). A
+confirmed Expr called with a property, another value, no argument, multiple
+arguments, or a spread argument is rejected during transformation. Namespace
+properties, function-returned Expr values, and re-export chains are not
+resolved as composed Expr sources.
+
 ### Nested macros
 
 Macros can be nested inside other macros and within array callbacks. Context (the callback parameter) is correctly scoped during nested evaluation.
