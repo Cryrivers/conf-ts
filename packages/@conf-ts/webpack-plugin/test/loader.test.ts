@@ -19,6 +19,43 @@ import macroTransformLoader from '../src/macro-transform-plugin/loader';
 import { CONF_TS_MACRO_TRANSFORM_META } from '../src/macro-transform-plugin/types';
 import compileTask from '../src/worker';
 
+const runtimeMacroTransformer =
+  require('@conf-ts/macro-transformer') as typeof import('@conf-ts/macro-transformer');
+
+async function runMacroTransformLoader(options: {
+  resourcePath: string;
+  source: string;
+  compilation?: object;
+  transformOptions?: Record<string, unknown>;
+  configLoader?: boolean;
+  sourceMap?: boolean;
+}): Promise<{ code: string; map: any; meta: any; dependencies: string[] }> {
+  const dependencies: string[] = [];
+  return new Promise((resolve, reject) => {
+    const context = {
+      resourcePath: options.resourcePath,
+      sourceMap: options.sourceMap,
+      ...(options.compilation ? { _compilation: options.compilation } : {}),
+      loaders:
+        (options.configLoader ?? options.resourcePath.includes('.conf.'))
+          ? [{ options: { confTsConfigLoader: true } }]
+          : [],
+      cacheable: vi.fn(),
+      addDependency: (dependency: string) => dependencies.push(dependency),
+      getOptions: () => ({
+        implementation: 'typescript',
+        transformOptions: options.transformOptions ?? {},
+      }),
+      async: () => (error: Error | null, code: string, map: any, meta: any) => {
+        if (error) reject(error);
+        else resolve({ code, map, meta, dependencies });
+      },
+    };
+
+    void macroTransformLoader.call(context as any, options.source);
+  });
+}
+
 describe('loader generated file path interpolation', () => {
   it('exports the native macro plugin from the root and /native subpath only', () => {
     const packageJson = JSON.parse(
@@ -135,6 +172,64 @@ describe('loader generated file path interpolation', () => {
     },
   );
 
+  it('puts only a sorted environment fingerprint in persistent loader options', () => {
+    const rules: any[] = [];
+    const compiler = {
+      options: { module: { rules } },
+    } as any;
+    const previous = process.env.CONF_TS_FINGERPRINT_SECRET;
+    process.env.CONF_TS_FINGERPRINT_SECRET = 'must-not-leak';
+    try {
+      new TypeScriptMacroTransformPlugin().apply(compiler);
+      const loaderOptions = rules[0].use[0].options;
+      expect(loaderOptions.environmentFingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(loaderOptions)).not.toContain('must-not-leak');
+    } finally {
+      if (previous === undefined) delete process.env.CONF_TS_FINGERPRINT_SECRET;
+      else process.env.CONF_TS_FINGERPRINT_SECRET = previous;
+    }
+  });
+
+  it('passes through ordinary modules without scanning a project', async () => {
+    const snapshot = vi.spyOn(
+      runtimeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    try {
+      const result = await runMacroTransformLoader({
+        resourcePath: '/virtual/ordinary.ts',
+        source: 'export const ordinary = 42;',
+        configLoader: false,
+      });
+      expect(result.code).toBe('export const ordinary = 42;');
+      expect(result.meta).toBeUndefined();
+      expect(result.dependencies).toEqual([]);
+      expect(snapshot).not.toHaveBeenCalled();
+    } finally {
+      snapshot.mockRestore();
+    }
+  });
+
+  it('defaults source maps to the webpack loader context', async () => {
+    const resourcePath = path.resolve(
+      __dirname,
+      '../../tests/fixtures/macros/array-map.conf.ts',
+    );
+    const source = fs.readFileSync(resourcePath, 'utf8');
+    const disabled = await runMacroTransformLoader({
+      resourcePath,
+      source,
+      sourceMap: false,
+    });
+    const enabled = await runMacroTransformLoader({
+      resourcePath,
+      source,
+      sourceMap: true,
+    });
+    expect(disabled.map).toBeFalsy();
+    expect(enabled.map.version).toBe(3);
+  });
+
   it('compiles the loader source payload without reading the entry path', () => {
     const filename = '/virtual/config.conf.ts';
     const code = 'export default { answer: 40 + 2 };';
@@ -210,6 +305,103 @@ describe('loader generated file path interpolation', () => {
     expect(dependencies).toContain(resourcePath);
   });
 
+  it('reuses one transformed project across modules in a compilation', async () => {
+    const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-cache-'));
+    const entryPath = path.join(context, 'config.conf.ts');
+    const dependencyPath = path.join(context, 'dependency.ts');
+    const entrySource = [
+      "import { answer } from './dependency';",
+      'export default { answer };',
+    ].join('\n');
+    const dependencySource = [
+      "import { String } from '@conf-ts/macro';",
+      'export const answer = String(40 + 2);',
+    ].join('\n');
+
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          module: 'esnext',
+          moduleResolution: 'bundler',
+        },
+      }),
+    );
+    fs.writeFileSync(entryPath, entrySource);
+    fs.writeFileSync(dependencyPath, dependencySource);
+
+    const snapshot = vi.spyOn(
+      runtimeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    const batch = vi.spyOn(runtimeMacroTransformer, 'transformProject');
+    try {
+      const compilation = {};
+      const [entry, dependency] = await Promise.all([
+        runMacroTransformLoader({
+          resourcePath: entryPath,
+          source: entrySource,
+          compilation,
+          transformOptions: { sourceMap: true },
+        }),
+        runMacroTransformLoader({
+          resourcePath: dependencyPath,
+          source: dependencySource,
+          compilation,
+          transformOptions: { sourceMap: true },
+        }),
+      ]);
+      const entryProject = entry.meta[CONF_TS_MACRO_TRANSFORM_META].project;
+      const dependencyProject =
+        dependency.meta[CONF_TS_MACRO_TRANSFORM_META].project;
+
+      expect(dependencyProject).toBe(entryProject);
+      expect(dependency.code).toBe(entryProject.files[dependencyPath]);
+      expect(dependency.code).not.toContain("from '@conf-ts/macro'");
+      expect(dependency.code).toContain('"42"');
+      expect(dependency.map.version).toBe(3);
+      expect(entry.dependencies).toEqual([]);
+      expect(
+        entry.meta[CONF_TS_MACRO_TRANSFORM_META].transformDependenciesByFile[
+          dependencyPath
+        ],
+      ).toContain(dependencyPath);
+
+      const overridden = await runMacroTransformLoader({
+        resourcePath: dependencyPath,
+        source: dependencySource.replace('40 + 2', '40 + 4'),
+        compilation,
+        transformOptions: { sourceMap: true },
+      });
+      expect(overridden.meta[CONF_TS_MACRO_TRANSFORM_META].project).not.toBe(
+        entryProject,
+      );
+      expect(overridden.code).toContain('"44"');
+
+      fs.writeFileSync(
+        dependencyPath,
+        dependencySource.replace('40 + 2', '40 + 3'),
+      );
+      const nextCompilation = await runMacroTransformLoader({
+        resourcePath: entryPath,
+        source: entrySource,
+        compilation: {},
+        transformOptions: { sourceMap: true },
+      });
+      const nextProject =
+        nextCompilation.meta[CONF_TS_MACRO_TRANSFORM_META].project;
+
+      expect(nextProject).not.toBe(entryProject);
+      expect(nextProject.files[dependencyPath]).toContain('"43"');
+      expect(snapshot).toHaveBeenCalledTimes(2);
+      expect(batch).toHaveBeenCalledTimes(3);
+    } finally {
+      snapshot.mockRestore();
+      batch.mockRestore();
+      fs.rmSync(context, { force: true, recursive: true });
+    }
+  });
+
   it('runs the native macro pre-transform before ordinary compilation', async () => {
     const builtPlugin = require('../dist/cjs/index.js') as {
       ConfTsWebpackPlugin: typeof ConfTsWebpackPlugin;
@@ -259,6 +451,82 @@ describe('loader generated file path interpolation', () => {
         fs.readFileSync(path.join(context, 'config.generated.json'), 'utf8'),
       );
       expect(generated).toEqual({ answer: '42' });
+    } finally {
+      await new Promise<void>(resolve => compiler.close(() => resolve()));
+      fs.rmSync(context, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps compiler-level graph caches correct across rebuilds', async () => {
+    const builtPlugin = require('../dist/cjs/index.js') as {
+      ConfTsWebpackPlugin: typeof ConfTsWebpackPlugin;
+      TypeScriptMacroTransformPlugin: typeof TypeScriptMacroTransformPlugin;
+    };
+    const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-rebuild-'));
+    const entry = path.join(context, 'config.conf.ts');
+    const values = path.join(context, 'values.ts');
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          module: 'esnext',
+          moduleResolution: 'bundler',
+        },
+      }),
+    );
+    fs.writeFileSync(
+      entry,
+      "import { answer } from './values'; export default { answer };",
+    );
+    fs.writeFileSync(
+      values,
+      "import { String } from '@conf-ts/macro'; export const answer = String(42);",
+    );
+    const compiler = webpack({
+      context,
+      mode: 'production',
+      devtool: false,
+      entry: './config.conf.ts',
+      resolve: { extensions: ['.ts', '.js'] },
+      output: { path: path.join(context, 'dist'), filename: 'bundle.js' },
+      plugins: [
+        new builtPlugin.TypeScriptMacroTransformPlugin(),
+        new builtPlugin.ConfTsWebpackPlugin({
+          compiler: 'js',
+          useWorkers: false,
+        }),
+      ],
+    });
+    const run = () =>
+      new Promise<webpack.Stats>((resolve, reject) => {
+        compiler.run((error, stats) => {
+          if (error) reject(error);
+          else if (!stats) reject(new Error('Webpack returned no stats'));
+          else if (stats.hasErrors()) {
+            reject(new Error(stats.toString({ all: false, errors: true })));
+          } else resolve(stats);
+        });
+      });
+
+    try {
+      await run();
+      const generated = path.join(context, 'config.generated.json');
+      expect(JSON.parse(fs.readFileSync(generated, 'utf8'))).toEqual({
+        answer: '42',
+      });
+
+      fs.writeFileSync(
+        values,
+        "import { String } from '@conf-ts/macro'; export const answer = String(43);",
+      );
+      await run();
+      expect(JSON.parse(fs.readFileSync(generated, 'utf8'))).toEqual({
+        answer: '43',
+      });
+
+      const unchangedMtime = fs.statSync(generated).mtimeMs;
+      await run();
+      expect(fs.statSync(generated).mtimeMs).toBe(unchangedMtime);
     } finally {
       await new Promise<void>(resolve => compiler.close(() => resolve()));
       fs.rmSync(context, { force: true, recursive: true });

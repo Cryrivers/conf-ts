@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use transform::{ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions, transform_source};
+use transform::{
+  ProjectSnapshot, QuoteStyle, TransformInput, TransformOptions, TransformProjectInput,
+  transform_project as transform_project_inner, transform_source,
+};
 
 #[napi(object)]
 pub struct JsProjectSnapshot {
@@ -13,6 +16,8 @@ pub struct JsProjectSnapshot {
   pub compiler_options: Option<serde_json::Value>,
   pub entry_files: Option<Vec<String>>,
   pub dependencies: Option<Vec<String>>,
+  pub referenced_modules: Option<HashMap<String, Vec<String>>>,
+  pub missing_dependencies: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -25,6 +30,7 @@ pub struct JsTransformInput {
 #[napi(object)]
 pub struct JsTransformOptions {
   pub env: Option<HashMap<String, String>>,
+  pub inherit_process_env: Option<bool>,
   #[napi(ts_type = "'single' | 'double'")]
   pub quote: Option<String>,
   pub preserve_key_order: Option<bool>,
@@ -36,6 +42,18 @@ pub struct TransformResult {
   pub code: String,
   #[napi(ts_type = "Record<string, any> | null")]
   pub map: serde_json::Value,
+  pub dependencies: Vec<String>,
+}
+
+#[napi(object)]
+pub struct JsTransformProjectInput {
+  pub project: JsProjectSnapshot,
+  pub files: Option<Vec<String>>,
+}
+
+#[napi(object)]
+pub struct TransformProjectResult {
+  pub transformed: HashMap<String, TransformResult>,
   pub dependencies: Vec<String>,
 }
 
@@ -66,13 +84,47 @@ fn options(value: Option<JsTransformOptions>) -> Result<TransformOptions> {
     quote: None,
     preserve_key_order: None,
     source_map: None,
+    inherit_process_env: None,
   });
   Ok(TransformOptions {
     env: value.env.unwrap_or_default(),
     quote: quote(value.quote)?,
     preserve_key_order: value.preserve_key_order.unwrap_or(false),
     source_map: value.source_map.unwrap_or(false),
-    inherit_process_env: true,
+    inherit_process_env: value.inherit_process_env.unwrap_or(true),
+  })
+}
+
+/// Transform a project with one shared native analysis pass.
+#[napi]
+pub fn transform_project(
+  input: JsTransformProjectInput,
+  transform_options: Option<JsTransformOptions>,
+) -> Result<TransformProjectResult> {
+  let output = transform_project_inner(
+    TransformProjectInput {
+      project: project(input.project),
+      files: input.files,
+    },
+    options(transform_options)?,
+  )
+  .map_err(|error| Error::new(Status::GenericFailure, error.message))?;
+  Ok(TransformProjectResult {
+    transformed: output
+      .transformed
+      .into_iter()
+      .map(|(filename, result)| {
+        (
+          filename,
+          TransformResult {
+            code: result.code,
+            map: result.map.unwrap_or(serde_json::Value::Null),
+            dependencies: result.dependencies,
+          },
+        )
+      })
+      .collect(),
+    dependencies: output.dependencies,
   })
 }
 

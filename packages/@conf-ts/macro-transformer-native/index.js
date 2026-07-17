@@ -588,3 +588,4 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.transform = nativeBinding.transform
+module.exports.transformProject = nativeBinding.transformProject

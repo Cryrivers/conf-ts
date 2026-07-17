@@ -1,9 +1,9 @@
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { ConfTSError, FormattedNumber } from '@conf-ts/compiler';
 import {
   createEvaluationState,
-  createFileProgram,
   createSourceProgram,
+  resolveProgramOptions,
   type EvaluationOptions,
 } from '@conf-ts/compiler/internal';
 import MagicString from 'magic-string';
@@ -16,6 +16,8 @@ import type {
   MacroProjectSnapshotOptions,
   MacroTransformInput,
   MacroTransformOptions,
+  MacroTransformProjectInput,
+  MacroTransformProjectResult,
   MacroTransformResult,
   RawSourceMap,
 } from './types';
@@ -29,6 +31,8 @@ export type {
   MacroProjectSnapshotOptions,
   MacroTransformInput,
   MacroTransformOptions,
+  MacroTransformProjectInput,
+  MacroTransformProjectResult,
   MacroTransformResult,
   QuoteStyle,
   RawSourceMap,
@@ -331,9 +335,10 @@ function macroImportReplacements(
 
 function nodeEnvironment(
   explicit: Record<string, string> | undefined,
+  inheritProcessEnv = true,
 ): Record<string, string> | undefined {
   const processEnvironment =
-    typeof process === 'undefined'
+    !inheritProcessEnv || typeof process === 'undefined'
       ? undefined
       : Object.fromEntries(
           Object.entries(process.env).filter(
@@ -344,21 +349,19 @@ function nodeEnvironment(
   return { ...processEnvironment, ...explicit };
 }
 
-function transformProgram(
-  program: ts.Program,
-  input: MacroTransformInput,
-  options?: MacroTransformOptions,
-): MacroTransformResult {
-  const sourceFile = program.getSourceFile(input.filename);
-  if (!sourceFile) {
-    throw new Error(
-      `Source file is missing from macro project: ${input.filename}`,
-    );
-  }
+interface ProjectAnalysis {
+  evaluationOptions: EvaluationOptions & MacroTransformOptions;
+  state: ReturnType<typeof createEvaluationState>;
+  bindingsByFile: Map<string, MacroBindings>;
+}
 
+function createProjectAnalysis(
+  program: ts.Program,
+  options?: MacroTransformOptions,
+): ProjectAnalysis {
   const evaluationOptions: EvaluationOptions & MacroTransformOptions = {
     ...options,
-    env: nodeEnvironment(options?.env),
+    env: nodeEnvironment(options?.env, options?.inheritProcessEnv !== false),
   };
   const state = createEvaluationState(program, evaluationOptions);
   const bindingsByFile = new Map<string, MacroBindings>();
@@ -402,6 +405,22 @@ function transformProgram(
       macroName,
     );
   };
+
+  return { evaluationOptions, state, bindingsByFile };
+}
+
+function hasMacroBindings(bindings: MacroBindings | undefined): boolean {
+  return Boolean(bindings?.named.size || bindings?.namespaces.size);
+}
+
+function transformAnalyzedSource(
+  sourceFile: ts.SourceFile,
+  source: string,
+  analysis: ProjectAnalysis,
+  options?: MacroTransformOptions,
+): MacroTransformResult {
+  const { bindingsByFile, evaluationOptions, state } = analysis;
+  state.evaluatedFiles.clear();
 
   const sourceBindings = bindingsByFile.get(sourceFile.fileName) ?? {
     named: new Map(),
@@ -456,13 +475,13 @@ function transformProgram(
   }
 
   const dependencies = Array.from(
-    new Set([...(input.project?.dependencies ?? []), ...state.evaluatedFiles]),
+    new Set([sourceFile.fileName, ...state.evaluatedFiles]),
   );
   return {
     ...applyReplacements(
-      input.code,
+      source,
       replacements,
-      input.filename,
+      sourceFile.fileName,
       options?.sourceMap === true,
     ),
     dependencies,
@@ -484,6 +503,60 @@ function referencedModuleNames(sourceFile: ts.SourceFile): string[] {
   return names;
 }
 
+function referencedModuleNamesFromText(
+  fileName: string,
+  source: string,
+): string[] {
+  return referencedModuleNames(
+    ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true),
+  );
+}
+
+function sameStrings(left: string[] | undefined, right: string[]): boolean {
+  return (
+    left?.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function normalizedOverrides(
+  overrides: Record<string, string> | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(overrides ?? {}).map(([fileName, source]) => [
+      resolve(fileName),
+      source,
+    ]),
+  );
+}
+
+function reuseSnapshotWithOverrides(
+  options: MacroProjectSnapshotOptions | undefined,
+  overrides: Record<string, string>,
+): MacroProjectSnapshot | undefined {
+  const previous = options?.previous;
+  if (!previous?.referencedModules) return undefined;
+  for (const [fileName, source] of Object.entries(overrides)) {
+    if (!(fileName in previous.files)) return undefined;
+    if (
+      !sameStrings(
+        previous.referencedModules[fileName],
+        referencedModuleNamesFromText(fileName, source),
+      )
+    ) {
+      return undefined;
+    }
+  }
+  return {
+    ...previous,
+    files: { ...previous.files, ...overrides },
+    compilerOptions: {
+      ...previous.compilerOptions,
+      ...options?.compilerOptions,
+    },
+  };
+}
+
 /**
  * Capture the filesystem-backed TypeScript graph as JSON-friendly source and
  * resolution tables. The returned snapshot can be passed to either transformer
@@ -497,25 +570,93 @@ export function createMacroProjectSnapshot(
     throw new TypeError('createMacroProjectSnapshot requires an entry file');
   }
   const normalizedEntries = entryFiles.map(fileName => resolve(fileName));
+  const overrides = normalizedOverrides(options?.overrides);
+  const reused = reuseSnapshotWithOverrides(options, overrides);
+  if (reused) return reused;
+
   const files: Record<string, string> = {};
   const resolutions: Record<string, Record<string, string>> = {};
+  const referencedModules: Record<string, string[]> = {};
   const dependencies = new Set<string>();
+  const missingDependencies = new Set<string>();
   let compilerOptions: ts.CompilerOptions | undefined;
 
+  const groups = new Map<
+    string,
+    { entries: string[]; options: ts.CompilerOptions }
+  >();
   for (const entryFile of normalizedEntries) {
-    const { program, tsConfigPath } = createFileProgram(entryFile);
+    const resolved = resolveProgramOptions(entryFile);
+    const group = groups.get(resolved.tsConfigPath);
+    if (group) group.entries.push(entryFile);
+    else {
+      groups.set(resolved.tsConfigPath, {
+        entries: [entryFile],
+        options: resolved.compilerOptions,
+      });
+    }
+  }
+
+  for (const [tsConfigPath, group] of groups) {
     dependencies.add(tsConfigPath);
-    compilerOptions ??= program.getCompilerOptions();
+    compilerOptions ??= group.options;
+    const scanOptions: ts.CompilerOptions = {
+      ...group.options,
+      noLib: true,
+      types: [],
+    };
+    const host = ts.createCompilerHost(scanOptions, true);
+    const originalFileExists = host.fileExists.bind(host);
+    const originalReadFile = host.readFile.bind(host);
+    const originalGetSourceFile = host.getSourceFile.bind(host);
+    host.fileExists = fileName => {
+      const exists =
+        Object.prototype.hasOwnProperty.call(overrides, fileName) ||
+        originalFileExists(fileName);
+      if (exists) {
+        dependencies.add(fileName);
+        missingDependencies.delete(fileName);
+      } else {
+        missingDependencies.add(fileName);
+      }
+      return exists;
+    };
+    host.readFile = fileName =>
+      overrides[fileName] ?? originalReadFile(fileName);
+    host.getSourceFile = (fileName, languageVersion, ...rest) => {
+      const override = overrides[fileName];
+      return override === undefined
+        ? originalGetSourceFile(fileName, languageVersion, ...rest)
+        : ts.createSourceFile(fileName, override, languageVersion, true);
+    };
+    const program = ts.createProgram(group.entries, scanOptions, host);
+    const resolutionHost: ts.ModuleResolutionHost = {
+      fileExists: host.fileExists,
+      readFile: host.readFile,
+      directoryExists: host.directoryExists?.bind(host),
+      getCurrentDirectory: host.getCurrentDirectory.bind(host),
+      getDirectories: host.getDirectories?.bind(host),
+      realpath: host.realpath?.bind(host),
+      useCaseSensitiveFileNames: host.useCaseSensitiveFileNames(),
+    };
+    const moduleResolutionCache = ts.createModuleResolutionCache(
+      dirname(tsConfigPath),
+      fileName => fileName,
+      group.options,
+    );
     for (const sourceFile of program.getSourceFiles()) {
       if (sourceFile.isDeclarationFile) continue;
       files[sourceFile.fileName] = sourceFile.text;
       dependencies.add(sourceFile.fileName);
-      for (const moduleName of referencedModuleNames(sourceFile)) {
+      const moduleNames = referencedModuleNames(sourceFile);
+      referencedModules[sourceFile.fileName] = moduleNames;
+      for (const moduleName of moduleNames) {
         const resolvedModule = ts.resolveModuleName(
           moduleName,
           sourceFile.fileName,
-          program.getCompilerOptions(),
-          ts.sys,
+          group.options,
+          resolutionHost,
+          moduleResolutionCache,
         ).resolvedModule;
         if (resolvedModule && !resolvedModule.isExternalLibraryImport) {
           (resolutions[sourceFile.fileName] ??= {})[moduleName] =
@@ -534,14 +675,15 @@ export function createMacroProjectSnapshot(
     },
     entryFiles: normalizedEntries,
     dependencies: Array.from(dependencies),
+    referencedModules,
+    missingDependencies: Array.from(missingDependencies),
   };
 }
 
-/** Transform one module into ordinary, already-evaluated TypeScript source. */
-export function transform(
-  input: MacroTransformInput,
-  options?: MacroTransformOptions,
-): MacroTransformResult {
+function validateOptions(
+  options: MacroTransformOptions | undefined,
+  filename: string,
+): void {
   if (
     options?.quote !== undefined &&
     options.quote !== 'single' &&
@@ -549,9 +691,69 @@ export function transform(
   ) {
     throw new ConfTSError(
       "Invalid option: quote must be 'single' or 'double'",
-      { file: input.filename, line: 1, character: 1 },
+      { file: filename, line: 1, character: 1 },
     );
   }
+}
+
+/** Transform a project with one shared TypeScript analysis pass. */
+export function transformProject(
+  input: MacroTransformProjectInput,
+  options?: MacroTransformOptions,
+): MacroTransformProjectResult {
+  const targetFiles = Array.from(
+    new Set(input.files ?? Object.keys(input.project.files)),
+  );
+  validateOptions(
+    options,
+    targetFiles[0] ?? input.project.entryFiles?.[0] ?? '',
+  );
+  for (const fileName of targetFiles) {
+    if (!Object.prototype.hasOwnProperty.call(input.project.files, fileName)) {
+      throw new Error(`Source file is missing from macro project: ${fileName}`);
+    }
+  }
+  const candidates = targetFiles.filter(fileName => {
+    const source = input.project.files[fileName];
+    return source.includes(MACRO_PACKAGE) || source.includes('\\');
+  });
+  if (candidates.length === 0) {
+    return { transformed: {}, dependencies: [] };
+  }
+
+  const seedFile = candidates[0];
+  const program = createSourceProgram({
+    filename: seedFile,
+    code: input.project.files[seedFile],
+    project: input.project,
+  });
+  const analysis = createProjectAnalysis(program, options);
+  const transformed: Record<string, MacroTransformResult> = {};
+  const dependencies = new Set<string>();
+  for (const fileName of candidates) {
+    const sourceFile = program.getSourceFile(fileName);
+    if (!sourceFile) {
+      throw new Error(`Source file is missing from macro project: ${fileName}`);
+    }
+    if (!hasMacroBindings(analysis.bindingsByFile.get(fileName))) continue;
+    const result = transformAnalyzedSource(
+      sourceFile,
+      input.project.files[fileName],
+      analysis,
+      options,
+    );
+    transformed[fileName] = result;
+    for (const dependency of result.dependencies) dependencies.add(dependency);
+  }
+  return { transformed, dependencies: Array.from(dependencies) };
+}
+
+/** Transform one module into ordinary, already-evaluated TypeScript source. */
+export function transform(
+  input: MacroTransformInput,
+  options?: MacroTransformOptions,
+): MacroTransformResult {
+  validateOptions(options, input.filename);
   const project = input.project ?? createMacroProjectSnapshot([input.filename]);
   const normalizedInput: MacroTransformInput = {
     ...input,
@@ -560,11 +762,27 @@ export function transform(
       files: { ...project.files, [input.filename]: input.code },
     },
   };
-  return transformProgram(
-    createSourceProgram(normalizedInput),
-    normalizedInput,
+  const result = transformProject(
+    { project: normalizedInput.project!, files: [input.filename] },
     options,
-  );
+  ).transformed[input.filename];
+  const transformed =
+    result ??
+    ({
+      ...applyReplacements(
+        input.code,
+        [],
+        input.filename,
+        options?.sourceMap === true,
+      ),
+      dependencies: [input.filename],
+    } satisfies MacroTransformResult);
+  return {
+    ...transformed,
+    dependencies: Array.from(
+      new Set([...(project.dependencies ?? []), ...transformed.dependencies]),
+    ),
+  };
 }
 
 /**

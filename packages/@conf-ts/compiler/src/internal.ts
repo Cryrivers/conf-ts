@@ -10,6 +10,7 @@ export {
   createEvaluationState,
   createFileProgram,
   createSourceProgram,
+  resolveProgramOptions,
 } from './compiler';
 export { createInMemoryProgram } from './browser';
 export { evaluate } from './eval';

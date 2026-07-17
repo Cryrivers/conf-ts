@@ -6,6 +6,7 @@ export interface MacroTransformLoaderMeta {
   [CONF_TS_MACRO_TRANSFORM_META]?: {
     project: SourceProject;
     transformDependencies: string[];
+    transformDependenciesByFile?: Record<string, string[]>;
   };
   [key: string]: unknown;
 }

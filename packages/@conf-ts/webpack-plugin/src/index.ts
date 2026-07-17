@@ -130,6 +130,7 @@ export class ConfTsWebpackPlugin {
             check,
             useWorkers,
             compiler: compilerPref,
+            confTsConfigLoader: true,
           },
         },
       ],

@@ -17,6 +17,8 @@ export interface LoaderOptions extends CompileOptions {
   check?: boolean;
   useWorkers?: boolean;
   compiler?: CompilerPreference;
+  /** Internal loader-chain marker used by the macro pre-loader fast path. */
+  confTsConfigLoader?: boolean;
 }
 
 export const piscinaByCompiler = new WeakMap<Compiler, Piscina>();
@@ -163,9 +165,15 @@ export default async function (
       });
     }
 
-    for (const dep of macroMeta?.transformDependencies ?? []) {
-      this.addDependency(dep);
+    const macroDependencies = new Set(macroMeta?.transformDependencies ?? []);
+    for (const evaluatedFile of result.dependencies) {
+      for (const dependency of macroMeta?.transformDependenciesByFile?.[
+        evaluatedFile
+      ] ?? []) {
+        macroDependencies.add(dependency);
+      }
     }
+    for (const dep of macroDependencies) this.addDependency(dep);
     for (const dep of result.dependencies) {
       this.addDependency(dep);
     }
@@ -195,8 +203,17 @@ export default async function (
         throw err;
       }
     } else {
-      await fs.mkdir(path.dirname(generatedPath), { recursive: true });
-      await fs.writeFile(generatedPath, result.output);
+      let unchanged = false;
+      try {
+        unchanged =
+          (await fs.readFile(generatedPath, 'utf8')) === result.output;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (!unchanged) {
+        await fs.mkdir(path.dirname(generatedPath), { recursive: true });
+        await fs.writeFile(generatedPath, result.output);
+      }
     }
 
     callback(null, source, inputSourceMap as any, inputMeta as any);
@@ -209,6 +226,7 @@ function readMacroTransformMeta(meta: unknown):
   | {
       project: SourceProject;
       transformDependencies: string[];
+      transformDependenciesByFile?: Record<string, string[]>;
     }
   | undefined {
   if (!meta || typeof meta !== 'object') {

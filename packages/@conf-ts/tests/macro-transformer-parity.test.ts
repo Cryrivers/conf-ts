@@ -4,9 +4,13 @@ import { compile, type CompileOptions } from '@conf-ts/compiler';
 import {
   createMacroProjectSnapshot,
   transform as transformMacrosJs,
+  transformProject as transformProjectJs,
   type MacroTransformOptions,
 } from '@conf-ts/macro-transformer';
-import { transform as transformMacrosNative } from '@conf-ts/macro-transformer-native';
+import {
+  transform as transformMacrosNative,
+  transformProject as transformProjectNative,
+} from '@conf-ts/macro-transformer-native';
 import { describe, expect, it } from 'vitest';
 
 const MACRO_DIR = path.resolve(__dirname, 'fixtures/macros');
@@ -49,8 +53,24 @@ describe('macro-transformer / macro-transformer-native parity', () => {
     const input = { filename: inputFile, code, project };
     const jsResult = transformMacrosJs(input, options);
     const nativeResult = transformMacrosNative(input, options);
+    const jsBatch = transformProjectJs(
+      { project, files: [inputFile] },
+      options,
+    );
+    const nativeBatch = transformProjectNative(
+      { project, files: [inputFile] },
+      options,
+    );
 
     expect(nativeResult.code).toBe(jsResult.code);
+    expect(jsBatch.transformed[inputFile].code).toBe(jsResult.code);
+    expect(nativeBatch.transformed[inputFile].code).toBe(jsResult.code);
+    expect([...nativeBatch.transformed[inputFile].dependencies].sort()).toEqual(
+      [...jsBatch.transformed[inputFile].dependencies].sort(),
+    );
+    expect([...nativeBatch.dependencies].sort()).toEqual(
+      [...jsBatch.dependencies].sort(),
+    );
     expect(jsResult.code).not.toContain("from '@conf-ts/macro'");
 
     // Both must report the same dependency set (order-independent).

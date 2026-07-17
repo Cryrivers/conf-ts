@@ -1,6 +1,7 @@
 import type { MacroTransformOptions } from '@conf-ts/macro-transformer';
 import type { Compiler, RuleSetCondition, RuleSetRule } from 'webpack';
 
+import { freezeCompilerEnvironment } from './loader';
 import type { MacroTransformImplementation } from './types';
 
 export interface MacroTransformPluginOptions extends MacroTransformOptions {
@@ -30,6 +31,7 @@ export function applyMacroTransformPlugin(
     exclude = /node_modules/,
     ...transformOptions
   } = options;
+  const { fingerprint } = freezeCompilerEnvironment(compiler);
 
   const rule: RuleSetRule = {
     enforce: 'pre',
@@ -42,6 +44,7 @@ export function applyMacroTransformPlugin(
         options: {
           implementation,
           transformOptions,
+          environmentFingerprint: fingerprint,
         },
       },
     ],

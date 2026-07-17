@@ -426,6 +426,7 @@ import { compile } from '@conf-ts/compiler';
 import {
   createMacroProjectSnapshot,
   transform,
+  transformProject,
 } from '@conf-ts/macro-transformer';
 
 const filename = 'path/to/index.conf.ts';
@@ -439,9 +440,31 @@ const transformed = transform(
 const result = compile({ filename, code: transformed.code, project }, 'json');
 ```
 
-For a multi-file project, transform every module that contains macros and put
-each transformed source back into `project.files` before calling `compile`.
-The compiler only receives ordinary TypeScript and never expands macros.
+For a multi-file project, use the batch API so project parsing, binding and
+enum analysis happen once:
+
+```ts
+const batch = transformProject(
+  { project },
+  { env: frozenEnvironment, inheritProcessEnv: false },
+);
+Object.assign(
+  project.files,
+  Object.fromEntries(
+    Object.entries(batch.transformed).map(([file, result]) => [
+      file,
+      result.code,
+    ]),
+  ),
+);
+```
+
+`transformProject` is also exported by `@conf-ts/macro-transformer-native`
+with the same input and result shape. Its `transformed` record is sparse, and
+each file reports only itself and files actually used during macro evaluation.
+The existing single-file `transform` API remains compatible and continues to
+report the complete snapshot dependency set. The compiler only receives
+ordinary TypeScript and never expands macros.
 
 ## Webpack plugin
 

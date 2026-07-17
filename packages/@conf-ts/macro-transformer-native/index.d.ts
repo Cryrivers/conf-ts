@@ -6,6 +6,8 @@ export interface JsProjectSnapshot {
   compilerOptions?: any
   entryFiles?: Array<string>
   dependencies?: Array<string>
+  referencedModules?: Record<string, Array<string>>
+  missingDependencies?: Array<string>
 }
 
 export interface JsTransformInput {
@@ -16,13 +18,27 @@ export interface JsTransformInput {
 
 export interface JsTransformOptions {
   env?: Record<string, string>
+  inheritProcessEnv?: boolean
   quote?: 'single' | 'double'
   preserveKeyOrder?: boolean
   sourceMap?: boolean
 }
 
+export interface JsTransformProjectInput {
+  project: JsProjectSnapshot
+  files?: Array<string>
+}
+
 /** Evaluate @conf-ts/macro calls and return ordinary TypeScript source. */
 export declare function transform(input: JsTransformInput, transformOptions?: JsTransformOptions | undefined | null): TransformResult
+
+/** Transform a project with one shared native analysis pass. */
+export declare function transformProject(input: JsTransformProjectInput, transformOptions?: JsTransformOptions | undefined | null): TransformProjectResult
+
+export interface TransformProjectResult {
+  transformed: Record<string, TransformResult>
+  dependencies: Array<string>
+}
 
 export interface TransformResult {
   code: string

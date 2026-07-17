@@ -1,12 +1,14 @@
 import { createHash } from 'crypto';
+import fs from 'fs';
 import type {
   MacroProjectSnapshot,
-  MacroTransformInput,
   MacroTransformOptions,
+  MacroTransformProjectInput,
+  MacroTransformProjectResult,
   MacroTransformResult,
   RawSourceMap,
 } from '@conf-ts/macro-transformer';
-import type { LoaderContext } from 'webpack';
+import type { Compiler, LoaderContext } from 'webpack';
 
 import {
   CONF_TS_MACRO_TRANSFORM_META,
@@ -17,16 +19,23 @@ import {
 interface MacroTransformLoaderOptions {
   implementation: MacroTransformImplementation;
   transformOptions?: MacroTransformOptions;
+  environmentFingerprint?: string;
 }
 
-type TransformFn = (
-  input: MacroTransformInput,
+type TransformProjectFn = (
+  input: MacroTransformProjectInput,
   options?: MacroTransformOptions,
-) => MacroTransformResult;
+) => MacroTransformProjectResult;
 
 interface Transformer {
-  createMacroProjectSnapshot(entryFiles: string[]): MacroProjectSnapshot;
-  transform: TransformFn;
+  createMacroProjectSnapshot(
+    entryFiles: string[],
+    options?: {
+      previous?: MacroProjectSnapshot;
+      overrides?: Record<string, string>;
+    },
+  ): MacroProjectSnapshot;
+  transformProject: TransformProjectFn;
 }
 
 interface PreparedTransform {
@@ -34,12 +43,43 @@ interface PreparedTransform {
   map: RawSourceMap | null;
   project: MacroProjectSnapshot;
   dependencies: string[];
+  dependenciesByFile: Record<string, string[]>;
 }
 
-const transformsByCompilation = new WeakMap<
-  object,
-  Map<string, Promise<PreparedTransform>>
->();
+interface PreparedProject {
+  project: MacroProjectSnapshot;
+  results: Map<string, MacroTransformResult>;
+  dependenciesByFile: Record<string, string[]>;
+}
+
+interface ProjectCache {
+  project: MacroProjectSnapshot;
+  preparedByOptions: Map<string, Promise<PreparedProject>>;
+  previous?: ProjectCache;
+  changedFiles?: Set<string>;
+  structureStable: boolean;
+  snapshot?: object;
+  validatedCompilation?: object;
+  dependencyContents: Map<string, string | undefined>;
+}
+
+interface CompilerCache {
+  environment: Record<string, string>;
+  projectsByFile: Map<string, ProjectCache>;
+  inFlight?: Promise<ProjectCache>;
+}
+
+const cachesByCompiler = new WeakMap<object, CompilerCache>();
+const fallbackCachesByCompilation = new WeakMap<object, CompilerCache>();
+const environmentsByCompiler = new WeakMap<object, Record<string, string>>();
+const MACRO_PACKAGE = '@conf-ts/macro';
+
+function mightContainMacroImport(source: string): boolean {
+  // A backslash may be part of an escaped module specifier whose decoded
+  // value is MACRO_PACKAGE. False positives only cost one transform; false
+  // negatives would leave a compile-time macro in webpack's output.
+  return source.includes(MACRO_PACKAGE) || source.includes('\\');
+}
 
 function loadTransformer(
   implementation: MacroTransformImplementation,
@@ -53,141 +93,412 @@ function loadTransformer(
   // request for the native Oxc-backed transformer.
   const native = require('@conf-ts/macro-transformer-native') as Pick<
     Transformer,
-    'transform'
+    'transformProject'
   >;
   return {
     createMacroProjectSnapshot: typescript.createMacroProjectSnapshot,
-    transform: native.transform,
+    transformProject: native.transformProject,
   };
 }
 
-function normalizeEnvironment(
-  explicit: Record<string, string> | undefined,
-): Record<string, string> {
+export function readEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
       environment[key] = value;
     }
   }
-  return { ...environment, ...explicit };
+  return environment;
 }
 
-async function prepareTransform(
+export function freezeCompilerEnvironment(compiler: Compiler): {
+  environment: Record<string, string>;
+  fingerprint: string;
+} {
+  const environment = readEnvironment();
+  environmentsByCompiler.set(compiler, environment);
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify(
+        Object.entries(environment).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      ),
+    )
+    .digest('hex');
+  return { environment, fingerprint };
+}
+
+function transformOptionsKey(options: MacroTransformOptions): string {
+  return JSON.stringify({
+    env: Object.entries(options.env ?? {}).sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+    preserveKeyOrder: options.preserveKeyOrder === true,
+    quote: options.quote ?? 'double',
+    sourceMap: options.sourceMap === true,
+  });
+}
+
+function affectedFiles(
+  cache: ProjectCache,
+  previous: PreparedProject,
+): string[] {
+  const affected = new Set(cache.changedFiles ?? []);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [filename, result] of previous.results) {
+      if (
+        !affected.has(filename) &&
+        result.dependencies.some(dependency => affected.has(dependency))
+      ) {
+        affected.add(filename);
+        changed = true;
+      }
+    }
+  }
+  return [...affected];
+}
+
+async function prepareProject(
+  cache: ProjectCache,
+  key: string,
+  implementation: MacroTransformImplementation,
+  options: MacroTransformOptions,
+  environment: Record<string, string>,
+  project: MacroProjectSnapshot = cache.project,
+): Promise<PreparedProject> {
+  const transformer = loadTransformer(implementation);
+  const transformOptions: MacroTransformOptions = {
+    ...options,
+    env: { ...environment, ...options.env },
+    inheritProcessEnv: false,
+  };
+  let prior: PreparedProject | undefined;
+  let targets: string[] | undefined;
+  if (cache.structureStable && cache.previous) {
+    prior = await cache.previous.preparedByOptions.get(key);
+    if (prior) targets = affectedFiles(cache, prior);
+  }
+  const batch = transformer.transformProject(
+    { project, ...(targets ? { files: targets } : {}) },
+    transformOptions,
+  );
+  const results = new Map<string, MacroTransformResult>();
+  if (prior && targets) {
+    const affected = new Set(targets);
+    for (const [filename, result] of prior.results) {
+      if (!affected.has(filename) && filename in project.files) {
+        results.set(filename, result);
+      }
+    }
+  }
+  for (const [filename, result] of Object.entries(batch.transformed)) {
+    results.set(filename, result);
+  }
+  const transformedFiles = { ...project.files };
+  const dependenciesByFile: Record<string, string[]> = {};
+  for (const [filename, result] of results) {
+    transformedFiles[filename] = result.code;
+    dependenciesByFile[filename] = result.dependencies;
+  }
+  const transformedProject: MacroProjectSnapshot = {
+    ...project,
+    files: transformedFiles,
+  };
+  return { project: transformedProject, results, dependenciesByFile };
+}
+
+function createFileSystemSnapshot(
+  compilation: any,
+  project: MacroProjectSnapshot,
+): Promise<object | undefined> {
+  const fileSystemInfo = compilation?.fileSystemInfo;
+  if (!fileSystemInfo?.createSnapshot) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    fileSystemInfo.createSnapshot(
+      undefined,
+      project.dependencies,
+      undefined,
+      project.missingDependencies ?? [],
+      { hash: true, timestamp: true },
+      (error: Error | null, snapshot: object | null) => {
+        if (error) reject(error);
+        else resolve(snapshot ?? undefined);
+      },
+    );
+  });
+}
+
+function checkSnapshotValid(
+  compilation: any,
+  project: ProjectCache,
+): Promise<boolean> {
+  if (project.validatedCompilation === compilation)
+    return Promise.resolve(true);
+  const fileSystemInfo = compilation?.fileSystemInfo;
+  if (!project.snapshot || !fileSystemInfo?.checkSnapshotValid) {
+    project.validatedCompilation = compilation;
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve, reject) => {
+    fileSystemInfo.checkSnapshotValid(
+      project.snapshot,
+      (error: Error | null, valid?: boolean) => {
+        if (error) reject(error);
+        else {
+          if (valid) project.validatedCompilation = compilation;
+          resolve(valid === true);
+        }
+      },
+    );
+  });
+}
+
+function sourceChanges(
+  previousCache: ProjectCache,
+  resourcePath: string,
+  source: string,
+): { overrides: Record<string, string>; requiresFullScan: boolean } {
+  const previous = previousCache.project;
+  const overrides: Record<string, string> = {};
+  let requiresFullScan = false;
+  for (const [filename, oldSource] of Object.entries(previous.files)) {
+    try {
+      const current =
+        filename === resourcePath ? source : fs.readFileSync(filename, 'utf8');
+      if (current !== oldSource) overrides[filename] = current;
+    } catch {
+      requiresFullScan = true;
+    }
+  }
+  for (const [dependency, oldContent] of previousCache.dependencyContents) {
+    let current: string | undefined;
+    try {
+      current = fs.readFileSync(dependency, 'utf8');
+    } catch {
+      current = undefined;
+    }
+    if (current !== oldContent) requiresFullScan = true;
+  }
+  if (
+    previous.missingDependencies?.some(dependency => fs.existsSync(dependency))
+  ) {
+    requiresFullScan = true;
+  }
+  return { overrides, requiresFullScan };
+}
+
+async function createProjectCache(
+  resourcePath: string,
+  source: string,
+  compilation?: object,
+  previous?: ProjectCache,
+): Promise<ProjectCache> {
+  const transformer = loadTransformer('typescript');
+  let baseProject: MacroProjectSnapshot;
+  let changedFiles: Set<string> | undefined;
+  let structureStable = false;
+  if (previous) {
+    const changes = sourceChanges(previous, resourcePath, source);
+    if (!changes.requiresFullScan) {
+      baseProject = transformer.createMacroProjectSnapshot(
+        previous.project.entryFiles,
+        { previous: previous.project, overrides: changes.overrides },
+      );
+      structureStable =
+        baseProject.resolutions === previous.project.resolutions;
+      changedFiles = new Set(Object.keys(changes.overrides));
+    } else {
+      baseProject = transformer.createMacroProjectSnapshot(
+        previous.project.entryFiles,
+      );
+    }
+  } else {
+    baseProject = transformer.createMacroProjectSnapshot([resourcePath]);
+  }
+  if (baseProject.files[resourcePath] !== source) {
+    baseProject = {
+      ...baseProject,
+      files: { ...baseProject.files, [resourcePath]: source },
+    };
+    changedFiles ??= new Set();
+    changedFiles.add(resourcePath);
+  }
+  const cache: ProjectCache = {
+    project: baseProject,
+    preparedByOptions: new Map(),
+    previous,
+    changedFiles,
+    structureStable,
+    validatedCompilation: compilation,
+    dependencyContents: new Map(),
+  };
+  for (const dependency of baseProject.dependencies) {
+    if (dependency in baseProject.files) continue;
+    try {
+      cache.dependencyContents.set(
+        dependency,
+        fs.readFileSync(dependency, 'utf8'),
+      );
+    } catch {
+      cache.dependencyContents.set(dependency, undefined);
+    }
+  }
+  cache.snapshot = await createFileSystemSnapshot(compilation, baseProject);
+  return cache;
+}
+
+function compilerCache(
+  context: LoaderContext<MacroTransformLoaderOptions>,
+): CompilerCache {
+  const compiler = (context as any)._compiler as object | undefined;
+  const compilation = (context as any)._compilation as object | undefined;
+  const owner = compiler ?? compilation;
+  if (!owner) {
+    return { environment: readEnvironment(), projectsByFile: new Map() };
+  }
+  const caches = compiler ? cachesByCompiler : fallbackCachesByCompilation;
+  let cache = caches.get(owner);
+  if (!cache) {
+    cache = {
+      environment:
+        (compiler && environmentsByCompiler.get(compiler)) ?? readEnvironment(),
+      projectsByFile: new Map(),
+    };
+    caches.set(owner, cache);
+  }
+  return cache;
+}
+
+async function projectCacheFor(
+  cache: CompilerCache,
+  resourcePath: string,
+  source: string,
+  compilation?: object,
+): Promise<ProjectCache> {
+  let existing = cache.projectsByFile.get(resourcePath);
+  if (existing && (await checkSnapshotValid(compilation, existing))) {
+    return existing;
+  }
+  if (cache.inFlight) {
+    await cache.inFlight;
+    existing = cache.projectsByFile.get(resourcePath);
+    if (existing && (await checkSnapshotValid(compilation, existing))) {
+      return existing;
+    }
+  }
+  const pending = createProjectCache(
+    resourcePath,
+    source,
+    compilation,
+    existing,
+  );
+  cache.inFlight = pending;
+  try {
+    const created = await pending;
+    for (const filename of Object.keys(created.project.files)) {
+      cache.projectsByFile.set(filename, created);
+    }
+    cache.projectsByFile.set(resourcePath, created);
+    return created;
+  } finally {
+    if (cache.inFlight === pending) cache.inFlight = undefined;
+  }
+}
+
+function preparedProjectFor(
+  cache: ProjectCache,
   resourcePath: string,
   source: string,
   implementation: MacroTransformImplementation,
   options: MacroTransformOptions,
+  environment: Record<string, string>,
+): Promise<PreparedProject> {
+  const sourceMatchesSnapshot = cache.project.files[resourcePath] === source;
+  const sourceKey = sourceMatchesSnapshot
+    ? ''
+    : `\0${resourcePath}\0${createHash('sha256').update(source).digest('hex')}`;
+  const key = `${implementation}\0${transformOptionsKey(options)}${sourceKey}`;
+  let prepared = cache.preparedByOptions.get(key);
+  if (!prepared) {
+    const project = sourceMatchesSnapshot
+      ? cache.project
+      : {
+          ...cache.project,
+          files: { ...cache.project.files, [resourcePath]: source },
+        };
+    // Store the promise before doing the expensive transform so concurrent
+    // loader calls share the same work as well as the same final project.
+    prepared = Promise.resolve().then(() =>
+      prepareProject(cache, key, implementation, options, environment, project),
+    );
+    cache.preparedByOptions.set(key, prepared);
+  }
+  return prepared;
+}
+
+async function preparedTransformFor(
+  cache: ProjectCache,
+  resourcePath: string,
+  source: string,
+  implementation: MacroTransformImplementation,
+  options: MacroTransformOptions,
+  environment: Record<string, string>,
 ): Promise<PreparedTransform> {
-  const transformer = loadTransformer(implementation);
-  const baseProject = transformer.createMacroProjectSnapshot([resourcePath]);
-  const sourceProject: MacroProjectSnapshot = {
-    ...baseProject,
-    files: {
-      ...baseProject.files,
-      [resourcePath]: source,
-    },
-  };
-  const transformOptions: MacroTransformOptions = {
-    ...options,
-    env: normalizeEnvironment(options.env),
-    sourceMap: options.sourceMap !== false,
-  };
-
-  let transformedProject = sourceProject;
-  const dependencies = new Set(baseProject.dependencies);
-  let entryResult: MacroTransformResult | undefined;
-
-  const files = Object.entries(sourceProject.files).sort(
-    ([left], [right]) =>
-      Number(left === resourcePath) - Number(right === resourcePath),
+  const prepared = await preparedProjectFor(
+    cache,
+    resourcePath,
+    source,
+    implementation,
+    options,
+    environment,
   );
-  for (const [filename, code] of files) {
-    if (filename.endsWith('.d.ts')) {
-      continue;
-    }
-    const result = transformer.transform(
-      { filename, code, project: transformedProject },
-      transformOptions,
-    );
-    transformedProject = {
-      ...transformedProject,
-      files: {
-        ...transformedProject.files,
-        [filename]: result.code,
-      },
-    };
-    for (const dependency of result.dependencies) {
-      dependencies.add(dependency);
-    }
-    if (filename === resourcePath) {
-      entryResult = result;
-    }
-  }
-
-  if (!entryResult) {
-    entryResult = transformer.transform(
-      { filename: resourcePath, code: source, project: transformedProject },
-      transformOptions,
-    );
-    transformedProject = {
-      ...transformedProject,
-      files: {
-        ...transformedProject.files,
-        [resourcePath]: entryResult.code,
-      },
-    };
-    for (const dependency of entryResult.dependencies) {
-      dependencies.add(dependency);
-    }
-  }
-
+  const result = prepared.results.get(resourcePath);
   return {
-    code: entryResult.code,
-    map: entryResult.map,
-    project: transformedProject,
-    dependencies: [...dependencies],
+    code: result?.code ?? source,
+    map: result?.map ?? null,
+    project: prepared.project,
+    dependencies: result?.dependencies ?? [],
+    dependenciesByFile: prepared.dependenciesByFile,
   };
 }
 
-function getPreparedTransform(
+async function getPreparedTransform(
   context: LoaderContext<MacroTransformLoaderOptions>,
   source: string,
   implementation: MacroTransformImplementation,
   options: MacroTransformOptions,
 ): Promise<PreparedTransform> {
-  const compilation = (
-    context as LoaderContext<MacroTransformLoaderOptions> & {
-      _compilation?: object;
-    }
-  )._compilation;
+  const compilation = (context as any)._compilation as object | undefined;
   if (!compilation) {
-    return prepareTransform(
+    const cache = await createProjectCache(context.resourcePath, source);
+    return preparedTransformFor(
+      cache,
       context.resourcePath,
       source,
       implementation,
       options,
+      readEnvironment(),
     );
   }
 
-  let cache = transformsByCompilation.get(compilation);
-  if (!cache) {
-    cache = new Map();
-    transformsByCompilation.set(compilation, cache);
-  }
-  const sourceHash = createHash('sha256').update(source).digest('hex');
-  const key = `${implementation}\0${context.resourcePath}\0${sourceHash}\0${JSON.stringify(options)}`;
-  let prepared = cache.get(key);
-  if (!prepared) {
-    prepared = prepareTransform(
-      context.resourcePath,
-      source,
-      implementation,
-      options,
-    );
-    cache.set(key, prepared);
-  }
-  return prepared;
+  const compilationState = compilerCache(context);
+  const projectCache = await projectCacheFor(
+    compilationState,
+    context.resourcePath,
+    source,
+    compilation,
+  );
+  return preparedTransformFor(
+    projectCache,
+    context.resourcePath,
+    source,
+    implementation,
+    options,
+    compilationState.environment,
+  );
 }
 
 function parseSourceMap(map: object | string): object {
@@ -222,8 +533,35 @@ function mergeMeta(
   meta[CONF_TS_MACRO_TRANSFORM_META] = {
     project: prepared.project,
     transformDependencies: prepared.dependencies,
+    transformDependenciesByFile: prepared.dependenciesByFile,
   };
   return meta;
+}
+
+function hasConfTsConfigLoader(
+  context: LoaderContext<MacroTransformLoaderOptions>,
+): boolean {
+  return (context.loaders ?? []).some(loader => {
+    const options = loader.options;
+    return (
+      options !== null &&
+      typeof options === 'object' &&
+      (options as Record<string, unknown>).confTsConfigLoader === true
+    );
+  });
+}
+
+function registerGraphDependencies(
+  context: LoaderContext<MacroTransformLoaderOptions>,
+  project: MacroProjectSnapshot,
+): void {
+  const compilation = (context as any)._compilation;
+  for (const dependency of project.dependencies) {
+    compilation?.fileDependencies?.add(dependency);
+  }
+  for (const dependency of project.missingDependencies ?? []) {
+    compilation?.missingDependencies?.add(dependency);
+  }
 }
 
 export default async function (
@@ -236,13 +574,22 @@ export default async function (
   const callback = this.async();
   try {
     const loaderOptions = this.getOptions();
-    const transformOptions = loaderOptions.transformOptions ?? {};
+    const requestedOptions = loaderOptions.transformOptions ?? {};
+    if (!mightContainMacroImport(source) && !hasConfTsConfigLoader(this)) {
+      callback(null, source, inputSourceMap as any, inputMeta as any);
+      return;
+    }
+    const transformOptions: MacroTransformOptions = {
+      ...requestedOptions,
+      sourceMap: requestedOptions.sourceMap ?? this.sourceMap === true,
+    };
     const prepared = await getPreparedTransform(
       this,
       source,
       loaderOptions.implementation,
       transformOptions,
     );
+    registerGraphDependencies(this, prepared.project);
     for (const dependency of prepared.dependencies) {
       this.addDependency(dependency);
     }

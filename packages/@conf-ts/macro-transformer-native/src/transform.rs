@@ -70,11 +70,24 @@ pub struct TransformInput {
   pub project: Option<ProjectSnapshot>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TransformProjectInput {
+  pub project: ProjectSnapshot,
+  pub files: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformOutput {
   pub code: String,
   pub map: Option<serde_json::Value>,
+  pub dependencies: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformProjectOutput {
+  pub transformed: HashMap<String, TransformOutput>,
   pub dependencies: Vec<String>,
 }
 
@@ -258,7 +271,9 @@ fn const_initializer_by_name<'a>(
         || identifier.name.as_str() == name,
         |symbol| identifier.symbol_id.get() == Some(symbol),
       );
-      matches_binding.then_some(declarator.init.as_ref()).flatten()
+      matches_binding
+        .then_some(declarator.init.as_ref())
+        .flatten()
     })
   }
 
@@ -647,21 +662,51 @@ fn normalize_replacements(mut replacements: Vec<Replacement>) -> Vec<Replacement
 }
 
 fn apply_replacements(source: &str, replacements: Vec<Replacement>) -> String {
-  let mut replacements = normalize_replacements(replacements);
-  replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.start));
-  let mut output = source.to_string();
+  let replacements = normalize_replacements(replacements);
+  let additional: usize = replacements
+    .iter()
+    .map(|replacement| {
+      replacement
+        .source
+        .len()
+        .saturating_sub(replacement.end - replacement.start)
+    })
+    .sum();
+  let mut output = String::with_capacity(source.len() + additional);
+  let mut cursor = 0;
   for replacement in replacements {
-    output.replace_range(replacement.start..replacement.end, &replacement.source);
+    output.push_str(&source[cursor..replacement.start]);
+    output.push_str(&replacement.source);
+    cursor = replacement.end;
   }
+  output.push_str(&source[cursor..]);
   output
 }
 
-fn line_column(source: &str, offset: usize) -> (u32, u32) {
-  let prefix = &source[..offset.min(source.len())];
-  let line = prefix.bytes().filter(|value| *value == b'\n').count() as u32;
-  let line_start = prefix.rfind('\n').map_or(0, |value| value + 1);
-  let column = prefix[line_start..].encode_utf16().count() as u32;
-  (line, column)
+struct Utf16LineIndex {
+  starts: Vec<usize>,
+}
+
+impl Utf16LineIndex {
+  fn new(source: &str) -> Self {
+    let mut starts = vec![0];
+    for (index, value) in source.bytes().enumerate() {
+      if value == b'\n' {
+        starts.push(index + 1);
+      }
+    }
+    Self { starts }
+  }
+
+  fn line_column(&self, source: &str, offset: usize) -> (u32, u32) {
+    let offset = offset.min(source.len());
+    let line = match self.starts.binary_search(&offset) {
+      Ok(index) => index,
+      Err(index) => index.saturating_sub(1),
+    };
+    let column = source[self.starts[line]..offset].encode_utf16().count();
+    (line as u32, column as u32)
+  }
 }
 
 fn add_segment_mappings(
@@ -720,9 +765,11 @@ fn apply_replacements_with_map(
   let mut builder = oxc_sourcemap::SourceMapBuilder::default();
   builder.set_file(filename);
   let source_id = builder.set_source_and_content(filename, source);
+  let generated_lines = Utf16LineIndex::new(&output);
+  let original_lines = Utf16LineIndex::new(source);
   for (generated, original) in points {
-    let (generated_line, generated_column) = line_column(&output, generated);
-    let (original_line, original_column) = line_column(source, original);
+    let (generated_line, generated_column) = generated_lines.line_column(&output, generated);
+    let (original_line, original_column) = original_lines.line_column(source, original);
     builder.add_token(
       generated_line,
       generated_column,
@@ -743,34 +790,126 @@ fn apply_replacements_with_map(
   Ok((output, map))
 }
 
-pub fn transform_source(
-  input: TransformInput,
-  mut options: TransformOptions,
+fn transform_context(
+  filename: &str,
+  source: &str,
+  entry: &FileContext,
+  eval_ctx: &mut EvalContext,
+  evaluation_options: &CompileOptions,
+  source_map: bool,
 ) -> Result<TransformOutput, ConfTSError> {
+  eval_ctx.evaluated_files.clear();
+  if let Some(state) = &eval_ctx.transform_state {
+    *state.borrow_mut() = TransformState::default();
+  }
+  *core_state(eval_ctx).fatal_error.borrow_mut() = None;
+
+  let mut calls = EvaluateMacroCalls {
+    file_ctx: entry,
+    eval_ctx,
+    options: evaluation_options,
+    skipped_macro: false,
+    fatal_error: None,
+  };
+  calls.visit_program(entry.program());
+  if let Some(error) = calls.fatal_error {
+    return Err(error);
+  }
+  let skipped_macro = calls.skipped_macro;
+
+  let state = eval_ctx
+    .transform_state
+    .as_ref()
+    .expect("replacement state should exist");
+  let mut replacements = state
+    .borrow_mut()
+    .replacements
+    .remove(filename)
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(start, end, source)| Replacement {
+      start: start as usize,
+      end: end as usize,
+      source,
+    })
+    .collect::<Vec<_>>();
+  if !skipped_macro {
+    replacements.extend(import_replacements(entry));
+  }
+
+  let (code, map) = if source_map {
+    let (code, map) = apply_replacements_with_map(filename, source, replacements)?;
+    (code, Some(map))
+  } else {
+    (apply_replacements(source, replacements), None)
+  };
+  let mut dependencies: Vec<String> = eval_ctx.evaluated_files.iter().cloned().collect();
+  dependencies.push(filename.to_string());
+  dependencies.sort();
+  dependencies.dedup();
+  Ok(TransformOutput {
+    code,
+    map,
+    dependencies,
+  })
+}
+
+pub fn transform_project(
+  input: TransformProjectInput,
+  mut options: TransformOptions,
+) -> Result<TransformProjectOutput, ConfTSError> {
   if options.inherit_process_env {
     let explicit = options.env.clone();
     options.env = std::env::vars().collect();
     options.env.extend(explicit);
   }
 
-  let mut snapshot = input.project.unwrap_or_default();
-  snapshot
+  let snapshot = input.project;
+  let mut targets = input
     .files
-    .insert(input.filename.clone(), input.code.clone());
+    .unwrap_or_else(|| snapshot.files.keys().cloned().collect());
+  targets.sort();
+  targets.dedup();
+  for filename in &targets {
+    if !snapshot.files.contains_key(filename) {
+      return Err(ConfTSError::new(
+        format!("Source file is missing from macro project: {}", filename),
+        filename,
+        1,
+        1,
+      ));
+    }
+  }
+  targets.retain(|filename| {
+    snapshot
+      .files
+      .get(filename)
+      .is_some_and(|source| source.contains(MACRO_MODULE) || source.contains('\\'))
+  });
+  if targets.is_empty() {
+    return Ok(TransformProjectOutput {
+      transformed: HashMap::new(),
+      dependencies: Vec::new(),
+    });
+  }
+
   let contexts = build_file_contexts(&snapshot.files)?;
-  let entry = contexts.get(&input.filename).cloned().ok_or_else(|| {
-    ConfTSError::new(
-      format!("Entry file not found: {}", input.filename),
-      &input.filename,
-      1,
-      1,
-    )
-  })?;
 
   let bindings: HashMap<String, MacroBindings> = contexts
     .iter()
     .map(|(filename, context)| (filename.clone(), macro_bindings(context.program())))
     .collect();
+  targets.retain(|filename| {
+    bindings
+      .get(filename)
+      .is_some_and(|value| !value.named.is_empty() || !value.namespaces.is_empty())
+  });
+  if targets.is_empty() {
+    return Ok(TransformProjectOutput {
+      transformed: HashMap::new(),
+      dependencies: Vec::new(),
+    });
+  }
 
   let mut eval_ctx = EvalContext::new();
   eval_ctx.file_contexts = contexts.clone();
@@ -780,8 +919,14 @@ pub fn transform_source(
     .compiler_options
     .clone()
     .and_then(|value| serde_json::from_value::<TsCompilerOptions>(value).ok());
+  let resolution_memo: RefCell<HashMap<(String, String), Option<String>>> =
+    RefCell::new(HashMap::new());
   eval_ctx.resolver = Some(Box::new(move |specifier, from_file| {
-    resolutions
+    let key = (from_file.to_string(), specifier.to_string());
+    if let Some(value) = resolution_memo.borrow().get(&key) {
+      return value.clone();
+    }
+    let resolved = resolutions
       .get(from_file)
       .and_then(|table| table.get(specifier))
       .cloned()
@@ -792,7 +937,9 @@ pub fn transform_source(
           &files,
           compiler_options.as_ref(),
         )
-      })
+      });
+    resolution_memo.borrow_mut().insert(key, resolved.clone());
+    resolved
   }));
   eval_ctx.macro_evaluator = Some(macro_evaluator);
   eval_ctx.transform_state = Some(Rc::new(RefCell::new(TransformState::default())));
@@ -818,55 +965,71 @@ pub fn transform_source(
     );
   }
 
-  let mut calls = EvaluateMacroCalls {
-    file_ctx: &entry,
-    eval_ctx: &mut eval_ctx,
-    options: &evaluation_options,
-    skipped_macro: false,
-    fatal_error: None,
-  };
-  calls.visit_program(entry.program());
-  if let Some(error) = calls.fatal_error {
-    return Err(error);
-  }
-  let skipped_macro = calls.skipped_macro;
-
-  let state = eval_ctx
-    .transform_state
-    .as_ref()
-    .expect("replacement state should exist");
-  let mut replacements = state
-    .borrow_mut()
-    .replacements
-    .remove(&input.filename)
-    .unwrap_or_default()
-    .into_iter()
-    .map(|(start, end, source)| Replacement {
-      start: start as usize,
-      end: end as usize,
+  let mut transformed = HashMap::new();
+  let mut dependencies = Vec::new();
+  for filename in targets {
+    let entry = contexts
+      .get(&filename)
+      .expect("validated transform target should have a context");
+    let source = snapshot
+      .files
+      .get(&filename)
+      .expect("validated transform target should have source");
+    let result = transform_context(
+      &filename,
       source,
-    })
-    .collect::<Vec<_>>();
-  if !skipped_macro {
-    replacements.extend(import_replacements(&entry));
+      entry,
+      &mut eval_ctx,
+      &evaluation_options,
+      options.source_map,
+    )?;
+    dependencies.extend(result.dependencies.iter().cloned());
+    transformed.insert(filename, result);
   }
-
-  let (code, map) = if options.source_map {
-    let (code, map) = apply_replacements_with_map(&input.filename, &input.code, replacements)?;
-    (code, Some(map))
-  } else {
-    (apply_replacements(&input.code, replacements), None)
-  };
-
-  let mut dependencies: Vec<String> = eval_ctx.evaluated_files.into_iter().collect();
-  dependencies.extend(snapshot.dependencies);
-  dependencies.push(input.filename);
   dependencies.sort();
   dependencies.dedup();
-
-  Ok(TransformOutput {
-    code,
-    map,
+  Ok(TransformProjectOutput {
+    transformed,
     dependencies,
   })
+}
+
+pub fn transform_source(
+  input: TransformInput,
+  options: TransformOptions,
+) -> Result<TransformOutput, ConfTSError> {
+  let mut snapshot = input.project.unwrap_or_default();
+  snapshot
+    .files
+    .insert(input.filename.clone(), input.code.clone());
+  let legacy_dependencies = snapshot.dependencies.clone();
+  let source_map = options.source_map;
+  let mut output = transform_project(
+    TransformProjectInput {
+      project: snapshot,
+      files: Some(vec![input.filename.clone()]),
+    },
+    options,
+  )?;
+  let mut result = output
+    .transformed
+    .remove(&input.filename)
+    .unwrap_or_else(|| {
+      let (code, map) = if source_map {
+        let (code, map) = apply_replacements_with_map(&input.filename, &input.code, Vec::new())
+          .expect("an empty replacement source map should be valid");
+        (code, Some(map))
+      } else {
+        (input.code, None)
+      };
+      TransformOutput {
+        code,
+        map,
+        dependencies: vec![input.filename.clone()],
+      }
+    });
+  result.dependencies.extend(legacy_dependencies);
+  result.dependencies.sort();
+  result.dependencies.dedup();
+  Ok(result)
 }

@@ -14,7 +14,7 @@ import {
   type SourceCompileInput,
 } from './shared';
 
-function resolveProgramOptions(inputFile: string): {
+export function resolveProgramOptions(inputFile: string): {
   tsConfigPath: string;
   compilerOptions: ts.CompilerOptions;
 } {
@@ -129,12 +129,22 @@ function createProjectCompilerHost(
   options: ts.CompilerOptions,
 ): ts.CompilerHost {
   const resolutions = input.project?.resolutions ?? {};
+  const fileNames = Object.keys(files);
+  const directories = new Set<string>();
+  for (const fileName of fileNames) {
+    let current = dirname(fileName);
+    while (!directories.has(current)) {
+      directories.add(current);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  const resolvedModules = new Map<string, ts.ResolvedModuleFull | undefined>();
   const has = (fileName: string) =>
     Object.prototype.hasOwnProperty.call(files, fileName);
   const directoryExists = (directoryName: string) =>
-    Object.keys(files).some(fileName =>
-      fileName.startsWith(`${directoryName}/`),
-    );
+    directories.has(directoryName);
   const extensionFromFileName = (fileName: string): ts.Extension => {
     if (/\.d\.ts$/i.test(fileName)) return ts.Extension.Dts;
     if (/\.[cm]?js$/i.test(fileName)) return ts.Extension.Js;
@@ -161,17 +171,28 @@ function createProjectCompilerHost(
     realpath: fileName => fileName,
     resolveModuleNames: (moduleNames, containingFile) =>
       moduleNames.map(moduleName => {
-        const resolvedFileName =
-          resolutions[containingFile]?.[moduleName] ??
-          ts.resolveModuleName(moduleName, containingFile, options, {
-            fileExists: has,
-            readFile: fileName => files[fileName],
-            directoryExists,
-            getCurrentDirectory: () => dirname(input.filename),
-            getDirectories: () => [],
-            realpath: fileName => fileName,
-            useCaseSensitiveFileNames: () => true,
-          }).resolvedModule?.resolvedFileName;
+        const cacheKey = `${containingFile}\0${moduleName}`;
+        let resolvedModule = resolvedModules.get(cacheKey);
+        if (!resolvedModules.has(cacheKey)) {
+          const recordedFileName = resolutions[containingFile]?.[moduleName];
+          resolvedModule = recordedFileName
+            ? {
+                resolvedFileName: recordedFileName,
+                extension: extensionFromFileName(recordedFileName),
+                isExternalLibraryImport: false,
+              }
+            : ts.resolveModuleName(moduleName, containingFile, options, {
+                fileExists: has,
+                readFile: fileName => files[fileName],
+                directoryExists,
+                getCurrentDirectory: () => dirname(input.filename),
+                getDirectories: () => [],
+                realpath: fileName => fileName,
+                useCaseSensitiveFileNames: () => true,
+              }).resolvedModule;
+          resolvedModules.set(cacheKey, resolvedModule);
+        }
+        const resolvedFileName = resolvedModule?.resolvedFileName;
         if (!resolvedFileName || !has(resolvedFileName)) return undefined;
         return {
           resolvedFileName,
@@ -189,10 +210,11 @@ export function createSourceProgram(input: SourceCompileInput): ts.Program {
     ...(input.project?.files ?? {}),
     [input.filename]: input.code,
   };
+  const fileNames = Object.keys(files);
   const options = projectCompilerOptions(input);
   const rootNames = Array.from(
     new Set([
-      ...Object.keys(files).filter(name => /\.[cm]?[jt]sx?$/i.test(name)),
+      ...fileNames.filter(name => /\.[cm]?[jt]sx?$/i.test(name)),
       input.filename,
     ]),
   );
