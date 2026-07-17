@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/macro-transformer-native",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Oxc-backed native source transformer for conf-ts macros.",
   "author": {
     "name": "Zhongliang Wang",
@@ -38,8 +38,8 @@
     "node": ">= 12.22.0 < 13 || >= 14.17.0 < 15 || >= 15.12.0 < 16 || >= 16.0.0"
   },
   "scripts": {
-    "build": "napi build --platform --release --no-js",
-    "build:debug": "napi build --platform --no-js",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
     "format": "prettier . -w && cargo fmt",
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm -p ../../native-bindings",

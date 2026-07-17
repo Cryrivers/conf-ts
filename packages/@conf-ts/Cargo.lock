@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "compiler_native"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "napi",
  "napi-build",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "macro_transformer_native"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "compiler_native",
  "napi",

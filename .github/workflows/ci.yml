@@ -164,7 +164,7 @@ jobs:
         run: pnpm install
 
       - name: Build
-        run: pnpm --workspace-concurrency=1 --filter @conf-ts/compiler-native --filter @conf-ts/macro-transformer-native exec napi build --platform --release --no-js ${{ matrix.settings.args }}
+        run: pnpm --workspace-concurrency=1 --filter @conf-ts/compiler-native --filter @conf-ts/macro-transformer-native exec napi build --platform --release ${{ matrix.settings.args }}
         shell: bash
 
       - name: Upload compiler artifact
