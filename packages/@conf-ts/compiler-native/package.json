@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Oxc-backed native compiler for conf-ts.",
   "author": {
     "name": "Zhongliang Wang",
