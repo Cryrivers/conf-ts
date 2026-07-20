@@ -587,5 +587,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.createMacroProjectSnapshot = nativeBinding.createMacroProjectSnapshot
+module.exports.scanReferencedModules = nativeBinding.scanReferencedModules
 module.exports.transform = nativeBinding.transform
 module.exports.transformProject = nativeBinding.transformProject

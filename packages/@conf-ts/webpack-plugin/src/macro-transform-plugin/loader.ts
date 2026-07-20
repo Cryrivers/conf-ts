@@ -33,11 +33,18 @@ interface Transformer {
   createMacroProjectSnapshot(
     entryFiles: string[],
     options?: {
+      compilerOptions?: Record<string, unknown>;
       previous?: MacroProjectSnapshot;
       overrides?: Record<string, string>;
     },
   ): MacroProjectSnapshot;
   transformProject: TransformProjectFn;
+}
+
+interface NativeTransformer extends Transformer {
+  scanReferencedModules(
+    files: Record<string, string>,
+  ): Record<string, string[]>;
 }
 
 interface PreparedTransform {
@@ -56,6 +63,7 @@ interface PreparedProject {
 }
 
 interface ProjectCache {
+  implementation: MacroTransformImplementation;
   project: MacroProjectSnapshot;
   preparedByOptions: Map<string, Promise<PreparedProject>>;
   previous?: ProjectCache;
@@ -75,6 +83,7 @@ interface CompilerCache {
 }
 
 interface PendingProjectRequest {
+  implementation: MacroTransformImplementation;
   resourcePath: string;
   source: string;
   resolve: (cache: ProjectCache) => void;
@@ -83,6 +92,7 @@ interface PendingProjectRequest {
 }
 
 interface PendingProjectGroup {
+  implementation: MacroTransformImplementation;
   compilation: CompilationState & object;
   previous?: ProjectCache;
   requests: PendingProjectRequest[];
@@ -130,21 +140,50 @@ function mightContainMacroImport(source: string): boolean {
 function loadTransformer(
   implementation: MacroTransformImplementation,
 ): Transformer {
-  const typescript = require('@conf-ts/macro-transformer') as Transformer;
   if (implementation === 'typescript') {
-    return typescript;
+    return require('@conf-ts/macro-transformer') as Transformer;
   }
 
   // Intentionally no fallback: choosing the native plugin is an explicit
   // request for the native Oxc-backed transformer.
-  const native = require('@conf-ts/macro-transformer-native') as Pick<
-    Transformer,
-    'transformProject'
-  >;
+  const native =
+    require('@conf-ts/macro-transformer-native') as NativeTransformer;
   return {
-    createMacroProjectSnapshot: typescript.createMacroProjectSnapshot,
+    createMacroProjectSnapshot: (entryFiles, options) => {
+      const previous = options?.previous;
+      const overrides = options?.overrides ?? {};
+      if (previous?.referencedModules) {
+        const currentReferences = native.scanReferencedModules(overrides);
+        const stable = Object.entries(currentReferences).every(
+          ([filename, references]) =>
+            Object.prototype.hasOwnProperty.call(previous.files, filename) &&
+            sameStrings(previous.referencedModules?.[filename], references),
+        );
+        if (stable) {
+          return {
+            ...previous,
+            files: { ...previous.files, ...overrides },
+            compilerOptions: {
+              ...previous.compilerOptions,
+              ...options?.compilerOptions,
+            },
+          };
+        }
+      }
+      return native.createMacroProjectSnapshot(entryFiles, {
+        compilerOptions: options?.compilerOptions,
+        overrides,
+      });
+    },
     transformProject: native.transformProject,
   };
+}
+
+function sameStrings(left: string[] | undefined, right: string[]): boolean {
+  return (
+    left?.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function transformOptionsKey(options: MacroTransformOptions): string {
@@ -344,12 +383,13 @@ function sourceChanges(
 }
 
 async function createProjectCache(
+  implementation: MacroTransformImplementation,
   entryFiles: string[],
   sources: Record<string, string>,
   compilation?: CompilationState,
   previous?: ProjectCache,
 ): Promise<ProjectCache> {
-  const transformer = loadTransformer('typescript');
+  const transformer = loadTransformer(implementation);
   let baseProject: MacroProjectSnapshot;
   let changedFiles: Set<string> | undefined;
   let structureStable = false;
@@ -383,6 +423,7 @@ async function createProjectCache(
     }
   }
   const cache: ProjectCache = {
+    implementation,
     project: baseProject,
     preparedByOptions: new Map(),
     previous,
@@ -453,26 +494,44 @@ function publishProjectCache(
     ]) {
       if (
         !nextFiles.has(filename) &&
-        compiler.projectsByFile.get(filename) === previous
+        compiler.projectsByFile.get(
+          projectCacheKey(previous.implementation, filename),
+        ) === previous
       ) {
-        compiler.projectsByFile.delete(filename);
+        compiler.projectsByFile.delete(
+          projectCacheKey(previous.implementation, filename),
+        );
       }
     }
   }
   for (const filename of Object.keys(created.project.files)) {
-    compiler.projectsByFile.set(filename, created);
+    compiler.projectsByFile.set(
+      projectCacheKey(created.implementation, filename),
+      created,
+    );
   }
   for (const filename of created.project.entryFiles) {
-    compiler.projectsByFile.set(filename, created);
+    compiler.projectsByFile.set(
+      projectCacheKey(created.implementation, filename),
+      created,
+    );
   }
+}
+
+function projectCacheKey(
+  implementation: MacroTransformImplementation,
+  filename: string,
+): string {
+  return `${implementation}\0${filename}`;
 }
 
 function finishPendingRequest(
   batch: PendingCompilationBatch,
   request: PendingProjectRequest,
 ): void {
-  if (batch.pendingByFile.get(request.resourcePath) === request.promise) {
-    batch.pendingByFile.delete(request.resourcePath);
+  const key = projectCacheKey(request.implementation, request.resourcePath);
+  if (batch.pendingByFile.get(key) === request.promise) {
+    batch.pendingByFile.delete(key);
   }
 }
 
@@ -489,6 +548,7 @@ async function flushPendingGroup(
   }
   try {
     const created = await createProjectCache(
+      group.implementation,
       group.previous?.project.entryFiles ?? Array.from(new Set(entryFiles)),
       sources,
       group.compilation,
@@ -541,6 +601,7 @@ function schedulePendingBatch(
 
 function enqueueProjectCache(
   compiler: CompilerCache,
+  implementation: MacroTransformImplementation,
   resourcePath: string,
   source: string,
   compilation: CompilationState & object,
@@ -557,7 +618,8 @@ function enqueueProjectCache(
     };
     compiler.batchesByCompilation.set(compilation, batch);
   }
-  const pending = batch.pendingByFile.get(resourcePath);
+  const pendingKey = projectCacheKey(implementation, resourcePath);
+  const pending = batch.pendingByFile.get(pendingKey);
   if (pending) return pending;
 
   let resolveRequest!: (cache: ProjectCache) => void;
@@ -567,19 +629,21 @@ function enqueueProjectCache(
     rejectRequest = reject;
   });
   const request: PendingProjectRequest = {
+    implementation,
     resourcePath,
     source,
     resolve: resolveRequest,
     reject: rejectRequest,
     promise,
   };
-  batch.pendingByFile.set(resourcePath, promise);
+  batch.pendingByFile.set(pendingKey, promise);
   batch.generation++;
 
-  const groupKey = previous ?? nearestTsConfigPath(resourcePath);
+  const groupKey =
+    previous ?? `${implementation}\0${nearestTsConfigPath(resourcePath)}`;
   let group = batch.groups.get(groupKey);
   if (!group) {
-    group = { compilation, previous, requests: [] };
+    group = { implementation, compilation, previous, requests: [] };
     batch.groups.set(groupKey, group);
   }
   group.requests.push(request);
@@ -589,29 +653,32 @@ function enqueueProjectCache(
 
 async function projectCacheFor(
   cache: CompilerCache,
+  implementation: MacroTransformImplementation,
   resourcePath: string,
   source: string,
   compilation?: CompilationState,
 ): Promise<ProjectCache> {
   const compilationKey = compilation as (CompilationState & object) | undefined;
+  const cacheKey = projectCacheKey(implementation, resourcePath);
   const pending = compilationKey
     ? cache.batchesByCompilation
         .get(compilationKey)
-        ?.pendingByFile.get(resourcePath)
+        ?.pendingByFile.get(cacheKey)
     : undefined;
   if (pending) return pending;
 
-  const existing = cache.projectsByFile.get(resourcePath);
+  const existing = cache.projectsByFile.get(cacheKey);
   if (existing && (await checkSnapshotValid(compilation, existing))) {
     return existing;
   }
   if (compilationKey) {
     const queued = cache.batchesByCompilation
       .get(compilationKey)
-      ?.pendingByFile.get(resourcePath);
+      ?.pendingByFile.get(cacheKey);
     if (queued) return queued;
     return enqueueProjectCache(
       cache,
+      implementation,
       resourcePath,
       source,
       compilationKey,
@@ -619,6 +686,7 @@ async function projectCacheFor(
     );
   }
   const created = await createProjectCache(
+    implementation,
     [resourcePath],
     { [resourcePath]: source },
     undefined,
@@ -696,6 +764,7 @@ async function getPreparedTransform(
   const compilationState = compilerCache(context);
   const projectCache = await projectCacheFor(
     compilationState,
+    implementation,
     context.resourcePath,
     source,
     compilation,

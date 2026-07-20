@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -27,6 +28,7 @@ const runtimeNativeMacroTransformer =
 async function runMacroTransformLoader(options: {
   resourcePath: string;
   source: string;
+  compiler?: object;
   compilation?: object;
   implementation?: 'typescript' | 'native';
   transformOptions?: Record<string, unknown>;
@@ -38,6 +40,7 @@ async function runMacroTransformLoader(options: {
     const context = {
       resourcePath: options.resourcePath,
       sourceMap: options.sourceMap,
+      ...(options.compiler ? { _compiler: options.compiler } : {}),
       ...(options.compilation ? { _compilation: options.compilation } : {}),
       loaders:
         (options.configLoader ?? options.resourcePath.includes('.conf.'))
@@ -69,6 +72,60 @@ describe('loader generated file path interpolation', () => {
     expect(packageJson.exports).toHaveProperty(
       './macro-transform-plugin/native',
     );
+  });
+
+  it('does not load TypeScript or the JS transformer on the native loader path', () => {
+    const loaderPath = path.resolve(
+      __dirname,
+      '../dist/cjs/macro-transform-plugin/loader.js',
+    );
+    const script = String.raw`
+      const fs = require('node:fs');
+      const os = require('node:os');
+      const path = require('node:path');
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-native-load-'));
+      const filename = path.join(root, 'entry.ts');
+      const source = "import { String } from '@conf-ts/macro'; export default String(42);";
+      fs.writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { module: 'esnext' } }));
+      fs.writeFileSync(filename, source);
+      const imported = require(${JSON.stringify(loaderPath)});
+      const loader = imported.default || imported;
+      const context = {
+        resourcePath: filename,
+        sourceMap: false,
+        loaders: [],
+        cacheable() {},
+        addDependency() {},
+        getOptions() { return { implementation: 'native', transformOptions: {} }; },
+        async() {
+          return (error, code) => {
+            try {
+              if (error) throw error;
+              if (!code.includes('"42"')) throw new Error('native transform did not run');
+              const loaded = Object.keys(require.cache).map(value => value.split(path.sep).join('/'));
+              const forbidden = loaded.filter(value =>
+                value.includes('/typescript/lib/typescript.js') ||
+                value.includes('/@conf-ts/macro-transformer/dist/')
+              );
+              if (forbidden.length) throw new Error('unexpected JS transformer modules: ' + forbidden.join(', '));
+            } finally {
+              fs.rmSync(root, { recursive: true, force: true });
+            }
+          };
+        },
+      };
+      Promise.resolve(loader.call(context, source)).catch(error => {
+        fs.rmSync(root, { recursive: true, force: true });
+        throw error;
+      });
+    `;
+
+    expect(() =>
+      execFileSync(process.execPath, ['-e', script], {
+        cwd: path.resolve(__dirname, '..'),
+        stdio: 'pipe',
+      }),
+    ).not.toThrow();
   });
 
   it('keeps string extensionToRemove behavior', () => {
@@ -405,6 +462,228 @@ describe('loader generated file path interpolation', () => {
     }
   });
 
+  it('isolates native and TypeScript project caches in one compilation', async () => {
+    const context = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'conf-ts-implementation-cache-'),
+    );
+    const entry = path.join(context, 'entry.conf.ts');
+    const source =
+      "import { String } from '@conf-ts/macro'; export default String(42);";
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { moduleResolution: 'bundler' } }),
+    );
+    fs.writeFileSync(entry, source);
+
+    const compiler = {};
+    const compilation = {};
+    const typescriptSnapshot = vi.spyOn(
+      runtimeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    const nativeSnapshot = vi.spyOn(
+      runtimeNativeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    try {
+      const [typescript, native] = await Promise.all([
+        runMacroTransformLoader({
+          resourcePath: entry,
+          source,
+          compiler,
+          compilation,
+          implementation: 'typescript',
+        }),
+        runMacroTransformLoader({
+          resourcePath: entry,
+          source,
+          compiler,
+          compilation,
+          implementation: 'native',
+        }),
+      ]);
+      expect(typescript.code).toContain('"42"');
+      expect(native.code).toBe(typescript.code);
+      expect(typescriptSnapshot).toHaveBeenCalledTimes(1);
+      expect(nativeSnapshot).toHaveBeenCalledTimes(1);
+      expect(typescript.meta[CONF_TS_MACRO_TRANSFORM_META].project).not.toBe(
+        native.meta[CONF_TS_MACRO_TRANSFORM_META].project,
+      );
+    } finally {
+      typescriptSnapshot.mockRestore();
+      nativeSnapshot.mockRestore();
+      fs.rmSync(context, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the native reference scanner for stable rebuilds and rescans structural changes', async () => {
+    const context = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'conf-ts-native-rebuild-'),
+    );
+    const entry = path.join(context, 'entry.conf.ts');
+    const value = path.join(context, 'value.ts');
+    const added = path.join(context, 'added.ts');
+    const entrySource = [
+      "import { String } from '@conf-ts/macro';",
+      "import { value } from './value';",
+      'export default String(value);',
+    ].join('\n');
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { module: 'esnext', moduleResolution: 'bundler' },
+      }),
+    );
+    fs.writeFileSync(entry, entrySource);
+    fs.writeFileSync(value, 'export const value = 1;');
+
+    const fileSystemInfo = {
+      createSnapshot: (...args: any[]) => args[args.length - 1](null, {}),
+      checkSnapshotValid: (_snapshot: object, callback: Function) =>
+        callback(null, false),
+    };
+    const compiler = {};
+    const createSnapshot = vi.spyOn(
+      runtimeNativeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    const scan = vi.spyOn(
+      runtimeNativeMacroTransformer,
+      'scanReferencedModules',
+    );
+    try {
+      const initial = await runMacroTransformLoader({
+        resourcePath: entry,
+        source: entrySource,
+        compiler,
+        compilation: { fileSystemInfo },
+        implementation: 'native',
+      });
+      const initialProject = initial.meta[CONF_TS_MACRO_TRANSFORM_META].project;
+      expect(initial.code).toContain('"1"');
+      expect(createSnapshot).toHaveBeenCalledTimes(1);
+
+      fs.writeFileSync(value, 'export const value = 2;');
+      const stable = await runMacroTransformLoader({
+        resourcePath: entry,
+        source: entrySource,
+        compiler,
+        compilation: { fileSystemInfo },
+        implementation: 'native',
+      });
+      const stableProject = stable.meta[CONF_TS_MACRO_TRANSFORM_META].project;
+      expect(stable.code).toContain('"2"');
+      expect(scan).toHaveBeenCalledTimes(1);
+      expect(createSnapshot).toHaveBeenCalledTimes(1);
+      expect(stableProject.resolutions).toBe(initialProject.resolutions);
+
+      const structuralSource = [
+        "import { String } from '@conf-ts/macro';",
+        "import { added } from './added';",
+        'export default String(added);',
+      ].join('\n');
+      fs.writeFileSync(added, 'export const added = 3;');
+      fs.writeFileSync(entry, structuralSource);
+      const structural = await runMacroTransformLoader({
+        resourcePath: entry,
+        source: structuralSource,
+        compiler,
+        compilation: { fileSystemInfo },
+        implementation: 'native',
+      });
+      expect(structural.code).toContain('"3"');
+      expect(createSnapshot).toHaveBeenCalledTimes(2);
+      expect(
+        structural.meta[CONF_TS_MACRO_TRANSFORM_META].project.resolutions[
+          entry
+        ]['./added'],
+      ).toBe(added);
+    } finally {
+      createSnapshot.mockRestore();
+      scan.mockRestore();
+      fs.rmSync(context, { recursive: true, force: true });
+    }
+  });
+
+  it('invalidates a native project when an extended tsconfig changes', async () => {
+    const context = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'conf-ts-native-extends-watch-'),
+    );
+    const baseConfig = path.join(context, 'tsconfig.base.json');
+    const entry = path.join(context, 'entry.conf.ts');
+    const firstValue = path.join(context, 'value-a.ts');
+    const secondValue = path.join(context, 'value-b.ts');
+    const source = [
+      "import { String } from '@conf-ts/macro';",
+      "import { value } from '@value';",
+      'export default String(value);',
+    ].join('\n');
+    const writeBaseConfig = (target: string) =>
+      fs.writeFileSync(
+        baseConfig,
+        JSON.stringify({
+          compilerOptions: {
+            baseUrl: '.',
+            paths: { '@value': [target] },
+          },
+        }),
+      );
+    writeBaseConfig('./value-a.ts');
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({
+        extends: './tsconfig.base.json',
+        compilerOptions: { moduleResolution: 'bundler' },
+      }),
+    );
+    fs.writeFileSync(entry, source);
+    fs.writeFileSync(firstValue, 'export const value = 1;');
+    fs.writeFileSync(secondValue, 'export const value = 2;');
+
+    const fileSystemInfo = {
+      createSnapshot: (...args: any[]) => args[args.length - 1](null, {}),
+      checkSnapshotValid: (_snapshot: object, callback: Function) =>
+        callback(null, false),
+    };
+    const compiler = {};
+    const createSnapshot = vi.spyOn(
+      runtimeNativeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    try {
+      const initial = await runMacroTransformLoader({
+        resourcePath: entry,
+        source,
+        compiler,
+        compilation: { fileSystemInfo },
+        implementation: 'native',
+      });
+      expect(initial.code).toContain('"1"');
+      expect(
+        initial.meta[CONF_TS_MACRO_TRANSFORM_META].project.dependencies,
+      ).toContain(baseConfig);
+
+      writeBaseConfig('./value-b.ts');
+      const rebuilt = await runMacroTransformLoader({
+        resourcePath: entry,
+        source,
+        compiler,
+        compilation: { fileSystemInfo },
+        implementation: 'native',
+      });
+      expect(rebuilt.code).toContain('"2"');
+      expect(createSnapshot).toHaveBeenCalledTimes(2);
+      expect(
+        rebuilt.meta[CONF_TS_MACRO_TRANSFORM_META].project.resolutions[entry][
+          '@value'
+        ],
+      ).toBe(secondValue);
+    } finally {
+      createSnapshot.mockRestore();
+      fs.rmSync(context, { recursive: true, force: true });
+    }
+  });
+
   it('batches sibling entry files by their nearest tsconfig', async () => {
     const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-siblings-'));
     const leftRoot = path.join(context, 'left');
@@ -608,14 +887,11 @@ describe('loader generated file path interpolation', () => {
         'export const load = name => import(`./configs/${name}.conf.js`);',
       );
 
-      const snapshot = vi.spyOn(
-        runtimeMacroTransformer,
-        'createMacroProjectSnapshot',
-      );
       const transformer =
         implementation === 'native'
           ? runtimeNativeMacroTransformer
           : runtimeMacroTransformer;
+      const snapshot = vi.spyOn(transformer, 'createMacroProjectSnapshot');
       const transform = vi.spyOn(transformer, 'transformProject');
       const Plugin =
         implementation === 'native'

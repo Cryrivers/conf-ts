@@ -40,6 +40,7 @@
     "build": "pnpm run build:cjs",
     "build:cjs": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.cjs.json",
     "test": "vitest run",
+    "bench:compare": "pnpm build && node benchmark/large-project.cjs",
     "bench:large": "pnpm build && node benchmark/large-project.cjs",
     "format": "prettier --write ."
   },

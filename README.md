@@ -459,12 +459,13 @@ Object.assign(
 );
 ```
 
-`transformProject` is also exported by `@conf-ts/macro-transformer-native`
-with the same input and result shape. Its `transformed` record is sparse, and
-each file reports only itself and files actually used during macro evaluation.
-The existing single-file `transform` API remains compatible and continues to
-report the complete snapshot dependency set. The compiler only receives
-ordinary TypeScript and never expands macros.
+`createMacroProjectSnapshot`, `transformProject`, and `transform` are also
+exported by `@conf-ts/macro-transformer-native` with the same project and result
+shapes. The native snapshot builder scans and resolves the TypeScript project
+in Rust, so native-only callers do not need to load the TypeScript transformer.
+Its `transformed` record is sparse, and each file reports only itself and files
+actually used during macro evaluation. The compiler only receives ordinary
+TypeScript and never expands macros.
 
 ## Webpack plugin
 
@@ -513,9 +514,20 @@ With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-nativ
 
 Use `NativeMacroTransformPlugin` instead when the native Oxc-backed transformer is
 installed. It intentionally does not fall back to the TypeScript transformer.
+Its project graph scan, module resolution, incremental reference check, and
+macro transformation all run in Rust; the TypeScript transformer is not loaded
+by the native plugin path.
 The same plugins are available from
 `@conf-ts/webpack-plugin/macro-transform-plugin/typescript` and
 `@conf-ts/webpack-plugin/macro-transform-plugin/native`.
+
+Run `pnpm --filter @conf-ts/webpack-plugin bench:compare` to compare the
+TypeScript and native implementations. The benchmark reports module-level
+module loading, project snapshot, macro transform, compiler, macro pipeline, and
+full snapshot-to-output pipeline timings, followed by overall webpack cold/watch
+results for the JavaScript compiler, native compiler, and batched context-module
+scenarios. Each comparison includes the native/TypeScript ratio and
+TypeScript-over-native speedup.
 
 ## Supported config TypeScript
 

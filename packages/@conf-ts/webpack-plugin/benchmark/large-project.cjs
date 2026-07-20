@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { performance } = require('perf_hooks');
 const webpack = require('webpack');
 
@@ -17,10 +18,66 @@ const MEASUREMENTS = 5;
 // is much slower than the shared macro project. One measured rebuild is enough
 // for the 1.30x guard while keeping this manual benchmark practical.
 const CONTEXT_MEASUREMENTS = 1;
+const STAGE_MEASUREMENTS = 5;
 
 function median(values) {
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.floor(sorted.length / 2)];
+}
+
+function comparisonRow(typescript, native) {
+  return {
+    typescriptMs: Number(typescript.toFixed(2)),
+    nativeMs: Number(native.toFixed(2)),
+    nativeVsTs: Number((native / typescript).toFixed(3)),
+    tsOverNative: Number((typescript / native).toFixed(2)),
+  };
+}
+
+function printComparison(title, rows) {
+  console.log(`\n${title}`);
+  console.table(
+    Object.fromEntries(
+      Object.entries(rows).map(([name, values]) => [
+        name,
+        comparisonRow(values.typescript, values.native),
+      ]),
+    ),
+  );
+}
+
+function moduleLoadMedian(moduleName) {
+  const resolved = require.resolve(moduleName);
+  const script = [
+    "const { performance } = require('node:perf_hooks');",
+    'const started = performance.now();',
+    'require(process.argv[1]);',
+    'process.stdout.write(String(performance.now() - started));',
+  ].join('');
+  const measurements = [];
+  for (let index = 0; index <= STAGE_MEASUREMENTS; index++) {
+    const elapsed = Number(
+      execFileSync(process.execPath, ['-e', script, resolved], {
+        encoding: 'utf8',
+      }),
+    );
+    if (index > 0) measurements.push(elapsed);
+  }
+  return median(measurements);
+}
+
+function projectWithTransforms(project, batch) {
+  const files = { ...project.files };
+  for (const [filename, result] of Object.entries(batch.transformed)) {
+    files[filename] = result.code;
+  }
+  return { ...project, files };
+}
+
+function compileProject(compiler, project, entryFile) {
+  return compiler.compileInMemory(project.files, entryFile, 'json', {
+    compilerOptions: project.compilerOptions,
+  });
 }
 
 function writeFixture(root, macro) {
@@ -108,7 +165,7 @@ function writeContextFixture(root, macro) {
   );
 }
 
-function compilerFor(root, implementation) {
+function compilerForWithCompiler(root, implementation, compiler) {
   const macroPlugin =
     implementation === 'typescript'
       ? new TypeScriptMacroTransformPlugin()
@@ -126,13 +183,21 @@ function compilerFor(root, implementation) {
     plugins: [
       ...(macroPlugin ? [macroPlugin] : []),
       new ConfTsWebpackPlugin({
-        compiler: 'js',
+        compiler,
         extensionToRemove: '.conf.js',
         test: /\.conf\.js$/,
         useWorkers: false,
       }),
     ],
   });
+}
+
+function compilerFor(root, implementation) {
+  return compilerForWithCompiler(root, implementation, 'js');
+}
+
+function nativePipelineCompilerFor(root, implementation) {
+  return compilerForWithCompiler(root, implementation, 'native');
 }
 
 function contextCompilerFor(root, implementation) {
@@ -194,6 +259,18 @@ async function coldMeasurement(
   }
 }
 
+async function withTypeScriptSnapshotOnNativePath(run) {
+  const typescript = require('@conf-ts/macro-transformer');
+  const native = require('@conf-ts/macro-transformer-native');
+  const original = native.createMacroProjectSnapshot;
+  native.createMacroProjectSnapshot = typescript.createMacroProjectSnapshot;
+  try {
+    return await run();
+  } finally {
+    native.createMacroProjectSnapshot = original;
+  }
+}
+
 async function verifySingleAnalysis(
   root,
   implementation,
@@ -202,11 +279,12 @@ async function verifySingleAnalysis(
   const typescript = require('@conf-ts/macro-transformer');
   const native = require('@conf-ts/macro-transformer-native');
   const transformer = implementation === 'native' ? native : typescript;
-  const originalSnapshot = typescript.createMacroProjectSnapshot;
+  const snapshotTransformer = implementation === 'native' ? native : typescript;
+  const originalSnapshot = snapshotTransformer.createMacroProjectSnapshot;
   const originalBatch = transformer.transformProject;
   let snapshots = 0;
   let batches = 0;
-  typescript.createMacroProjectSnapshot = (...args) => {
+  snapshotTransformer.createMacroProjectSnapshot = (...args) => {
     snapshots++;
     return originalSnapshot(...args);
   };
@@ -219,7 +297,7 @@ async function verifySingleAnalysis(
     await runCompiler(compiler);
   } finally {
     await closeCompiler(compiler);
-    typescript.createMacroProjectSnapshot = originalSnapshot;
+    snapshotTransformer.createMacroProjectSnapshot = originalSnapshot;
     transformer.transformProject = originalBatch;
   }
   if (snapshots !== 1 || batches !== 1) {
@@ -227,6 +305,125 @@ async function verifySingleAnalysis(
       `${implementation}: expected one snapshot and one batch, got ${snapshots}/${batches}`,
     );
   }
+}
+
+function transformerStageMeasurements(entryFile) {
+  const typescript = require('@conf-ts/macro-transformer');
+  const native = require('@conf-ts/macro-transformer-native');
+  const compilerTypescript = require('@conf-ts/compiler');
+  const compilerNative = require('@conf-ts/compiler-native');
+  const transformers = { typescript, native };
+  const compilers = {
+    typescript: compilerTypescript,
+    native: compilerNative,
+  };
+  const measurements = {
+    macroModuleLoad: {
+      typescript: moduleLoadMedian('@conf-ts/macro-transformer'),
+      native: moduleLoadMedian('@conf-ts/macro-transformer-native'),
+    },
+    compilerModuleLoad: {
+      typescript: moduleLoadMedian('@conf-ts/compiler'),
+      native: moduleLoadMedian('@conf-ts/compiler-native'),
+    },
+    snapshot: { typescript: [], native: [] },
+    macroTransform: { typescript: [], native: [] },
+    compile: { typescript: [], native: [] },
+    macroPipeline: { typescript: [], native: [] },
+    fullPipeline: { typescript: [], native: [] },
+  };
+  const warmProjects = {
+    typescript: typescript.createMacroProjectSnapshot([entryFile]),
+    native: native.createMacroProjectSnapshot([entryFile]),
+  };
+  const warmTypeScriptTransform = typescript.transformProject({
+    project: warmProjects.typescript,
+  });
+  const warmNativeTransform = native.transformProject({
+    project: warmProjects.native,
+  });
+  const typeScriptTargets = Object.keys(
+    warmTypeScriptTransform.transformed,
+  ).sort();
+  const nativeTargets = Object.keys(warmNativeTransform.transformed).sort();
+  if (JSON.stringify(typeScriptTargets) !== JSON.stringify(nativeTargets)) {
+    throw new Error(
+      `macro transform workloads differ: TypeScript transformed ${typeScriptTargets.length} files, native transformed ${nativeTargets.length}`,
+    );
+  }
+  const ordinaryProject = projectWithTransforms(
+    warmProjects.native,
+    warmNativeTransform,
+  );
+  compilerTypescript.compileInMemory(ordinaryProject.files, entryFile, 'json', {
+    compilerOptions: ordinaryProject.compilerOptions,
+  });
+  compilerNative.compileInMemory(ordinaryProject.files, entryFile, 'json', {
+    compilerOptions: ordinaryProject.compilerOptions,
+  });
+  for (let index = 0; index < STAGE_MEASUREMENTS; index++) {
+    const order =
+      index % 2 === 0 ? ['typescript', 'native'] : ['native', 'typescript'];
+    for (const implementation of order) {
+      const transformer = transformers[implementation];
+      let started = performance.now();
+      const project = transformer.createMacroProjectSnapshot([entryFile]);
+      measurements.snapshot[implementation].push(performance.now() - started);
+
+      started = performance.now();
+      transformer.transformProject({ project });
+      measurements.macroTransform[implementation].push(
+        performance.now() - started,
+      );
+
+      started = performance.now();
+      compileProject(compilers[implementation], ordinaryProject, entryFile);
+      measurements.compile[implementation].push(performance.now() - started);
+
+      started = performance.now();
+      const pipelineProject = transformer.createMacroProjectSnapshot([
+        entryFile,
+      ]);
+      transformer.transformProject({ project: pipelineProject });
+      measurements.macroPipeline[implementation].push(
+        performance.now() - started,
+      );
+
+      started = performance.now();
+      const fullProject = transformer.createMacroProjectSnapshot([entryFile]);
+      const fullTransform = transformer.transformProject({
+        project: fullProject,
+      });
+      compileProject(
+        compilers[implementation],
+        projectWithTransforms(fullProject, fullTransform),
+        entryFile,
+      );
+      measurements.fullPipeline[implementation].push(
+        performance.now() - started,
+      );
+    }
+  }
+  const medians = Object.fromEntries(
+    Object.entries(measurements).map(([stage, values]) => [
+      stage,
+      {
+        typescript: Array.isArray(values.typescript)
+          ? median(values.typescript)
+          : values.typescript,
+        native: Array.isArray(values.native)
+          ? median(values.native)
+          : values.native,
+      },
+    ]),
+  );
+  printComparison('Module-level TypeScript vs native', medians);
+  if (medians.snapshot.native > medians.snapshot.typescript * 0.5) {
+    throw new Error(
+      `native snapshot exceeded 0.50x TypeScript snapshot (${medians.snapshot.native.toFixed(2)}ms vs ${medians.snapshot.typescript.toFixed(2)}ms)`,
+    );
+  }
+  return medians;
 }
 
 async function watchMeasurements(
@@ -274,6 +471,9 @@ async function main() {
   writeContextFixture(contextRoots.typescript, true);
   writeContextFixture(contextRoots.native, true);
   try {
+    const transformerStages = transformerStageMeasurements(
+      path.join(roots.native, 'config.conf.js'),
+    );
     await coldMeasurement(roots.baseline, 'baseline');
     await coldMeasurement(roots.typescript, 'typescript');
     await coldMeasurement(roots.native, 'native');
@@ -315,6 +515,62 @@ async function main() {
           `${implementation} exceeded 1.30x baseline (cold ${coldRatio.toFixed(2)}x, watch ${watchRatio.toFixed(2)}x)`,
         );
       }
+    }
+
+    const nativePipelineCold = {
+      typescriptImplementation: [],
+      typescriptSnapshot: [],
+      rustSnapshot: [],
+    };
+    for (let index = 0; index < MEASUREMENTS; index++) {
+      nativePipelineCold.typescriptImplementation.push(
+        await coldMeasurement(
+          roots.typescript,
+          'typescript',
+          nativePipelineCompilerFor,
+        ),
+      );
+      nativePipelineCold.typescriptSnapshot.push(
+        await withTypeScriptSnapshotOnNativePath(() =>
+          coldMeasurement(roots.native, 'native', nativePipelineCompilerFor),
+        ),
+      );
+      nativePipelineCold.rustSnapshot.push(
+        await coldMeasurement(
+          roots.native,
+          'native',
+          nativePipelineCompilerFor,
+        ),
+      );
+    }
+    const nativePipeline = {
+      coldTypeScript: median(nativePipelineCold.typescriptImplementation),
+      coldNative: median(nativePipelineCold.rustSnapshot),
+      coldTypeScriptSnapshot: median(nativePipelineCold.typescriptSnapshot),
+      coldRustSnapshot: median(nativePipelineCold.rustSnapshot),
+      watchTypeScript: await watchMeasurements(
+        roots.typescript,
+        'typescript',
+        nativePipelineCompilerFor,
+      ),
+      watchTypeScriptSnapshot: await withTypeScriptSnapshotOnNativePath(() =>
+        watchMeasurements(roots.native, 'native', nativePipelineCompilerFor),
+      ),
+      watchRustSnapshot: await watchMeasurements(
+        roots.native,
+        'native',
+        nativePipelineCompilerFor,
+      ),
+    };
+    console.table({ nativePipeline });
+    const nativeColdRatio =
+      nativePipeline.coldRustSnapshot / nativePipeline.coldTypeScriptSnapshot;
+    const nativeWatchRatio =
+      nativePipeline.watchRustSnapshot / nativePipeline.watchTypeScriptSnapshot;
+    if (nativeColdRatio > 1.1 || nativeWatchRatio > 1.1) {
+      throw new Error(
+        `Rust snapshot regressed the native-only pipeline by more than 10% (cold ${nativeColdRatio.toFixed(2)}x, watch ${nativeWatchRatio.toFixed(2)}x)`,
+      );
     }
 
     await coldMeasurement(
@@ -396,6 +652,35 @@ async function main() {
         );
       }
     }
+
+    printComparison('Overall TypeScript vs native', {
+      'snapshot + transform': transformerStages.macroPipeline,
+      'snapshot + transform + compile': transformerStages.fullPipeline,
+      'webpack cold / JS compiler': {
+        typescript: coldMedians.typescript,
+        native: coldMedians.native,
+      },
+      'webpack watch / JS compiler': {
+        typescript: watchMedians.typescript,
+        native: watchMedians.native,
+      },
+      'webpack cold / native compiler': {
+        typescript: nativePipeline.coldTypeScript,
+        native: nativePipeline.coldNative,
+      },
+      'webpack watch / native compiler': {
+        typescript: nativePipeline.watchTypeScript,
+        native: nativePipeline.watchRustSnapshot,
+      },
+      'context cold / JS compiler': {
+        typescript: contextColdMedians.typescript,
+        native: contextColdMedians.native,
+      },
+      'context watch / JS compiler': {
+        typescript: contextWatchMedians.typescript,
+        native: contextWatchMedians.native,
+      },
+    });
   } finally {
     fs.rmSync(temporaryRoot, { force: true, recursive: true });
   }
