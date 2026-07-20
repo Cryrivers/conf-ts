@@ -581,27 +581,33 @@ export function createMacroProjectSnapshot(
   const missingDependencies = new Set<string>();
   let compilerOptions: ts.CompilerOptions | undefined;
 
-  const groups = new Map<
-    string,
-    { entries: string[]; options: ts.CompilerOptions }
-  >();
+  const groups = new Map<string, { entries: string[] }>();
   for (const entryFile of normalizedEntries) {
-    const resolved = resolveProgramOptions(entryFile);
-    const group = groups.get(resolved.tsConfigPath);
+    // Finding the nearest config is cheap compared with parsing it. Context
+    // modules can contribute hundreds of sibling entries under the same
+    // tsconfig, so defer resolveProgramOptions until the group is scanned.
+    // This keeps a multi-entry snapshot to one config parse per project.
+    // Fall through to resolveProgramOptions only to preserve its public error
+    // and source location when no config exists.
+    const tsConfigPath =
+      ts.findConfigFile(entryFile, ts.sys.fileExists) ??
+      resolveProgramOptions(entryFile).tsConfigPath;
+    const group = groups.get(tsConfigPath);
     if (group) group.entries.push(entryFile);
     else {
-      groups.set(resolved.tsConfigPath, {
+      groups.set(tsConfigPath, {
         entries: [entryFile],
-        options: resolved.compilerOptions,
       });
     }
   }
 
   for (const [tsConfigPath, group] of groups) {
+    const resolved = resolveProgramOptions(group.entries[0]);
+    const groupOptions = resolved.compilerOptions;
     dependencies.add(tsConfigPath);
-    compilerOptions ??= group.options;
+    compilerOptions ??= groupOptions;
     const scanOptions: ts.CompilerOptions = {
-      ...group.options,
+      ...groupOptions,
       noLib: true,
       types: [],
     };
@@ -642,7 +648,7 @@ export function createMacroProjectSnapshot(
     const moduleResolutionCache = ts.createModuleResolutionCache(
       dirname(tsConfigPath),
       fileName => fileName,
-      group.options,
+      groupOptions,
     );
     for (const sourceFile of program.getSourceFiles()) {
       if (sourceFile.isDeclarationFile) continue;
@@ -654,7 +660,7 @@ export function createMacroProjectSnapshot(
         const resolvedModule = ts.resolveModuleName(
           moduleName,
           sourceFile.fileName,
-          group.options,
+          groupOptions,
           resolutionHost,
           moduleResolutionCache,
         ).resolvedModule;

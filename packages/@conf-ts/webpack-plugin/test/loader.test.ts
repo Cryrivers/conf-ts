@@ -21,11 +21,14 @@ import compileTask from '../src/worker';
 
 const runtimeMacroTransformer =
   require('@conf-ts/macro-transformer') as typeof import('@conf-ts/macro-transformer');
+const runtimeNativeMacroTransformer =
+  require('@conf-ts/macro-transformer-native') as typeof import('@conf-ts/macro-transformer-native');
 
 async function runMacroTransformLoader(options: {
   resourcePath: string;
   source: string;
   compilation?: object;
+  implementation?: 'typescript' | 'native';
   transformOptions?: Record<string, unknown>;
   configLoader?: boolean;
   sourceMap?: boolean;
@@ -43,7 +46,7 @@ async function runMacroTransformLoader(options: {
       cacheable: vi.fn(),
       addDependency: (dependency: string) => dependencies.push(dependency),
       getOptions: () => ({
-        implementation: 'typescript',
+        implementation: options.implementation ?? 'typescript',
         transformOptions: options.transformOptions ?? {},
       }),
       async: () => (error: Error | null, code: string, map: any, meta: any) => {
@@ -402,6 +405,265 @@ describe('loader generated file path interpolation', () => {
     }
   });
 
+  it('batches sibling entry files by their nearest tsconfig', async () => {
+    const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-siblings-'));
+    const leftRoot = path.join(context, 'left');
+    const rightRoot = path.join(context, 'right');
+    fs.mkdirSync(leftRoot);
+    fs.mkdirSync(rightRoot);
+    const left = path.join(leftRoot, 'left.conf.ts');
+    const right = path.join(rightRoot, 'right.conf.ts');
+    const leftSource =
+      "import { String } from '@conf-ts/macro'; export default String(1);";
+    const rightSource =
+      "import { String } from '@conf-ts/macro'; export default String(2);";
+    for (const root of [leftRoot, rightRoot]) {
+      fs.writeFileSync(
+        path.join(root, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: { module: 'esnext', moduleResolution: 'bundler' },
+        }),
+      );
+    }
+    fs.writeFileSync(left, leftSource);
+    fs.writeFileSync(right, rightSource);
+
+    const snapshot = vi.spyOn(
+      runtimeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    try {
+      const compilation = {};
+      const [leftResult, rightResult] = await Promise.all([
+        runMacroTransformLoader({
+          resourcePath: left,
+          source: leftSource,
+          compilation,
+        }),
+        runMacroTransformLoader({
+          resourcePath: right,
+          source: rightSource,
+          compilation,
+        }),
+      ]);
+      expect(leftResult.code).toContain('"1"');
+      expect(rightResult.code).toContain('"2"');
+      expect(snapshot).toHaveBeenCalledTimes(2);
+      expect(snapshot.mock.calls.map(([entries]) => entries)).toEqual(
+        expect.arrayContaining([[left], [right]]),
+      );
+    } finally {
+      snapshot.mockRestore();
+      fs.rmSync(context, { force: true, recursive: true });
+    }
+  });
+
+  it('isolates a failed snapshot group from valid sibling groups', async () => {
+    const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-failure-'));
+    const validRoot = path.join(context, 'valid');
+    const invalidRoot = path.join(context, 'invalid');
+    fs.mkdirSync(validRoot);
+    fs.mkdirSync(invalidRoot);
+    fs.writeFileSync(
+      path.join(validRoot, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { module: 'esnext' } }),
+    );
+    const source =
+      "import { String } from '@conf-ts/macro'; export default String(42);";
+    const valid = path.join(validRoot, 'valid.conf.ts');
+    const invalid = path.join(invalidRoot, 'invalid.conf.ts');
+    fs.writeFileSync(valid, source);
+    fs.writeFileSync(invalid, source);
+
+    try {
+      const compilation = {};
+      const [validResult, invalidResult] = await Promise.allSettled([
+        runMacroTransformLoader({
+          resourcePath: valid,
+          source,
+          compilation,
+        }),
+        runMacroTransformLoader({
+          resourcePath: invalid,
+          source,
+          compilation,
+        }),
+      ]);
+      expect(validResult.status).toBe('fulfilled');
+      if (validResult.status === 'fulfilled') {
+        expect(validResult.value.code).toContain('"42"');
+      }
+      expect(invalidResult.status).toBe('rejected');
+      if (invalidResult.status === 'rejected') {
+        expect(invalidResult.reason).toMatchObject({
+          message: 'Could not find a tsconfig.json file.',
+        });
+      }
+      fs.writeFileSync(
+        path.join(invalidRoot, 'tsconfig.json'),
+        JSON.stringify({ compilerOptions: { module: 'esnext' } }),
+      );
+      const retried = await runMacroTransformLoader({
+        resourcePath: invalid,
+        source,
+        compilation,
+      });
+      expect(retried.code).toContain('"42"');
+    } finally {
+      fs.rmSync(context, { force: true, recursive: true });
+    }
+  });
+
+  it('registers a shared project graph once per compilation', async () => {
+    const context = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-ts-deps-'));
+    const first = path.join(context, 'first.conf.ts');
+    const second = path.join(context, 'second.conf.ts');
+    const firstSource =
+      "import { String } from '@conf-ts/macro'; export default String(1);";
+    const secondSource =
+      "import { String } from '@conf-ts/macro'; export default String(2);";
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { module: 'esnext' } }),
+    );
+    fs.writeFileSync(first, firstSource);
+    fs.writeFileSync(second, secondSource);
+    const added: string[] = [];
+    const compilation = {
+      fileDependencies: { add: (dependency: string) => added.push(dependency) },
+      missingDependencies: { add: vi.fn() },
+    };
+
+    try {
+      await Promise.all([
+        runMacroTransformLoader({
+          resourcePath: first,
+          source: firstSource,
+          compilation,
+        }),
+        runMacroTransformLoader({
+          resourcePath: second,
+          source: secondSource,
+          compilation,
+        }),
+      ]);
+      expect(added).toContain(first);
+      expect(added).toContain(second);
+      expect(added).toContain(path.join(context, 'tsconfig.json'));
+      expect(added).toHaveLength(new Set(added).size);
+    } finally {
+      fs.rmSync(context, { force: true, recursive: true });
+    }
+  });
+
+  it.each(['typescript', 'native'] as const)(
+    'batches a dynamic context into one %s project snapshot',
+    async implementation => {
+      const builtPlugin = require('../dist/cjs/index.js') as {
+        NativeMacroTransformPlugin: typeof NativeMacroTransformPlugin;
+        TypeScriptMacroTransformPlugin: typeof TypeScriptMacroTransformPlugin;
+      };
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), `conf-ts-context-${implementation}-`),
+      );
+      const configs = path.join(context, 'configs');
+      const output = path.join(context, 'dist');
+      fs.mkdirSync(configs);
+      fs.writeFileSync(
+        path.join(context, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: {
+            allowJs: true,
+            module: 'esnext',
+            moduleResolution: 'bundler',
+          },
+        }),
+      );
+      const sharedExports: string[] = [];
+      for (let index = 0; index < 40; index++) {
+        fs.writeFileSync(
+          path.join(context, `value-${index}.js`),
+          `export const value${index} = ${index};`,
+        );
+        sharedExports.push(
+          `export { value${index} } from './value-${index}.js';`,
+        );
+      }
+      fs.writeFileSync(
+        path.join(context, 'shared.js'),
+        sharedExports.join('\n'),
+      );
+      for (let index = 0; index < 120; index++) {
+        fs.writeFileSync(
+          path.join(configs, `config-${index}.conf.js`),
+          [
+            "import { String } from '@conf-ts/macro';",
+            "import { value0 } from '../shared.js';",
+            `export default String(value0 + ${index});`,
+          ].join('\n'),
+        );
+      }
+      fs.writeFileSync(
+        path.join(context, 'index.js'),
+        'export const load = name => import(`./configs/${name}.conf.js`);',
+      );
+
+      const snapshot = vi.spyOn(
+        runtimeMacroTransformer,
+        'createMacroProjectSnapshot',
+      );
+      const transformer =
+        implementation === 'native'
+          ? runtimeNativeMacroTransformer
+          : runtimeMacroTransformer;
+      const transform = vi.spyOn(transformer, 'transformProject');
+      const Plugin =
+        implementation === 'native'
+          ? builtPlugin.NativeMacroTransformPlugin
+          : builtPlugin.TypeScriptMacroTransformPlugin;
+      const compiler = webpack({
+        context,
+        mode: 'production',
+        devtool: false,
+        cache: false,
+        parallelism: 256,
+        entry: './index.js',
+        optimization: { minimize: false },
+        output: { path: output, filename: 'bundle.js' },
+        plugins: [new Plugin({ test: /\.conf\.js$/ })],
+      });
+
+      try {
+        const stats = await new Promise<webpack.Stats>((resolve, reject) => {
+          compiler.run((error, result) => {
+            if (error) reject(error);
+            else if (!result) reject(new Error('Webpack returned no stats'));
+            else resolve(result);
+          });
+        });
+        if (stats.hasErrors()) {
+          throw new Error(stats.toString({ all: false, errors: true }));
+        }
+        const bundled = fs
+          .readdirSync(output)
+          .filter(filename => filename.endsWith('.js'))
+          .map(filename => fs.readFileSync(path.join(output, filename), 'utf8'))
+          .join('\n');
+        expect(bundled).not.toContain('@conf-ts/macro');
+        expect(bundled).toContain('"119"');
+        expect(snapshot).toHaveBeenCalledTimes(1);
+        expect(snapshot.mock.calls[0][0]).toHaveLength(120);
+        expect(transform).toHaveBeenCalledTimes(1);
+      } finally {
+        await new Promise<void>(resolve => compiler.close(() => resolve()));
+        snapshot.mockRestore();
+        transform.mockRestore();
+        fs.rmSync(context, { force: true, recursive: true });
+      }
+    },
+    20_000,
+  );
+
   it('runs the native macro pre-transform before ordinary compilation', async () => {
     const builtPlugin = require('../dist/cjs/index.js') as {
       ConfTsWebpackPlugin: typeof ConfTsWebpackPlugin;
@@ -529,6 +791,137 @@ describe('loader generated file path interpolation', () => {
       expect(fs.statSync(generated).mtimeMs).toBe(unchangedMtime);
     } finally {
       await new Promise<void>(resolve => compiler.close(() => resolve()));
+      fs.rmSync(context, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps a batched context correct across content and structural rebuilds', async () => {
+    const builtPlugin = require('../dist/cjs/index.js') as {
+      TypeScriptMacroTransformPlugin: typeof TypeScriptMacroTransformPlugin;
+    };
+    const context = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'conf-ts-context-rebuild-'),
+    );
+    const configs = path.join(context, 'configs');
+    const output = path.join(context, 'dist');
+    const shared = path.join(context, 'shared.ts');
+    const added = path.join(context, 'added.ts');
+    fs.mkdirSync(configs);
+    fs.writeFileSync(
+      path.join(context, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          module: 'esnext',
+          moduleResolution: 'bundler',
+        },
+      }),
+    );
+    fs.writeFileSync(shared, 'export const shared = 1;');
+    const configPaths = Array.from({ length: 3 }, (_, index) => {
+      const filename = path.join(configs, `config-${index}.conf.ts`);
+      fs.writeFileSync(
+        filename,
+        [
+          "import { String } from '@conf-ts/macro';",
+          "import { shared } from '../shared';",
+          `export default String(shared + ${index});`,
+        ].join('\n'),
+      );
+      return filename;
+    });
+    fs.writeFileSync(
+      path.join(context, 'index.ts'),
+      'export const load = name => import(`./configs/${name}.conf.ts`);',
+    );
+
+    const snapshot = vi.spyOn(
+      runtimeMacroTransformer,
+      'createMacroProjectSnapshot',
+    );
+    const transform = vi.spyOn(runtimeMacroTransformer, 'transformProject');
+    const compiler = webpack({
+      context,
+      mode: 'production',
+      devtool: false,
+      cache: false,
+      parallelism: 32,
+      entry: './index.ts',
+      optimization: { minimize: false },
+      resolve: { extensions: ['.ts', '.js'] },
+      output: { path: output, filename: 'bundle.js' },
+      plugins: [
+        new builtPlugin.TypeScriptMacroTransformPlugin({
+          test: /\.conf\.ts$/,
+        }),
+      ],
+    });
+    const run = () =>
+      new Promise<webpack.Stats>((resolve, reject) => {
+        compiler.run((error, stats) => {
+          if (error) reject(error);
+          else if (!stats) reject(new Error('Webpack returned no stats'));
+          else if (stats.hasErrors()) {
+            reject(new Error(stats.toString({ all: false, errors: true })));
+          } else resolve(stats);
+        });
+      });
+    const bundled = () =>
+      fs
+        .readdirSync(output)
+        .filter(filename => filename.endsWith('.js'))
+        .map(filename => fs.readFileSync(path.join(output, filename), 'utf8'))
+        .join('\n');
+
+    try {
+      await run();
+      const initialProjects = snapshot.mock.calls.length;
+      expect(initialProjects).toBeGreaterThan(0);
+      expect(initialProjects).toBeLessThanOrEqual(3);
+      expect(transform).toHaveBeenCalledTimes(initialProjects);
+
+      fs.writeFileSync(shared, 'export const shared = 2;');
+      await run();
+      expect(bundled()).toContain('"2"');
+      expect(bundled()).toContain('"3"');
+      expect(bundled()).toContain('"4"');
+      expect(snapshot).toHaveBeenCalledTimes(initialProjects * 2);
+      expect(transform).toHaveBeenCalledTimes(initialProjects * 2);
+
+      fs.writeFileSync(added, 'export const added = 40;');
+      fs.writeFileSync(
+        configPaths[0],
+        [
+          "import { String } from '@conf-ts/macro';",
+          "import { added } from '../added';",
+          'export default String(added + 2);',
+        ].join('\n'),
+      );
+      await run();
+      expect(bundled()).toContain('"42"');
+      expect(snapshot).toHaveBeenCalledTimes(initialProjects * 2 + 1);
+      expect(transform).toHaveBeenCalledTimes(initialProjects * 2 + 1);
+
+      fs.writeFileSync(
+        configPaths[0],
+        [
+          "import { String } from '@conf-ts/macro';",
+          "import { shared } from '../shared';",
+          'export default String(shared);',
+        ].join('\n'),
+      );
+      fs.rmSync(added);
+      await run();
+      expect(bundled()).not.toContain('"42"');
+      expect(snapshot).toHaveBeenCalledTimes(initialProjects * 2 + 2);
+      expect(transform).toHaveBeenCalledTimes(initialProjects * 2 + 2);
+
+      await run();
+      expect(snapshot).toHaveBeenCalledTimes(initialProjects * 2 + 2);
+      expect(transform).toHaveBeenCalledTimes(initialProjects * 2 + 2);
+    } finally {
+      await new Promise<void>(resolve => compiler.close(() => resolve()));
+      snapshot.mockRestore();
+      transform.mockRestore();
       fs.rmSync(context, { force: true, recursive: true });
     }
   });

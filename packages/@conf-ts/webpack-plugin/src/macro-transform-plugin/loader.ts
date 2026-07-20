@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import type {
   MacroProjectSnapshot,
   MacroTransformOptions,
@@ -43,6 +44,7 @@ interface PreparedTransform {
   code: string;
   map: RawSourceMap | null;
   project: MacroProjectSnapshot;
+  cache: ProjectCache;
   dependencies: string[];
   dependenciesByFile: Record<string, string[]>;
 }
@@ -61,13 +63,37 @@ interface ProjectCache {
   structureStable: boolean;
   snapshot?: object;
   validatedCompilation?: object;
+  validationByCompilation: WeakMap<object, Promise<boolean>>;
+  registeredCompilations: WeakSet<object>;
   dependencyContents: Map<string, string | undefined>;
 }
 
 interface CompilerCache {
   environment: Record<string, string>;
   projectsByFile: Map<string, ProjectCache>;
-  inFlight?: Promise<ProjectCache>;
+  batchesByCompilation: WeakMap<object, PendingCompilationBatch>;
+}
+
+interface PendingProjectRequest {
+  resourcePath: string;
+  source: string;
+  resolve: (cache: ProjectCache) => void;
+  reject: (error: Error) => void;
+  promise: Promise<ProjectCache>;
+}
+
+interface PendingProjectGroup {
+  compilation: CompilationState & object;
+  previous?: ProjectCache;
+  requests: PendingProjectRequest[];
+}
+
+interface PendingCompilationBatch {
+  groups: Map<ProjectCache | string, PendingProjectGroup>;
+  pendingByFile: Map<string, Promise<ProjectCache>>;
+  scheduled: boolean;
+  generation: number;
+  activeGroups: number;
 }
 
 interface FileSystemInfoLike {
@@ -265,7 +291,10 @@ function checkSnapshotValid(
     project.validatedCompilation = compilation;
     return Promise.resolve(true);
   }
-  return new Promise((resolve, reject) => {
+  const compilationKey = compilation as CompilationState & object;
+  const existing = project.validationByCompilation.get(compilationKey);
+  if (existing) return existing;
+  const validation = new Promise<boolean>((resolve, reject) => {
     fileSystemInfo.checkSnapshotValid(
       snapshot,
       (error: Error | null, valid?: boolean) => {
@@ -277,19 +306,25 @@ function checkSnapshotValid(
       },
     );
   });
+  project.validationByCompilation.set(compilationKey, validation);
+  const clearValidation = () => {
+    if (project.validationByCompilation.get(compilationKey) === validation) {
+      project.validationByCompilation.delete(compilationKey);
+    }
+  };
+  void validation.then(clearValidation, clearValidation);
+  return validation;
 }
 
 function sourceChanges(
   previousCache: ProjectCache,
-  resourcePath: string,
-  source: string,
+  sources: Record<string, string>,
 ): { overrides: Record<string, string>; requiresFullScan: boolean } {
   const previous = previousCache.project;
   const overrides: Record<string, string> = {};
   let requiresFullScan = false;
   for (const [filename, oldSource] of Object.entries(previous.files)) {
-    const current =
-      filename === resourcePath ? source : readOptionalFile(filename);
+    const current = sources[filename] ?? readOptionalFile(filename);
     if (current === undefined) {
       requiresFullScan = true;
     } else if (current !== oldSource) {
@@ -309,8 +344,8 @@ function sourceChanges(
 }
 
 async function createProjectCache(
-  resourcePath: string,
-  source: string,
+  entryFiles: string[],
+  sources: Record<string, string>,
   compilation?: CompilationState,
   previous?: ProjectCache,
 ): Promise<ProjectCache> {
@@ -319,7 +354,7 @@ async function createProjectCache(
   let changedFiles: Set<string> | undefined;
   let structureStable = false;
   if (previous) {
-    const changes = sourceChanges(previous, resourcePath, source);
+    const changes = sourceChanges(previous, sources);
     if (!changes.requiresFullScan) {
       baseProject = transformer.createMacroProjectSnapshot(
         previous.project.entryFiles,
@@ -331,16 +366,21 @@ async function createProjectCache(
     } else {
       baseProject = transformer.createMacroProjectSnapshot(
         previous.project.entryFiles,
+        { overrides: sources },
       );
     }
   } else {
-    baseProject = transformer.createMacroProjectSnapshot([resourcePath]);
+    baseProject = transformer.createMacroProjectSnapshot(entryFiles, {
+      overrides: sources,
+    });
   }
-  const sourceProject = projectWithSource(baseProject, resourcePath, source);
-  if (sourceProject !== baseProject) {
-    baseProject = sourceProject;
-    changedFiles ??= new Set();
-    changedFiles.add(resourcePath);
+  for (const [resourcePath, source] of Object.entries(sources)) {
+    const sourceProject = projectWithSource(baseProject, resourcePath, source);
+    if (sourceProject !== baseProject) {
+      baseProject = sourceProject;
+      changedFiles ??= new Set();
+      changedFiles.add(resourcePath);
+    }
   }
   const cache: ProjectCache = {
     project: baseProject,
@@ -349,6 +389,8 @@ async function createProjectCache(
     changedFiles,
     structureStable,
     validatedCompilation: compilation,
+    validationByCompilation: new WeakMap(),
+    registeredCompilations: new WeakSet(),
     dependencyContents: new Map(),
   };
   for (const dependency of baseProject.dependencies) {
@@ -369,6 +411,7 @@ function compilerCache(
     return {
       environment: environmentForCompiler(undefined),
       projectsByFile: new Map(),
+      batchesByCompilation: new WeakMap(),
     };
   }
   let cache = cachesByOwner.get(owner);
@@ -376,10 +419,172 @@ function compilerCache(
     cache = {
       environment: environmentForCompiler(compiler),
       projectsByFile: new Map(),
+      batchesByCompilation: new WeakMap(),
     };
     cachesByOwner.set(owner, cache);
   }
   return cache;
+}
+
+function nearestTsConfigPath(resourcePath: string): string {
+  let directory = path.dirname(resourcePath);
+  while (true) {
+    const candidate = path.join(directory, 'tsconfig.json');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(directory);
+    if (parent === directory) return `\0no-tsconfig:${directory}`;
+    directory = parent;
+  }
+}
+
+function publishProjectCache(
+  compiler: CompilerCache,
+  created: ProjectCache,
+  previous: ProjectCache | undefined,
+): void {
+  if (previous) {
+    const nextFiles = new Set([
+      ...Object.keys(created.project.files),
+      ...created.project.entryFiles,
+    ]);
+    for (const filename of [
+      ...Object.keys(previous.project.files),
+      ...previous.project.entryFiles,
+    ]) {
+      if (
+        !nextFiles.has(filename) &&
+        compiler.projectsByFile.get(filename) === previous
+      ) {
+        compiler.projectsByFile.delete(filename);
+      }
+    }
+  }
+  for (const filename of Object.keys(created.project.files)) {
+    compiler.projectsByFile.set(filename, created);
+  }
+  for (const filename of created.project.entryFiles) {
+    compiler.projectsByFile.set(filename, created);
+  }
+}
+
+function finishPendingRequest(
+  batch: PendingCompilationBatch,
+  request: PendingProjectRequest,
+): void {
+  if (batch.pendingByFile.get(request.resourcePath) === request.promise) {
+    batch.pendingByFile.delete(request.resourcePath);
+  }
+}
+
+async function flushPendingGroup(
+  compiler: CompilerCache,
+  batch: PendingCompilationBatch,
+  group: PendingProjectGroup,
+): Promise<void> {
+  const sources: Record<string, string> = {};
+  const entryFiles: string[] = [];
+  for (const request of group.requests) {
+    sources[request.resourcePath] = request.source;
+    entryFiles.push(request.resourcePath);
+  }
+  try {
+    const created = await createProjectCache(
+      group.previous?.project.entryFiles ?? Array.from(new Set(entryFiles)),
+      sources,
+      group.compilation,
+      group.previous,
+    );
+    publishProjectCache(compiler, created, group.previous);
+    for (const request of group.requests) request.resolve(created);
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    for (const request of group.requests) request.reject(failure);
+  } finally {
+    for (const request of group.requests) finishPendingRequest(batch, request);
+  }
+}
+
+function schedulePendingBatch(
+  compiler: CompilerCache,
+  compilation: CompilationState & object,
+  batch: PendingCompilationBatch,
+): void {
+  if (batch.scheduled) return;
+  batch.scheduled = true;
+  const scheduledGeneration = batch.generation;
+  setImmediate(() => {
+    if (batch.generation !== scheduledGeneration) {
+      batch.scheduled = false;
+      schedulePendingBatch(compiler, compilation, batch);
+      return;
+    }
+    batch.scheduled = false;
+    const groups = Array.from(batch.groups.values());
+    batch.groups.clear();
+    batch.activeGroups += groups.length;
+    void Promise.all(
+      groups.map(group => flushPendingGroup(compiler, batch, group)),
+    ).then(() => {
+      batch.activeGroups -= groups.length;
+      if (batch.groups.size > 0) {
+        schedulePendingBatch(compiler, compilation, batch);
+      } else if (
+        batch.activeGroups === 0 &&
+        batch.pendingByFile.size === 0 &&
+        compiler.batchesByCompilation.get(compilation) === batch
+      ) {
+        compiler.batchesByCompilation.delete(compilation);
+      }
+    });
+  });
+}
+
+function enqueueProjectCache(
+  compiler: CompilerCache,
+  resourcePath: string,
+  source: string,
+  compilation: CompilationState & object,
+  previous: ProjectCache | undefined,
+): Promise<ProjectCache> {
+  let batch = compiler.batchesByCompilation.get(compilation);
+  if (!batch) {
+    batch = {
+      groups: new Map(),
+      pendingByFile: new Map(),
+      scheduled: false,
+      generation: 0,
+      activeGroups: 0,
+    };
+    compiler.batchesByCompilation.set(compilation, batch);
+  }
+  const pending = batch.pendingByFile.get(resourcePath);
+  if (pending) return pending;
+
+  let resolveRequest!: (cache: ProjectCache) => void;
+  let rejectRequest!: (error: Error) => void;
+  const promise = new Promise<ProjectCache>((resolve, reject) => {
+    resolveRequest = resolve;
+    rejectRequest = reject;
+  });
+  const request: PendingProjectRequest = {
+    resourcePath,
+    source,
+    resolve: resolveRequest,
+    reject: rejectRequest,
+    promise,
+  };
+  batch.pendingByFile.set(resourcePath, promise);
+  batch.generation++;
+
+  const groupKey = previous ?? nearestTsConfigPath(resourcePath);
+  let group = batch.groups.get(groupKey);
+  if (!group) {
+    group = { compilation, previous, requests: [] };
+    batch.groups.set(groupKey, group);
+  }
+  group.requests.push(request);
+  schedulePendingBatch(compiler, compilation, batch);
+  return promise;
 }
 
 async function projectCacheFor(
@@ -388,34 +593,39 @@ async function projectCacheFor(
   source: string,
   compilation?: CompilationState,
 ): Promise<ProjectCache> {
-  let existing = cache.projectsByFile.get(resourcePath);
+  const compilationKey = compilation as (CompilationState & object) | undefined;
+  const pending = compilationKey
+    ? cache.batchesByCompilation
+        .get(compilationKey)
+        ?.pendingByFile.get(resourcePath)
+    : undefined;
+  if (pending) return pending;
+
+  const existing = cache.projectsByFile.get(resourcePath);
   if (existing && (await checkSnapshotValid(compilation, existing))) {
     return existing;
   }
-  if (cache.inFlight) {
-    await cache.inFlight;
-    existing = cache.projectsByFile.get(resourcePath);
-    if (existing && (await checkSnapshotValid(compilation, existing))) {
-      return existing;
-    }
+  if (compilationKey) {
+    const queued = cache.batchesByCompilation
+      .get(compilationKey)
+      ?.pendingByFile.get(resourcePath);
+    if (queued) return queued;
+    return enqueueProjectCache(
+      cache,
+      resourcePath,
+      source,
+      compilationKey,
+      existing,
+    );
   }
-  const pending = createProjectCache(
-    resourcePath,
-    source,
-    compilation,
+  const created = await createProjectCache(
+    [resourcePath],
+    { [resourcePath]: source },
+    undefined,
     existing,
   );
-  cache.inFlight = pending;
-  try {
-    const created = await pending;
-    for (const filename of Object.keys(created.project.files)) {
-      cache.projectsByFile.set(filename, created);
-    }
-    cache.projectsByFile.set(resourcePath, created);
-    return created;
-  } finally {
-    if (cache.inFlight === pending) cache.inFlight = undefined;
-  }
+  publishProjectCache(cache, created, existing);
+  return created;
 }
 
 function preparedProjectFor(
@@ -440,6 +650,11 @@ function preparedProjectFor(
       prepareProject(cache, key, implementation, options, environment, project),
     );
     cache.preparedByOptions.set(key, prepared);
+    void prepared.then(undefined, () => {
+      if (cache.preparedByOptions.get(key) === prepared) {
+        cache.preparedByOptions.delete(key);
+      }
+    });
   }
   return prepared;
 }
@@ -465,6 +680,7 @@ async function preparedTransformFor(
     code: result?.code ?? source,
     map: result?.map ?? null,
     project: prepared.project,
+    cache,
     dependencies: result?.dependencies ?? [],
     dependenciesByFile: prepared.dependenciesByFile,
   };
@@ -546,15 +762,17 @@ function hasConfTsConfigLoader(
 
 function registerGraphDependencies(
   context: LoaderContext<MacroTransformLoaderOptions>,
-  project: MacroProjectSnapshot,
+  cache: ProjectCache,
 ): void {
   const compilation = currentCompilation(context);
-  for (const dependency of project.dependencies) {
+  if (!compilation || cache.registeredCompilations.has(compilation)) return;
+  for (const dependency of cache.project.dependencies) {
     compilation?.fileDependencies?.add(dependency);
   }
-  for (const dependency of project.missingDependencies ?? []) {
+  for (const dependency of cache.project.missingDependencies ?? []) {
     compilation?.missingDependencies?.add(dependency);
   }
+  cache.registeredCompilations.add(compilation);
 }
 
 export default async function (
@@ -582,7 +800,7 @@ export default async function (
       loaderOptions.implementation,
       transformOptions,
     );
-    registerGraphDependencies(this, prepared.project);
+    registerGraphDependencies(this, prepared.cache);
     for (const dependency of prepared.dependencies) {
       this.addDependency(dependency);
     }

@@ -12,6 +12,9 @@
     "url": "https://github.com/Cryrivers/conf-ts"
   },
   "main": "dist/cjs/index.js",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/cjs/index.d.ts",
