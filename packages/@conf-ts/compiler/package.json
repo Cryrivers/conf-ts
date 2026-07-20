@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "description": "Compiler for conf-ts.",
   "author": {
     "name": "Zhongliang Wang",

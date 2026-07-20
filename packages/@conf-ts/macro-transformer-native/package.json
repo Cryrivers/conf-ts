@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/macro-transformer-native",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "description": "Oxc-backed native source transformer for conf-ts macros.",
   "author": {
     "name": "Zhongliang Wang",
