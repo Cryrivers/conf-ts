@@ -115,6 +115,23 @@ function trimRight(value: string): string {
   return value.replace(/\s+$/u, '');
 }
 
+function isUnarySymbolOperator(
+  token: OutputToken,
+  previous?: OutputToken,
+): boolean {
+  if (token.value === '!' || token.value === '~') {
+    return true;
+  }
+  if (token.value !== '+' && token.value !== '-') {
+    return false;
+  }
+  return (
+    !previous ||
+    previous.kind === 'operator' ||
+    ['(', '[', '{', ',', ':', '?'].includes(previous.value)
+  );
+}
+
 function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
   let output = '';
   for (let i = 0; i < tokens.length; i++) {
@@ -127,11 +144,13 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
         output = trimRight(output) + value;
         continue;
       }
-      if (
-        value === '...' ||
-        (['+', '-', '!', '~'].includes(value) && !previous)
-      ) {
+      if (value === '...') {
         output = trimRight(output) + value;
+      } else if (isUnarySymbolOperator(token, previous)) {
+        if ((value === '+' || value === '-') && output.endsWith(value)) {
+          output += ' ';
+        }
+        output += value;
       } else if (['typeof', 'void', 'delete'].includes(value)) {
         if (output && !/\s$/u.test(output)) {
           output += ' ';
