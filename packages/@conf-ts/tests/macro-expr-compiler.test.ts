@@ -74,6 +74,18 @@ describe('Expr Macro', () => {
     expect(expression(source)({ label: "it's" })).toBe(true);
   });
 
+  it('should render nested unary operators without extra whitespace', () => {
+    expect(rewriteContextExpression('!ctx.a && !ctx.b', 'ctx')).toBe(
+      '!a && !b',
+    );
+    expect(
+      rewriteContextExpression('(!ctx.a || ~ctx.b) ? -ctx.c : +ctx.d', 'ctx'),
+    ).toBe('(!a || ~b) ? -c : +d');
+    expect(rewriteContextExpression('- -ctx.a + + +ctx.b', 'ctx')).toBe(
+      '- -a + + +b',
+    );
+  });
+
   it('should compact formatting whitespace without changing literal whitespace', () => {
     assertMacroOutput('expr-compact');
   });
