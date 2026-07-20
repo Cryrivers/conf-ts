@@ -836,7 +836,7 @@ describe('loader generated file path interpolation', () => {
   });
 
   it.each(['typescript', 'native'] as const)(
-    'batches a dynamic context into one %s project snapshot',
+    'batches a dynamic context into bounded %s project snapshots',
     async implementation => {
       const builtPlugin = require('../dist/cjs/index.js') as {
         NativeMacroTransformPlugin: typeof NativeMacroTransformPlugin;
@@ -872,15 +872,18 @@ describe('loader generated file path interpolation', () => {
         path.join(context, 'shared.js'),
         sharedExports.join('\n'),
       );
+      const configPaths: string[] = [];
       for (let index = 0; index < 120; index++) {
+        const configPath = path.join(configs, `config-${index}.conf.js`);
         fs.writeFileSync(
-          path.join(configs, `config-${index}.conf.js`),
+          configPath,
           [
             "import { String } from '@conf-ts/macro';",
             "import { value0 } from '../shared.js';",
             `export default String(value0 + ${index});`,
           ].join('\n'),
         );
+        configPaths.push(fs.realpathSync(configPath));
       }
       fs.writeFileSync(
         path.join(context, 'index.js'),
@@ -927,9 +930,14 @@ describe('loader generated file path interpolation', () => {
           .join('\n');
         expect(bundled).not.toContain('@conf-ts/macro');
         expect(bundled).toContain('"119"');
-        expect(snapshot).toHaveBeenCalledTimes(1);
-        expect(snapshot.mock.calls[0][0]).toHaveLength(120);
-        expect(transform).toHaveBeenCalledTimes(1);
+        const snapshotEntries = snapshot.mock.calls.flatMap(
+          ([entries]) => entries,
+        );
+        expect(snapshot).toHaveBeenCalled();
+        expect(snapshot.mock.calls.length).toBeLessThanOrEqual(4);
+        expect(snapshotEntries).toHaveLength(configPaths.length);
+        expect(new Set(snapshotEntries)).toEqual(new Set(configPaths));
+        expect(transform).toHaveBeenCalledTimes(snapshot.mock.calls.length);
       } finally {
         await new Promise<void>(resolve => compiler.close(() => resolve()));
         snapshot.mockRestore();
