@@ -1,0 +1,9 @@
+{
+  "blockComment": "value + 1",
+  "lineComment": "value + 1",
+  "typeAssertions": "(((value)))",
+  "genericCall": "formatter.format(value)",
+  "instantiatedCall": "(formatter.format)(value)",
+  "genericTag": "formatter.tag `value=${value}`",
+  "templateLiteral": "`raw /* preserved text */:${value + 1}`"
+}

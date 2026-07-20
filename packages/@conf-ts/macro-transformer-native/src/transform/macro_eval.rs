@@ -191,6 +191,9 @@ fn references_context_param(expr: &Expression, param_name: &str) -> bool {
     Expression::TSTypeAssertion(assertion) => {
       references_context_param(&assertion.expression, param_name)
     }
+    Expression::TSInstantiationExpression(instantiation) => {
+      references_context_param(&instantiation.expression, param_name)
+    }
     Expression::SequenceExpression(seq) => seq
       .expressions
       .iter()
@@ -724,17 +727,33 @@ fn compact_expression_whitespace(source: &str) -> String {
         continue;
       }
 
-      flush_space(output, &mut pending_space);
-
       if ch == '}' && stop_at_closing_brace && brace_depth == 0 {
         output.push(ch);
         *index += 1;
         return;
       }
 
+      // The token renderer used by the TypeScript implementation never
+      // emits formatting whitespace before closing punctuation, commas, or
+      // member-access dots. Comments erased immediately before one of those
+      // tokens must not leave a native-only trailing space behind.
+      if matches!(ch, ')' | ']' | '}' | ',' | '.') {
+        pending_space = false;
+      } else {
+        flush_space(output, &mut pending_space);
+      }
+
       match ch {
         '\'' | '"' => copy_quoted(chars, index, output, ch),
-        '`' => copy_template(chars, index, output),
+        '`' => {
+          if output.chars().last().is_some_and(|previous| {
+            !previous.is_whitespace()
+              && !matches!(previous, '.' | '(' | '[' | '{' | '!' | '~' | '+' | '-')
+          }) {
+            output.push(' ');
+          }
+          copy_template(chars, index, output);
+        }
         '{' => {
           output.push(ch);
           brace_depth += 1;
@@ -1110,6 +1129,38 @@ fn walk_const_children(
       }
       Ok(())
     }
+    Expression::TaggedTemplateExpression(tagged) => {
+      collect_const_replacements(
+        &tagged.tag,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      for expression in &tagged.quasi.expressions {
+        collect_const_replacements(
+          expression,
+          param_name,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )?;
+      }
+      Ok(())
+    }
+    Expression::TSInstantiationExpression(instantiation) => collect_const_replacements(
+      &instantiation.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
     Expression::ArrayExpression(arr) => {
       for elem in &arr.elements {
         match elem {
@@ -1273,6 +1324,15 @@ fn walk_const_children(
         }
         Ok(())
       }
+      ChainElement::TSNonNullExpression(ts_non_null) => collect_const_replacements(
+        &ts_non_null.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      ),
       _ => Ok(()),
     },
     Expression::TSAsExpression(ts_as) => collect_const_replacements(
@@ -1334,6 +1394,12 @@ fn collect_type_syntax_erasures(
   body_start: u32,
   replacements: &mut Vec<ExprReplacement>,
 ) {
+  let start = expr.span().start as usize - body_start as usize;
+  let end = expr.span().end as usize - body_start as usize;
+  if is_span_covered_by_prior(start, end, replacements) {
+    return;
+  }
+
   match expr {
     Expression::TSAsExpression(ts_as) => {
       replacements.push((
@@ -1394,6 +1460,13 @@ fn collect_type_syntax_erasures(
       collect_type_syntax_erasures(&member.expression, body_start, replacements);
     }
     Expression::CallExpression(call) => {
+      if let Some(type_arguments) = &call.type_arguments {
+        replacements.push((
+          type_arguments.span.start as usize - body_start as usize,
+          type_arguments.span.end as usize - body_start as usize,
+          String::new(),
+        ));
+      }
       collect_type_syntax_erasures(&call.callee, body_start, replacements);
       for argument in &call.arguments {
         if let Some(expression) = argument.as_expression() {
@@ -1410,12 +1483,27 @@ fn collect_type_syntax_erasures(
         collect_type_syntax_erasures(&member.expression, body_start, replacements);
       }
       ChainElement::CallExpression(call) => {
+        if let Some(type_arguments) = &call.type_arguments {
+          replacements.push((
+            type_arguments.span.start as usize - body_start as usize,
+            type_arguments.span.end as usize - body_start as usize,
+            String::new(),
+          ));
+        }
         collect_type_syntax_erasures(&call.callee, body_start, replacements);
         for argument in &call.arguments {
           if let Some(expression) = argument.as_expression() {
             collect_type_syntax_erasures(expression, body_start, replacements);
           }
         }
+      }
+      ChainElement::TSNonNullExpression(ts_non_null) => {
+        replacements.push((
+          ts_non_null.expression.span().end as usize - body_start as usize,
+          ts_non_null.span.end as usize - body_start as usize,
+          String::new(),
+        ));
+        collect_type_syntax_erasures(&ts_non_null.expression, body_start, replacements);
       }
       _ => {}
     },
@@ -1443,6 +1531,27 @@ fn collect_type_syntax_erasures(
         collect_type_syntax_erasures(expression, body_start, replacements);
       }
     }
+    Expression::TaggedTemplateExpression(tagged) => {
+      if let Some(type_arguments) = &tagged.type_arguments {
+        replacements.push((
+          type_arguments.span.start as usize - body_start as usize,
+          type_arguments.span.end as usize - body_start as usize,
+          String::new(),
+        ));
+      }
+      collect_type_syntax_erasures(&tagged.tag, body_start, replacements);
+      for expression in &tagged.quasi.expressions {
+        collect_type_syntax_erasures(expression, body_start, replacements);
+      }
+    }
+    Expression::TSInstantiationExpression(instantiation) => {
+      replacements.push((
+        instantiation.type_arguments.span.start as usize - body_start as usize,
+        instantiation.type_arguments.span.end as usize - body_start as usize,
+        String::new(),
+      ));
+      collect_type_syntax_erasures(&instantiation.expression, body_start, replacements);
+    }
     Expression::SequenceExpression(sequence) => {
       for expression in &sequence.expressions {
         collect_type_syntax_erasures(expression, body_start, replacements);
@@ -1456,6 +1565,24 @@ fn is_span_covered_by_prior(start: usize, end: usize, prior: &[ExprReplacement])
   prior
     .iter()
     .any(|(prior_start, prior_end, _)| *prior_start <= start && end <= *prior_end)
+}
+
+fn collect_comment_erasures(
+  file_ctx: &FileContext,
+  body_start: u32,
+  body_end: u32,
+  replacements: &mut Vec<ExprReplacement>,
+) {
+  for comment in &file_ctx.program().comments {
+    if comment.span.start < body_start || comment.span.end > body_end {
+      continue;
+    }
+    let start = comment.span.start as usize - body_start as usize;
+    let end = comment.span.end as usize - body_start as usize;
+    if !is_span_covered_by_prior(start, end, replacements) {
+      replacements.push((start, end, String::new()));
+    }
+  }
 }
 
 fn collect_string_literal_requote(
@@ -1566,6 +1693,9 @@ fn collect_string_requotes(
     Expression::TSTypeAssertion(assertion) => {
       collect_string_requotes(&assertion.expression, body_start, prior, out, quote);
     }
+    Expression::TSInstantiationExpression(instantiation) => {
+      collect_string_requotes(&instantiation.expression, body_start, prior, out, quote);
+    }
     Expression::BinaryExpression(binary) => {
       collect_string_requotes(&binary.left, body_start, prior, out, quote);
       collect_string_requotes(&binary.right, body_start, prior, out, quote);
@@ -1631,6 +1761,12 @@ fn collect_string_requotes(
     }
     Expression::TemplateLiteral(template) => {
       for expression in &template.expressions {
+        collect_string_requotes(expression, body_start, prior, out, quote);
+      }
+    }
+    Expression::TaggedTemplateExpression(tagged) => {
+      collect_string_requotes(&tagged.tag, body_start, prior, out, quote);
+      for expression in &tagged.quasi.expressions {
         collect_string_requotes(expression, body_start, prior, out, quote);
       }
     }
@@ -1761,6 +1897,12 @@ fn evaluate_expr(
     file_ctx,
   )?;
   collect_type_syntax_erasures(body_expr, body_start, &mut replacements);
+  collect_comment_erasures(
+    file_ctx,
+    body_start,
+    body_expr.span().end,
+    &mut replacements,
+  );
   let prior_replacements = replacements.clone();
   collect_string_requotes(
     body_expr,
@@ -1923,6 +2065,13 @@ fn walk_expr_children(
       }
       Ok(())
     }
+    Expression::TaggedTemplateExpression(tagged) => {
+      collect_context_replacements(&tagged.tag, param_name, body_start, replacements, file_ctx)?;
+      for expression in &tagged.quasi.expressions {
+        collect_context_replacements(expression, param_name, body_start, replacements, file_ctx)?;
+      }
+      Ok(())
+    }
     Expression::ArrayExpression(arr) => {
       for elem in &arr.elements {
         match elem {
@@ -2051,6 +2200,13 @@ fn walk_expr_children(
         }
         Ok(())
       }
+      ChainElement::TSNonNullExpression(ts_non_null) => collect_context_replacements(
+        &ts_non_null.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+      ),
       _ => Ok(()),
     },
     Expression::TSAsExpression(ts_as) => collect_context_replacements(
@@ -2076,6 +2232,13 @@ fn walk_expr_children(
     ),
     Expression::TSTypeAssertion(assertion) => collect_context_replacements(
       &assertion.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+    ),
+    Expression::TSInstantiationExpression(instantiation) => collect_context_replacements(
+      &instantiation.expression,
       param_name,
       body_start,
       replacements,
@@ -2160,10 +2323,20 @@ fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(),
       }
       Ok(())
     }
+    Expression::TaggedTemplateExpression(tagged) => {
+      validate_expr_syntax(&tagged.tag, file_ctx)?;
+      for expression in &tagged.quasi.expressions {
+        validate_expr_syntax(expression, file_ctx)?;
+      }
+      Ok(())
+    }
     Expression::TSAsExpression(ts_as) => validate_expr_syntax(&ts_as.expression, file_ctx),
     Expression::TSSatisfiesExpression(ts_sat) => validate_expr_syntax(&ts_sat.expression, file_ctx),
     Expression::TSNonNullExpression(ts_nn) => validate_expr_syntax(&ts_nn.expression, file_ctx),
     Expression::TSTypeAssertion(assertion) => validate_expr_syntax(&assertion.expression, file_ctx),
+    Expression::TSInstantiationExpression(instantiation) => {
+      validate_expr_syntax(&instantiation.expression, file_ctx)
+    }
     Expression::SequenceExpression(seq) => {
       for e in &seq.expressions {
         validate_expr_syntax(e, file_ctx)?;

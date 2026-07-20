@@ -835,6 +835,28 @@ function collectConstReplacements(
     return;
   }
 
+  // Type arguments are compile-time-only metadata. Walk only the runtime
+  // portions of a call so identifiers inside e.g. `fn<Result>(value)` are
+  // never mistaken for captured constants.
+  if (ts.isCallExpression(node)) {
+    collectConstReplacements(node.expression, context);
+    node.arguments.forEach(argument =>
+      collectConstReplacements(argument, context),
+    );
+    return;
+  }
+
+  if (ts.isExpressionWithTypeArguments(node)) {
+    collectConstReplacements(node.expression, context);
+    return;
+  }
+
+  if (ts.isTaggedTemplateExpression(node)) {
+    collectConstReplacements(node.tag, context);
+    collectConstReplacements(node.template, context);
+    return;
+  }
+
   if (
     ts.isAsExpression(node) ||
     ts.isSatisfiesExpression(node) ||
@@ -865,12 +887,101 @@ function collectConstReplacements(
   ts.forEachChild(node, child => collectConstReplacements(child, context));
 }
 
+type ExpressionWithTypeArguments =
+  | ts.CallExpression
+  | ts.ExpressionWithTypeArguments
+  | ts.TaggedTemplateExpression;
+
+function collectTypeArgumentErasure(
+  node: ExpressionWithTypeArguments,
+  bodyStart: number,
+  replacements: ExprReplacement[],
+  sourceFile: ts.SourceFile,
+): void {
+  const { typeArguments } = node;
+  if (!typeArguments?.length) return;
+
+  // NodeArray.pos/end excludes the angle brackets (and can also exclude
+  // trivia before the closing bracket). The concrete children retain the
+  // exact source span, including comments contained in the type arguments.
+  const children = node.getChildren(sourceFile);
+  const listIndex = children.findIndex(
+    child =>
+      child.kind === ts.SyntaxKind.SyntaxList &&
+      child.pos === typeArguments.pos &&
+      child.end === typeArguments.end,
+  );
+  const open = children[listIndex - 1];
+  const close = children[listIndex + 1];
+  if (
+    listIndex < 1 ||
+    open.kind !== ts.SyntaxKind.LessThanToken ||
+    close?.kind !== ts.SyntaxKind.GreaterThanToken
+  ) {
+    return;
+  }
+
+  replacements.push([
+    open.getStart(sourceFile) - bodyStart,
+    close.getEnd() - bodyStart,
+    '',
+  ]);
+}
+
 function collectTypeSyntaxErasures(
   node: ts.Node,
   bodyStart: number,
   replacements: ExprReplacement[],
   sourceFile: ts.SourceFile,
 ): void {
+  const nodeStart = node.getStart(sourceFile) - bodyStart;
+  const nodeEnd = node.getEnd() - bodyStart;
+  if (
+    replacements.some(
+      ([replacementStart, replacementEnd]) =>
+        replacementStart <= nodeStart && nodeEnd <= replacementEnd,
+    )
+  ) {
+    return;
+  }
+
+  if (ts.isCallExpression(node)) {
+    collectTypeArgumentErasure(node, bodyStart, replacements, sourceFile);
+    collectTypeSyntaxErasures(
+      node.expression,
+      bodyStart,
+      replacements,
+      sourceFile,
+    );
+    node.arguments.forEach(argument =>
+      collectTypeSyntaxErasures(argument, bodyStart, replacements, sourceFile),
+    );
+    return;
+  }
+
+  if (ts.isExpressionWithTypeArguments(node)) {
+    collectTypeArgumentErasure(node, bodyStart, replacements, sourceFile);
+    collectTypeSyntaxErasures(
+      node.expression,
+      bodyStart,
+      replacements,
+      sourceFile,
+    );
+    return;
+  }
+
+  if (ts.isTaggedTemplateExpression(node)) {
+    collectTypeArgumentErasure(node, bodyStart, replacements, sourceFile);
+    collectTypeSyntaxErasures(node.tag, bodyStart, replacements, sourceFile);
+    collectTypeSyntaxErasures(
+      node.template,
+      bodyStart,
+      replacements,
+      sourceFile,
+    );
+    return;
+  }
+
   if (
     ts.isAsExpression(node) ||
     ts.isSatisfiesExpression(node) ||
@@ -908,6 +1019,41 @@ function collectTypeSyntaxErasures(
   ts.forEachChild(node, child =>
     collectTypeSyntaxErasures(child, bodyStart, replacements, sourceFile),
   );
+}
+
+function collectCommentErasures(
+  node: ts.Node,
+  bodyStart: number,
+  replacements: ExprReplacement[],
+  sourceFile: ts.SourceFile,
+): void {
+  const bodyEnd = node.getEnd();
+  const seen = new Set<string>();
+
+  const visit = (current: ts.Node): void => {
+    const ranges = [
+      ...(ts.getLeadingCommentRanges(sourceFile.text, current.getFullStart()) ??
+        []),
+      ...(ts.getTrailingCommentRanges(sourceFile.text, current.getEnd()) ?? []),
+    ];
+    for (const range of ranges) {
+      if (range.pos < bodyStart || range.end > bodyEnd) continue;
+      const key = `${range.pos}:${range.end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const start = range.pos - bodyStart;
+      const end = range.end - bodyStart;
+      const covered = replacements.some(
+        ([replacementStart, replacementEnd]) =>
+          replacementStart <= start && end <= replacementEnd,
+      );
+      if (!covered) replacements.push([start, end, '']);
+    }
+    current.getChildren(sourceFile).forEach(visit);
+  };
+
+  visit(node);
 }
 
 function evaluateExpr(
@@ -966,6 +1112,7 @@ function evaluateExpr(
     replacements,
     sourceFile,
   );
+  collectCommentErasures(bodyExpression, bodyStart, replacements, sourceFile);
 
   replacements.sort((a, b) => b[0] - a[0]);
   for (const [start, end, literal] of replacements) {
