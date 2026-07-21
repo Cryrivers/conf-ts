@@ -80,6 +80,13 @@ interface CompilerCache {
   environment: Record<string, string>;
   projectsByFile: Map<string, ProjectCache>;
   batchesByCompilation: WeakMap<object, PendingCompilationBatch>;
+  // Per-compilation, in-flight/settled rebuild of a given previous project.
+  // A project whose files land in several batches (because the loader is
+  // invoked for them across event-loop turns) is re-scanned only once.
+  rebuildsByCompilation: WeakMap<
+    object,
+    Map<ProjectCache, Promise<ProjectCache>>
+  >;
 }
 
 interface PendingProjectRequest {
@@ -456,6 +463,7 @@ function compilerCache(
       environment: environmentForCompiler(undefined),
       projectsByFile: new Map(),
       batchesByCompilation: new WeakMap(),
+      rebuildsByCompilation: new WeakMap(),
     };
   }
   let cache = cachesByOwner.get(owner);
@@ -464,6 +472,7 @@ function compilerCache(
       environment: environmentForCompiler(compiler),
       projectsByFile: new Map(),
       batchesByCompilation: new WeakMap(),
+      rebuildsByCompilation: new WeakMap(),
     };
     cachesByOwner.set(owner, cache);
   }
@@ -538,26 +547,68 @@ function finishPendingRequest(
   }
 }
 
-async function flushPendingGroup(
+async function createAndPublishProject(
   compiler: CompilerCache,
-  batch: PendingCompilationBatch,
   group: PendingProjectGroup,
-): Promise<void> {
+  previous: ProjectCache | undefined,
+): Promise<ProjectCache> {
   const sources: Record<string, string> = {};
   const entryFiles: string[] = [];
   for (const request of group.requests) {
     sources[request.resourcePath] = request.source;
     entryFiles.push(request.resourcePath);
   }
+  const created = await createProjectCache(
+    group.implementation,
+    previous?.project.entryFiles ?? Array.from(new Set(entryFiles)),
+    sources,
+    group.compilation,
+    previous,
+  );
+  publishProjectCache(compiler, created, previous);
+  return created;
+}
+
+function resolveGroupProject(
+  compiler: CompilerCache,
+  group: PendingProjectGroup,
+): Promise<ProjectCache> {
+  const previous = group.previous;
+  // A brand-new project (no previous) is scanned once for this coalesced
+  // group's entry files.
+  if (!previous) return createAndPublishProject(compiler, group, undefined);
+
+  // A rebuild: the whole group shares one previous project. Deduplicate the
+  // rebuild by that project within this compilation so a project whose files
+  // were split across several batches is validated and (if stale) re-scanned
+  // only once, regardless of how the loader invocations interleaved. The map
+  // entry is stored synchronously, so a concurrent group for the same project
+  // always observes the in-flight rebuild instead of starting its own.
+  let rebuilds = compiler.rebuildsByCompilation.get(group.compilation);
+  if (!rebuilds) {
+    rebuilds = new Map();
+    compiler.rebuildsByCompilation.set(group.compilation, rebuilds);
+  }
+  const inFlight = rebuilds.get(previous);
+  if (inFlight) return inFlight;
+  const rebuild = (async () => {
+    // Validating here — rather than before enqueuing — lets sibling files
+    // coalesce into the batch synchronously; if the snapshot is still valid,
+    // reuse the project for the whole group without re-scanning.
+    if (await checkSnapshotValid(group.compilation, previous)) return previous;
+    return createAndPublishProject(compiler, group, previous);
+  })();
+  rebuilds.set(previous, rebuild);
+  return rebuild;
+}
+
+async function flushPendingGroup(
+  compiler: CompilerCache,
+  batch: PendingCompilationBatch,
+  group: PendingProjectGroup,
+): Promise<void> {
   try {
-    const created = await createProjectCache(
-      group.implementation,
-      group.previous?.project.entryFiles ?? Array.from(new Set(entryFiles)),
-      sources,
-      group.compilation,
-      group.previous,
-    );
-    publishProjectCache(compiler, created, group.previous);
+    const created = await resolveGroupProject(compiler, group);
     for (const request of group.requests) request.resolve(created);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -663,22 +714,23 @@ async function projectCacheFor(
 ): Promise<ProjectCache> {
   const compilationKey = compilation as (CompilationState & object) | undefined;
   const cacheKey = projectCacheKey(implementation, resourcePath);
-  const pending = compilationKey
-    ? cache.batchesByCompilation
-        .get(compilationKey)
-        ?.pendingByFile.get(cacheKey)
-    : undefined;
-  if (pending) return pending;
 
-  const existing = cache.projectsByFile.get(cacheKey);
-  if (existing && (await checkSnapshotValid(compilation, existing))) {
-    return existing;
-  }
   if (compilationKey) {
-    const queued = cache.batchesByCompilation
+    const pending = cache.batchesByCompilation
       .get(compilationKey)
       ?.pendingByFile.get(cacheKey);
-    if (queued) return queued;
+    if (pending) return pending;
+
+    const existing = cache.projectsByFile.get(cacheKey);
+    // A project already validated or created during this compilation covers
+    // this file: reuse it synchronously. Validating a stale cache's snapshot
+    // here would insert an async gap that lets sibling files in the same
+    // compilation miss the batch-coalescing window and split into redundant
+    // project scans, so that check is deferred to flushPendingGroup, where it
+    // runs once per group after the batch has coalesced.
+    if (existing && existing.validatedCompilation === compilationKey) {
+      return existing;
+    }
     return enqueueProjectCache(
       cache,
       implementation,
@@ -687,6 +739,11 @@ async function projectCacheFor(
       compilationKey,
       existing,
     );
+  }
+
+  const existing = cache.projectsByFile.get(cacheKey);
+  if (existing && (await checkSnapshotValid(compilation, existing))) {
+    return existing;
   }
   const created = await createProjectCache(
     implementation,

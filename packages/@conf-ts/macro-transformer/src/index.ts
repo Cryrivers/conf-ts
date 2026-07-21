@@ -164,7 +164,7 @@ function collectMacroBindings(sourceFile: ts.SourceFile): MacroBindings {
         const importedName =
           specifier.propertyName?.text ?? specifier.name.text;
         if (
-          statement.importClause.isTypeOnly ||
+          statement.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword ||
           specifier.isTypeOnly ||
           !MACRO_FUNCTION_NAME_SET.has(importedName)
         ) {
@@ -272,7 +272,7 @@ function macroImportReplacements(
       ts.isImportDeclaration(statement) &&
       moduleNameOfImport(statement) === MACRO_PACKAGE &&
       statement.importClause &&
-      !statement.importClause.isTypeOnly &&
+      statement.importClause.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
       statement.importClause.namedBindings
     ) {
       if (ts.isNamespaceImport(statement.importClause.namedBindings)) {
