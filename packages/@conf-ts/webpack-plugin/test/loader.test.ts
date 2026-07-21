@@ -16,7 +16,10 @@ import {
   normalizeExtensionToRemove,
   resolveGeneratedPath,
 } from '../src/loader';
-import macroTransformLoader from '../src/macro-transform-plugin/loader';
+import macroTransformLoader, {
+  createFileSystemSnapshot,
+  isFileSystemSnapshotValid,
+} from '../src/macro-transform-plugin/loader';
 import { CONF_TS_MACRO_TRANSFORM_META } from '../src/macro-transform-plugin/types';
 import compileTask from '../src/worker';
 
@@ -60,6 +63,17 @@ async function runMacroTransformLoader(options: {
 
     void macroTransformLoader.call(context as any, options.source);
   });
+}
+
+// Bumps a file's mtime strictly forward, independent of OS clock
+// resolution, so tests that rewrite a file and expect the snapshot cache
+// to detect the change aren't flaky on filesystems with coarse mtime
+// granularity.
+let touchOffsetMs = 0;
+function touch(filePath: string): void {
+  touchOffsetMs += 1000;
+  const time = new Date(Date.now() + touchOffsetMs);
+  fs.utimesSync(filePath, time, time);
 }
 
 describe('loader generated file path interpolation', () => {
@@ -537,11 +551,6 @@ describe('loader generated file path interpolation', () => {
     fs.writeFileSync(entry, entrySource);
     fs.writeFileSync(value, 'export const value = 1;');
 
-    const fileSystemInfo = {
-      createSnapshot: (...args: any[]) => args[args.length - 1](null, {}),
-      checkSnapshotValid: (_snapshot: object, callback: Function) =>
-        callback(null, false),
-    };
     const compiler = {};
     const createSnapshot = vi.spyOn(
       runtimeNativeMacroTransformer,
@@ -556,7 +565,7 @@ describe('loader generated file path interpolation', () => {
         resourcePath: entry,
         source: entrySource,
         compiler,
-        compilation: { fileSystemInfo },
+        compilation: {},
         implementation: 'native',
       });
       const initialProject = initial.meta[CONF_TS_MACRO_TRANSFORM_META].project;
@@ -564,11 +573,12 @@ describe('loader generated file path interpolation', () => {
       expect(createSnapshot).toHaveBeenCalledTimes(1);
 
       fs.writeFileSync(value, 'export const value = 2;');
+      touch(value);
       const stable = await runMacroTransformLoader({
         resourcePath: entry,
         source: entrySource,
         compiler,
-        compilation: { fileSystemInfo },
+        compilation: {},
         implementation: 'native',
       });
       const stableProject = stable.meta[CONF_TS_MACRO_TRANSFORM_META].project;
@@ -584,11 +594,12 @@ describe('loader generated file path interpolation', () => {
       ].join('\n');
       fs.writeFileSync(added, 'export const added = 3;');
       fs.writeFileSync(entry, structuralSource);
+      touch(entry);
       const structural = await runMacroTransformLoader({
         resourcePath: entry,
         source: structuralSource,
         compiler,
-        compilation: { fileSystemInfo },
+        compilation: {},
         implementation: 'native',
       });
       expect(structural.code).toContain('"3"');
@@ -640,11 +651,6 @@ describe('loader generated file path interpolation', () => {
     fs.writeFileSync(firstValue, 'export const value = 1;');
     fs.writeFileSync(secondValue, 'export const value = 2;');
 
-    const fileSystemInfo = {
-      createSnapshot: (...args: any[]) => args[args.length - 1](null, {}),
-      checkSnapshotValid: (_snapshot: object, callback: Function) =>
-        callback(null, false),
-    };
     const compiler = {};
     const createSnapshot = vi.spyOn(
       runtimeNativeMacroTransformer,
@@ -655,7 +661,7 @@ describe('loader generated file path interpolation', () => {
         resourcePath: entry,
         source,
         compiler,
-        compilation: { fileSystemInfo },
+        compilation: {},
         implementation: 'native',
       });
       expect(initial.code).toContain('"1"');
@@ -664,11 +670,12 @@ describe('loader generated file path interpolation', () => {
       ).toContain(baseConfig);
 
       writeBaseConfig('./value-b.ts');
+      touch(baseConfig);
       const rebuilt = await runMacroTransformLoader({
         resourcePath: entry,
         source,
         compiler,
-        compilation: { fileSystemInfo },
+        compilation: {},
         implementation: 'native',
       });
       expect(rebuilt.code).toContain('"2"');
@@ -682,6 +689,154 @@ describe('loader generated file path interpolation', () => {
       createSnapshot.mockRestore();
       fs.rmSync(context, { recursive: true, force: true });
     }
+  });
+
+  describe('file system snapshot cache', () => {
+    it('round-trips as valid when nothing on disk has changed', async () => {
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'conf-ts-snapshot-'),
+      );
+      const a = path.join(context, 'a.ts');
+      const b = path.join(context, 'b.ts');
+      fs.writeFileSync(a, 'export const a = 1;');
+      fs.writeFileSync(b, 'export const b = 2;');
+      try {
+        const snapshot = await createFileSystemSnapshot({
+          dependencies: [a, b],
+          missingDependencies: [],
+        } as any);
+        await expect(isFileSystemSnapshotValid(snapshot)).resolves.toBe(true);
+      } finally {
+        fs.rmSync(context, { recursive: true, force: true });
+      }
+    });
+
+    it("invalidates when a dependency's content changes", async () => {
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'conf-ts-snapshot-'),
+      );
+      const a = path.join(context, 'a.ts');
+      fs.writeFileSync(a, 'export const a = 1;');
+      try {
+        const snapshot = await createFileSystemSnapshot({
+          dependencies: [a],
+          missingDependencies: [],
+        } as any);
+        fs.writeFileSync(a, 'export const a = 2;');
+        touch(a);
+        await expect(isFileSystemSnapshotValid(snapshot)).resolves.toBe(false);
+      } finally {
+        fs.rmSync(context, { recursive: true, force: true });
+      }
+    });
+
+    it('invalidates when a dependency is deleted', async () => {
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'conf-ts-snapshot-'),
+      );
+      const a = path.join(context, 'a.ts');
+      fs.writeFileSync(a, 'export const a = 1;');
+      try {
+        const snapshot = await createFileSystemSnapshot({
+          dependencies: [a],
+          missingDependencies: [],
+        } as any);
+        fs.rmSync(a);
+        await expect(isFileSystemSnapshotValid(snapshot)).resolves.toBe(false);
+      } finally {
+        fs.rmSync(context, { recursive: true, force: true });
+      }
+    });
+
+    it('invalidates when a previously-missing dependency starts existing', async () => {
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'conf-ts-snapshot-'),
+      );
+      const missing = path.join(context, 'missing.ts');
+      try {
+        const snapshot = await createFileSystemSnapshot({
+          dependencies: [],
+          missingDependencies: [missing],
+        } as any);
+        await expect(isFileSystemSnapshotValid(snapshot)).resolves.toBe(true);
+        fs.writeFileSync(missing, 'export const value = 1;');
+        await expect(isFileSystemSnapshotValid(snapshot)).resolves.toBe(false);
+      } finally {
+        fs.rmSync(context, { recursive: true, force: true });
+      }
+    });
+
+    it('stays valid when a file outside the snapshot changes', async () => {
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'conf-ts-snapshot-'),
+      );
+      const tracked = path.join(context, 'tracked.ts');
+      const untracked = path.join(context, 'untracked.ts');
+      fs.writeFileSync(tracked, 'export const tracked = 1;');
+      fs.writeFileSync(untracked, 'export const untracked = 1;');
+      try {
+        const snapshot = await createFileSystemSnapshot({
+          dependencies: [tracked],
+          missingDependencies: [],
+        } as any);
+        fs.writeFileSync(untracked, 'export const untracked = 2;');
+        touch(untracked);
+        await expect(isFileSystemSnapshotValid(snapshot)).resolves.toBe(true);
+      } finally {
+        fs.rmSync(context, { recursive: true, force: true });
+      }
+    });
+
+    it('caches and validates a real macro project without any compilation.fileSystemInfo (rspack-like)', async () => {
+      const context = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'conf-ts-no-filesysteminfo-'),
+      );
+      const entry = path.join(context, 'entry.conf.ts');
+      const source =
+        "import { String } from '@conf-ts/macro'; export default String(1);";
+      fs.writeFileSync(
+        path.join(context, 'tsconfig.json'),
+        JSON.stringify({ compilerOptions: { moduleResolution: 'bundler' } }),
+      );
+      fs.writeFileSync(entry, source);
+
+      const compiler = {};
+      const createSnapshot = vi.spyOn(
+        runtimeNativeMacroTransformer,
+        'createMacroProjectSnapshot',
+      );
+      try {
+        // `compilation` deliberately has no `fileSystemInfo` property at
+        // all -- stricter than even rspack's stub, which at least defines
+        // the method. A fresh object is used per call, mirroring how a
+        // real bundler hands the loader a new Compilation on every rebuild.
+        const first = await runMacroTransformLoader({
+          resourcePath: entry,
+          source,
+          compiler,
+          compilation: {},
+          implementation: 'native',
+        });
+        expect(first.code).toContain('"1"');
+        expect(createSnapshot).toHaveBeenCalledTimes(1);
+
+        const second = await runMacroTransformLoader({
+          resourcePath: entry,
+          source,
+          compiler,
+          compilation: {},
+          implementation: 'native',
+        });
+        expect(second.code).toBe(first.code);
+        // Nothing changed on disk between the two calls: the snapshot
+        // cache should validate and reuse the existing project instead of
+        // rescanning it.
+        expect(createSnapshot).toHaveBeenCalledTimes(1);
+      } finally {
+        createSnapshot.mockRestore();
+        fs.rmSync(context, { recursive: true, force: true });
+      }
+    });
   });
 
   it('batches sibling entry files by their nearest tsconfig', async () => {

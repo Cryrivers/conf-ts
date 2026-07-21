@@ -69,7 +69,7 @@ interface ProjectCache {
   previous?: ProjectCache;
   changedFiles?: Set<string>;
   structureStable: boolean;
-  snapshot?: object;
+  snapshot?: FileSystemSnapshot;
   validatedCompilation?: object;
   validationByCompilation: WeakMap<object, Promise<boolean>>;
   registeredCompilations: WeakSet<object>;
@@ -106,25 +106,58 @@ interface PendingCompilationBatch {
   activeGroups: number;
 }
 
-interface FileSystemInfoLike {
-  createSnapshot(
-    startTime: undefined,
-    files: Iterable<string>,
-    directories: undefined,
-    missing: Iterable<string>,
-    options: { hash: boolean; timestamp: boolean },
-    callback: (error: Error | null, snapshot: object | null) => void,
-  ): void;
-  checkSnapshotValid(
-    snapshot: object,
-    callback: (error: Error | null, valid?: boolean) => void,
-  ): void;
-}
-
 interface CompilationState {
-  fileSystemInfo?: FileSystemInfoLike;
   fileDependencies?: { add(dependency: string): unknown };
   missingDependencies?: { add(dependency: string): unknown };
+}
+
+export interface FileSystemSnapshot {
+  entries: Record<string, { mtimeMs: number; size: number } | null>;
+}
+
+async function statEntry(
+  filename: string,
+): Promise<{ mtimeMs: number; size: number } | null> {
+  try {
+    const stat = await fs.promises.stat(filename);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+// Bundler-agnostic replacement for webpack's compilation.fileSystemInfo
+// snapshot API. rspack's compilation.fileSystemInfo is a compatibility stub
+// whose createSnapshot/checkSnapshotValid exist but never invoke their
+// callback, which previously hung the whole build. Snapshotting via plain
+// fs.stat works identically on any bundler and always settles.
+export async function createFileSystemSnapshot(
+  project: MacroProjectSnapshot,
+): Promise<FileSystemSnapshot> {
+  const paths = [
+    ...project.dependencies,
+    ...(project.missingDependencies ?? []),
+  ];
+  const entries: FileSystemSnapshot['entries'] = {};
+  await Promise.all(
+    paths.map(async filename => {
+      entries[filename] = await statEntry(filename);
+    }),
+  );
+  return { entries };
+}
+
+export async function isFileSystemSnapshotValid(
+  snapshot: FileSystemSnapshot,
+): Promise<boolean> {
+  const paths = Object.keys(snapshot.entries);
+  const current = await Promise.all(paths.map(statEntry));
+  return paths.every((filename, index) => {
+    const previous = snapshot.entries[filename];
+    const next = current[index];
+    if (previous === null || next === null) return previous === next;
+    return previous.mtimeMs === next.mtimeMs && previous.size === next.size;
+  });
 }
 
 const cachesByOwner = new WeakMap<object, CompilerCache>();
@@ -297,53 +330,23 @@ async function prepareProject(
   return { project: transformedProject, results, dependenciesByFile };
 }
 
-function createFileSystemSnapshot(
-  compilation: CompilationState | undefined,
-  project: MacroProjectSnapshot,
-): Promise<object | undefined> {
-  const fileSystemInfo = compilation?.fileSystemInfo;
-  if (!fileSystemInfo?.createSnapshot) return Promise.resolve(undefined);
-  return new Promise((resolve, reject) => {
-    fileSystemInfo.createSnapshot(
-      undefined,
-      project.dependencies,
-      undefined,
-      project.missingDependencies ?? [],
-      { hash: true, timestamp: true },
-      (error: Error | null, snapshot: object | null) => {
-        if (error) reject(error);
-        else resolve(snapshot ?? undefined);
-      },
-    );
-  });
-}
-
 function checkSnapshotValid(
   compilation: CompilationState | undefined,
   project: ProjectCache,
 ): Promise<boolean> {
   if (project.validatedCompilation === compilation)
     return Promise.resolve(true);
-  const fileSystemInfo = compilation?.fileSystemInfo;
   const snapshot = project.snapshot;
-  if (!snapshot || !fileSystemInfo?.checkSnapshotValid) {
+  if (!snapshot) {
     project.validatedCompilation = compilation;
     return Promise.resolve(true);
   }
   const compilationKey = compilation as CompilationState & object;
   const existing = project.validationByCompilation.get(compilationKey);
   if (existing) return existing;
-  const validation = new Promise<boolean>((resolve, reject) => {
-    fileSystemInfo.checkSnapshotValid(
-      snapshot,
-      (error: Error | null, valid?: boolean) => {
-        if (error) reject(error);
-        else {
-          if (valid) project.validatedCompilation = compilation;
-          resolve(valid === true);
-        }
-      },
-    );
+  const validation = isFileSystemSnapshotValid(snapshot).then(valid => {
+    if (valid) project.validatedCompilation = compilation;
+    return valid;
   });
   project.validationByCompilation.set(compilationKey, validation);
   const clearValidation = () => {
@@ -438,7 +441,7 @@ async function createProjectCache(
     if (dependency in baseProject.files) continue;
     cache.dependencyContents.set(dependency, readOptionalFile(dependency));
   }
-  cache.snapshot = await createFileSystemSnapshot(compilation, baseProject);
+  cache.snapshot = await createFileSystemSnapshot(baseProject);
   return cache;
 }
 
