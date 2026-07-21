@@ -16,7 +16,7 @@ pub fn build_file_contexts(
   for (file_name, source) in files {
     if !matches!(
       file_name.rsplit('.').next(),
-      Some("ts" | "js" | "mts" | "cts" | "mjs" | "cjs")
+      Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
     ) {
       continue;
     }
