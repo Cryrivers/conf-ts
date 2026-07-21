@@ -454,20 +454,33 @@ struct EvaluateMacroCalls<'a, 'b> {
   fatal_error: Option<ConfTSError>,
 }
 
+fn warn_skipped_macro(call: &CallExpression, file_ctx: &FileContext, error: &ConfTSError) {
+  eprintln!(
+    "[@conf-ts/macro-transformer] Skipped a macro call that could not be statically transformed; it will likely fail at a later compile step instead:\n    {}\n    in: {}",
+    error,
+    source_text(file_ctx, call.span),
+  );
+}
+
 impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
   fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
     if self.fatal_error.is_some() {
       return;
     }
     if canonical_callee(call, self.file_ctx, self.eval_ctx).is_some() {
-      if macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options).is_err() {
-        if let Some(error) = take_fatal_transform_error(self.eval_ctx) {
-          self.fatal_error = Some(error);
+      if let Err(error) = macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options) {
+        if let Some(fatal) = take_fatal_transform_error(self.eval_ctx) {
+          self.fatal_error = Some(fatal);
         } else {
           // Leave calls that cannot be statically evaluated (including their
           // nested calls) untouched. The import is retained below so the
-          // resulting source remains structurally valid.
+          // resulting source remains structurally valid. Warn here (with the
+          // exact call site) since a skipped macro otherwise fails silently
+          // until some unrelated later stage trips over the untransformed
+          // call, at which point the error location no longer points at the
+          // real cause.
           self.skipped_macro = true;
+          warn_skipped_macro(call, self.file_ctx, &error);
         }
       }
       return;

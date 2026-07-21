@@ -790,6 +790,32 @@ function collectContextComputedReplacements(
   }
 }
 
+// The callee of a call is never itself invoked at compile time (the
+// compiler has no general facility for executing arbitrary functions), so a
+// member-access callee like `[1, 2].includes` or `someArray.includes` must be
+// kept intact as runtime call syntax instead of being folded to a value the
+// way a plain property-access value position would be. Only the non-member
+// base of the chain (and any computed keys) still need the normal
+// constant-folding / context-substitution treatment, mirroring how
+// collectContextComputedReplacements already walks context-rooted chains
+// without touching the property names.
+function collectCallCalleeReplacements(
+  node: ts.Expression,
+  context: ExprReplacementContext,
+): void {
+  const expression = unwrapExprSyntax(node);
+  if (ts.isPropertyAccessExpression(expression)) {
+    collectCallCalleeReplacements(expression.expression, context);
+    return;
+  }
+  if (ts.isElementAccessExpression(expression)) {
+    collectCallCalleeReplacements(expression.expression, context);
+    collectConstReplacements(expression.argumentExpression, context);
+    return;
+  }
+  collectConstReplacements(node, context);
+}
+
 function collectConstReplacements(
   node: ts.Node,
   context: ExprReplacementContext,
@@ -839,7 +865,7 @@ function collectConstReplacements(
   // portions of a call so identifiers inside e.g. `fn<Result>(value)` are
   // never mistaken for captured constants.
   if (ts.isCallExpression(node)) {
-    collectConstReplacements(node.expression, context);
+    collectCallCalleeReplacements(node.expression, context);
     node.arguments.forEach(argument =>
       collectConstReplacements(argument, context),
     );

@@ -90,6 +90,21 @@ describe('Expr Macro', () => {
     assertMacroOutput('expr-compact');
   });
 
+  it('should keep a method call on a non-context, non-constant receiver as a runtime call', () => {
+    assertMacroOutput('expr-method-call');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-method-call.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    expect(expression(output.arrayIncludes)({ quota: 2 })).toBe(true);
+    expect(expression(output.arrayIncludes)({ quota: 3 })).toBe(false);
+    expect(expression(output.stringIncludes)({ name: 'a' })).toBe(true);
+    expect(expression(output.stringIncludes)({ name: 'z' })).toBe(false);
+  });
+
   it('should reject invalid quote options', () => {
     assertMacroError('expr', "quote must be 'single' or 'double'", {
       quote: 'nope' as any,

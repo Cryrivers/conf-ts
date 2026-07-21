@@ -849,6 +849,111 @@ fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
   }
 }
 
+// The callee of a call is never itself invoked at compile time (the native
+// evaluator has no general facility for executing arbitrary functions), so a
+// member-access callee like `[1, 2].includes` or `someArray.includes` must be
+// kept intact as runtime call syntax instead of being folded to a value the
+// way a plain property-access value position would be (see the
+// `Expression::StaticMemberExpression` arm of `collect_const_replacements`
+// below, which does fold non-context-rooted property access to a value).
+// Only the non-member base of the chain (and any computed keys) still need
+// the normal constant-folding / context-substitution treatment.
+fn collect_call_callee_replacements(
+  expr: &Expression,
+  param_name: &str,
+  body_start: u32,
+  replacements: &mut Vec<ExprReplacement>,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<(), ConfTSError> {
+  match expr {
+    Expression::StaticMemberExpression(member) => collect_call_callee_replacements(
+      &member.object,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::ComputedMemberExpression(member) => {
+      collect_call_callee_replacements(
+        &member.object,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )?;
+      collect_const_replacements(
+        &member.expression,
+        param_name,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
+    }
+    Expression::TSAsExpression(ts_as) => collect_call_callee_replacements(
+      &ts_as.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::TSSatisfiesExpression(ts_sat) => collect_call_callee_replacements(
+      &ts_sat.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::TSNonNullExpression(ts_nn) => collect_call_callee_replacements(
+      &ts_nn.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::TSTypeAssertion(assertion) => collect_call_callee_replacements(
+      &assertion.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    Expression::ParenthesizedExpression(paren) => collect_call_callee_replacements(
+      &paren.expression,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+    _ => collect_const_replacements(
+      expr,
+      param_name,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    ),
+  }
+}
+
 fn collect_const_replacements(
   expr: &Expression,
   param_name: &str,
@@ -1225,7 +1330,7 @@ fn walk_const_children(
       Ok(())
     }
     Expression::CallExpression(call) => {
-      collect_const_replacements(
+      collect_call_callee_replacements(
         &call.callee,
         param_name,
         body_start,
@@ -1300,7 +1405,7 @@ fn walk_const_children(
         )
       }
       ChainElement::CallExpression(call) => {
-        collect_const_replacements(
+        collect_call_callee_replacements(
           &call.callee,
           param_name,
           body_start,

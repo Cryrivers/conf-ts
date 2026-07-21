@@ -413,6 +413,22 @@ function hasMacroBindings(bindings: MacroBindings | undefined): boolean {
   return Boolean(bindings?.named.size || bindings?.namespaces.size);
 }
 
+function warnSkippedMacro(
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  error: unknown,
+): void {
+  const detail =
+    error instanceof ConfTSError
+      ? error.toString()
+      : `${error instanceof Error ? error.message : String(error)}\n    at ${
+          sourceFile.fileName
+        }`;
+  console.warn(
+    `[@conf-ts/macro-transformer] Skipped a macro call that could not be statically transformed; it will likely fail at a later compile step instead:\n    ${detail}\n    in: ${node.getText(sourceFile)}`,
+  );
+}
+
 function transformAnalyzedSource(
   sourceFile: ts.SourceFile,
   source: string,
@@ -458,8 +474,13 @@ function transformAnalyzedSource(
           if (isFatalMacroTransformError(error)) throw error;
           // A source transformer must be safe to run over files containing
           // macros it cannot statically evaluate. Keep the entire call
-          // subtree untouched and retain the macro import below.
+          // subtree untouched and retain the macro import below. Warn here
+          // (with the exact call site) since a skipped macro otherwise fails
+          // silently until some unrelated later stage trips over the
+          // untransformed call, at which point the error location no longer
+          // points at the real cause.
           skippedMacro = true;
+          warnSkippedMacro(node, sourceFile, error);
         }
         return;
       }

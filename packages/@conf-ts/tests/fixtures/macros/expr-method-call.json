@@ -1,0 +1,4 @@
+{
+  "arrayIncludes": "[1, 2].includes(quota)",
+  "stringIncludes": "\"ab\".includes(name)"
+}
