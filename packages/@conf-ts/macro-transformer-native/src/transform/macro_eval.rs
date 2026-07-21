@@ -735,9 +735,16 @@ fn compact_expression_whitespace(source: &str) -> String {
 
       // The token renderer used by the TypeScript implementation never
       // emits formatting whitespace before closing punctuation, commas, or
-      // member-access dots. Comments erased immediately before one of those
-      // tokens must not leave a native-only trailing space behind.
-      if matches!(ch, ')' | ']' | '}' | ',' | '.') {
+      // member-access dots, nor after an opening bracket/brace or a unary
+      // `!`/`~` operator (there is no binary use of either, so a lone `!`
+      // or `~` immediately preceding whitespace is always a complete
+      // token). Comments erased immediately next to one of those tokens
+      // must not leave a native-only space behind, and user formatting
+      // like `! (a & b)` or `!( a & b)` must collapse the same way the JS
+      // token renderer does.
+      if matches!(ch, ')' | ']' | '}' | ',' | '.')
+        || matches!(output.chars().last(), Some('(' | '[' | '{' | '!' | '~'))
+      {
         pending_space = false;
       } else {
         flush_space(output, &mut pending_space);
