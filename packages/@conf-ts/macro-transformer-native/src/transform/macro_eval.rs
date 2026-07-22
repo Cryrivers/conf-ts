@@ -1339,6 +1339,37 @@ fn collect_call_callee_replacements(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Normalizes the separator between a non-shorthand property's key and value
+// to a plain `: ` (no space before, one space after) regardless of how the
+// user's source spaced it — matching both the native encoder's usual style
+// and the TypeScript transformer's fixed token-rendering output, so the two
+// transformers stay byte-for-byte aligned even though this one only splices
+// specific spans instead of re-rendering the whole expression from tokens.
+fn normalize_property_colon(
+  prop: &ObjectProperty,
+  body_start: u32,
+  source: &str,
+  replacements: &mut Vec<ExprReplacement>,
+) {
+  let key_end = prop.key.span().end as usize;
+  let value_start = prop.value.span().start as usize;
+  // A computed key's `]` isn't part of `prop.key`'s span, so find it first
+  // and anchor the replacement right after it instead of eating the bracket.
+  let anchor = if prop.computed {
+    match source[key_end..value_start].find(']') {
+      Some(offset) => key_end + offset + 1,
+      None => key_end,
+    }
+  } else {
+    key_end
+  };
+  let start = anchor - body_start as usize;
+  let end = value_start - body_start as usize;
+  if start < end {
+    replacements.push((start, end, ": ".to_string()));
+  }
+}
+
 fn collect_const_replacements(
   expr: &Expression,
   param_name: &str,
@@ -1790,6 +1821,23 @@ fn walk_const_children(
         match prop_kind {
           ObjectPropertyKind::ObjectProperty(prop) => {
             if !prop.shorthand {
+              if prop.computed {
+                // `{ [DYNAMIC_KEY]: value }` — the key expression is itself a
+                // value position (an outer const, context access, or bound
+                // name) and needs the same treatment as the property's value.
+                if let Some(key_expr) = prop.key.as_expression() {
+                  collect_const_replacements(
+                    key_expr,
+                    param_name,
+                    bound_names,
+                    body_start,
+                    replacements,
+                    file_ctx,
+                    ctx,
+                    options,
+                  )?;
+                }
+              }
               collect_const_replacements(
                 &prop.value,
                 param_name,
@@ -1800,6 +1848,30 @@ fn walk_const_children(
                 ctx,
                 options,
               )?;
+              normalize_property_colon(prop, body_start, file_ctx.parsed.source(), replacements);
+              continue;
+            }
+            // Shorthand (`{ a }`): if `a` is the context param or a name
+            // bound by an enclosing nested callback, it isn't a compile-time
+            // constant — @conf-ts/expression understands shorthand properties
+            // directly, so leave `{ a }` as runtime source text instead of
+            // folding it. Otherwise (an outer compile-time const), expand it
+            // to `a: <literal>`, matching the non-shorthand path above.
+            if let Expression::Identifier(ident) = &prop.value {
+              let is_unfoldable = ident.name.as_str() == param_name
+                || bound_names.iter().any(|name| name == ident.name.as_str());
+              if !is_unfoldable {
+                let value = evaluate(&prop.value, file_ctx, ctx, None, options)?;
+                let literal =
+                  value_to_expr_literal(&value, file_ctx, prop.value.span().start, options.quote)?;
+                let key_name = match &prop.key {
+                  PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                  _ => ident.name.as_str(),
+                };
+                let start = prop.span.start as usize - body_start as usize;
+                let end = prop.span.end as usize - body_start as usize;
+                replacements.push((start, end, format!("{key_name}: {literal}")));
+              }
             }
           }
           ObjectPropertyKind::SpreadProperty(spread) => {
@@ -2792,14 +2864,29 @@ fn walk_expr_children(
       for prop_kind in &obj.properties {
         match prop_kind {
           ObjectPropertyKind::ObjectProperty(prop) => {
-            if !prop.shorthand {
-              collect_context_replacements(
-                &prop.value,
-                param_name,
-                body_start,
-                replacements,
-                file_ctx,
-              )?;
+            // A shorthand value is just the bare identifier again (`{ a }`
+            // has no member access to strip), but still worth visiting so a
+            // shorthand of the bare context param itself (`{ ctx }`) hits the
+            // same "cannot use the context parameter directly" check below.
+            collect_context_replacements(
+              &prop.value,
+              param_name,
+              body_start,
+              replacements,
+              file_ctx,
+            )?;
+            if prop.computed {
+              // `{ [ctx.key]: value }` — the key expression can itself
+              // reference the context and needs the same stripping.
+              if let Some(key_expr) = prop.key.as_expression() {
+                collect_context_replacements(
+                  key_expr,
+                  param_name,
+                  body_start,
+                  replacements,
+                  file_ctx,
+                )?;
+              }
             }
           }
           ObjectPropertyKind::SpreadProperty(spread) => {

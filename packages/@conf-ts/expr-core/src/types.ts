@@ -129,7 +129,7 @@ export interface CallNode {
 
 export interface ArrayNode {
   type: 'ArrayExpression';
-  elements: ASTNode[];
+  elements: Array<ASTNode | SpreadElement>;
 }
 
 export interface ElisionNode {
@@ -137,13 +137,20 @@ export interface ElisionNode {
 }
 
 export interface ObjectProperty {
-  key: string; // only identifier or string literal keys are supported
+  key: string; // identifier or string literal key; also used for shorthand (`{ a }`)
+  computed?: false;
+  value: ASTNode;
+}
+
+export interface ComputedObjectProperty {
+  key: ASTNode; // evaluated at runtime and coerced to a property key, e.g. `{ [a]: b }`
+  computed: true;
   value: ASTNode;
 }
 
 export interface ObjectNode {
   type: 'ObjectExpression';
-  properties: Array<ObjectProperty | SpreadElement>;
+  properties: Array<ObjectProperty | ComputedObjectProperty | SpreadElement>;
 }
 
 export interface SpreadElement {

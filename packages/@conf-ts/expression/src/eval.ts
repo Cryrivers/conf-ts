@@ -4,6 +4,7 @@ import type {
   ASTNode,
   BinaryNode,
   CallNode,
+  ComputedObjectProperty,
   Env,
   IdentifierNode,
   LiteralNode,
@@ -321,6 +322,16 @@ const copySpread = (target: object, source: unknown): void => {
   }
 };
 
+// Spreads any iterable (arrays, strings, Sets, Maps, generators, ...) into
+// target, via the iterator protocol — same as native `[...source]`. A
+// non-iterable/nullish source throws a TypeError through the `for...of`
+// itself, matching what real array spread does.
+const spreadIntoArray = (target: unknown[], source: unknown): void => {
+  for (const item of source as Iterable<unknown>) {
+    target.push(item);
+  }
+};
+
 const isNullish = (value: unknown): value is null | undefined =>
   value === null || value === undefined;
 
@@ -475,10 +486,15 @@ export const evaluate = (
     case 'ArrayExpression': {
       const array: unknown[] = [];
       for (const element of node.elements) {
-        if (element.type === 'Elision') {
+        if ((element as SpreadElement).type === 'SpreadElement') {
+          spreadIntoArray(
+            array,
+            evaluate((element as SpreadElement).argument, env, options),
+          );
+        } else if ((element as ASTNode).type === 'Elision') {
           array.length += 1;
         } else {
-          array.push(evaluate(element, env, options));
+          array.push(evaluate(element as ASTNode, env, options));
         }
       }
       return array;
@@ -492,8 +508,11 @@ export const evaluate = (
             evaluate((property as SpreadElement).argument, env, options),
           );
         } else {
-          const item = property as ObjectProperty;
-          object[item.key] = evaluate(item.value, env, options);
+          const item = property as ObjectProperty | ComputedObjectProperty;
+          const key = item.computed
+            ? toKey(evaluate(item.key, env, options))
+            : item.key;
+          object[key] = evaluate(item.value, env, options);
         }
       }
       return object;

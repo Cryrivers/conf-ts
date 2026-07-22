@@ -324,7 +324,7 @@ The default export accepts either a serialized expression string or an `Expr` ca
 | Category    | Supported syntax                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------------- |
 | Literals    | Decimal numbers (including exponent notation), strings, booleans, `null`, `undefined`                       |
-| Collections | Array literals; object literals with identifier/string keys, trailing commas, and object spread             |
+| Collections | Array literals (including spread elements, e.g. `[...a, b]`); object literals with identifier/string/computed (`{ [key]: value }`) keys, shorthand properties (`{ a, b }`), trailing commas, and object spread |
 | Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`) |
 | Calls       | Functions and methods supplied by the environment; method calls preserve `this`                             |
 | Functions   | Arrow function expressions (`x => x * 2`, `(a, b) => a + b`) as callback arguments — expression bodies only, with identifier/destructured/rest/defaulted parameters, nesting, and closures over the surrounding scope |
@@ -336,7 +336,7 @@ The default export accepts either a serialized expression string or an `Expr` ca
 | Unary       | Unary `+`/`-`, `typeof`, `void`, `delete`                                                                   |
 | Control     | Parentheses and conditional expressions (`condition ? yes : no`)                                            |
 
-The parser applies JavaScript-style precedence to the supported operators, including right-associative exponentiation. Not supported: assignments, `++`/`--`, array spread, object shorthand/computed keys, block-bodied statements (arrow functions are limited to expression bodies), `new`, classes, regular expressions, or comments. See the [package README](packages/@conf-ts/expression/README.md) for the full syntax table plus a detailed comparison against other expression-parser libraries.
+The parser applies JavaScript-style precedence to the supported operators, including right-associative exponentiation. Not supported: assignments, `++`/`--`, block-bodied statements (arrow functions are limited to expression bodies), `new`, classes, regular expressions, or comments. See the [package README](packages/@conf-ts/expression/README.md) for the full syntax table plus a detailed comparison against other expression-parser libraries.
 
 <details>
 <summary>Options, caching, safety, and <code>LooseExpr</code> evaluation</summary>
@@ -349,7 +349,7 @@ Within the supported grammar, serialized expressions follow JavaScript semantics
 
 - Missing properties evaluate to `undefined`; non-optional access through `null` or `undefined` throws.
 - Accessor, Proxy, non-callable, and invoked-function errors propagate.
-- Unary coercion, `&&`, `||`, optional chaining, object spread, array holes, `this`, `delete`, and `void` behave like their JavaScript counterparts.
+- Unary coercion, `&&`, `||`, optional chaining, array/object spread, computed object keys, array holes, `this`, `delete`, and `void` behave like their JavaScript counterparts.
 - Errors from runtime callbacks and serialized compiler output are expected to agree by error type and timing; engine-specific message text is not part of the contract.
 
 This package is an evaluator, not a security sandbox. Expressions can read objects and invoke functions exposed through the environment. Do not expose capabilities that untrusted expressions must not access.

@@ -1230,11 +1230,24 @@ function collectConstReplacements(
   }
 
   if (ts.isPropertyAssignment(node)) {
+    if (ts.isComputedPropertyName(node.name)) {
+      // `{ [DYNAMIC_KEY]: value }` — the key expression is itself a value
+      // position (an outer const, context access, or bound name) and needs
+      // the same treatment as the property's value.
+      collectConstReplacements(node.name.expression, context);
+    }
     collectConstReplacements(node.initializer, context);
     return;
   }
 
   if (ts.isShorthandPropertyAssignment(node)) {
+    if (referencesUnfoldableName(node.name, context)) {
+      // The identifier is the context param or a name bound by an enclosing
+      // nested callback, not a compile-time constant. `@conf-ts/expression`
+      // understands shorthand properties directly, so leave `{ a }` as
+      // runtime source text instead of folding it to `a: <literal>`.
+      return;
+    }
     const literal = evaluateNodeLiteral(node.name, context);
     addNodeReplacement(node, node.name.text + ': ' + literal, context);
     return;

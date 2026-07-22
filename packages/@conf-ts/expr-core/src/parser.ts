@@ -5,6 +5,7 @@ import type {
   ArrowParam,
   ASTNode,
   BinaryNode,
+  ComputedObjectProperty,
   IdentifierParam,
   LogicalNode,
   ObjectPatternParam,
@@ -121,16 +122,22 @@ const parsePrimary = (ps: ParserState): ASTNode | null => {
 
 const parseArray = (ps: ParserState): ASTNode => {
   expectPunct(ps, '[');
-  const elements: ASTNode[] = [];
+  const elements: Array<ASTNode | SpreadElement> = [];
   while (!eof(ps) && !isPunct(ps, ']')) {
     if (isPunct(ps, ',')) {
       elements.push({ type: 'Elision' });
       next(ps);
       continue;
     }
-    const el = parseExpression(ps);
-    if (el) {
-      elements.push(el);
+    if (isOp(ps, '...')) {
+      next(ps);
+      const arg = mustNode(ps, parseExpression(ps));
+      elements.push({ type: 'SpreadElement', argument: arg });
+    } else {
+      const el = parseExpression(ps);
+      if (el) {
+        elements.push(el);
+      }
     }
     if (isPunct(ps, ',')) {
       next(ps); // allow trailing comma
@@ -144,7 +151,9 @@ const parseArray = (ps: ParserState): ASTNode => {
 
 const parseObject = (ps: ParserState): ASTNode => {
   expectPunct(ps, '{');
-  const properties: Array<ObjectProperty | SpreadElement> = [];
+  const properties: Array<
+    ObjectProperty | ComputedObjectProperty | SpreadElement
+  > = [];
   while (!eof(ps) && !isPunct(ps, '}')) {
     // support spread in object literal: ...expr
     if (isOp(ps, '...')) {
@@ -157,26 +166,47 @@ const parseObject = (ps: ParserState): ASTNode => {
       continue;
     }
 
+    // computed key: { [expr]: value }
+    if (isPunct(ps, '[')) {
+      next(ps);
+      const keyExpr = mustNode(ps, parseExpression(ps));
+      if (!isPunct(ps, ']')) {
+        raiseParseError(ps.src);
+      }
+      next(ps);
+      if (!isPunct(ps, ':')) {
+        raiseParseError(ps.src);
+      }
+      next(ps);
+      const value = mustNode(ps, parseExpression(ps));
+      properties.push({ key: keyExpr, computed: true, value });
+      if (isPunct(ps, ',')) {
+        next(ps);
+      }
+      continue;
+    }
+
     const keyTk = peek(ps);
     if (!keyTk || (!isIdentifierName(keyTk) && keyTk.kind !== 'string')) {
       raiseParseError(ps.src);
     }
     next(ps);
     const key = keyTk.value;
-    if (!isPunct(ps, ':')) {
-      raiseParseError(ps.src);
+    if (isPunct(ps, ':')) {
+      next(ps);
+      const value = mustNode(ps, parseExpression(ps));
+      properties.push({ key, value });
+    } else {
+      // shorthand property: { a } is short for { a: a }, and only a plain
+      // identifier can stand in for its own value (matching real JS, where
+      // e.g. `in`/`typeof` can be property keys but not shorthand ones).
+      if (keyTk.kind !== 'identifier') {
+        raiseParseError(ps.src);
+      }
+      properties.push({ key, value: { type: 'Identifier', name: key } });
     }
-    next(ps);
-    const value = mustNode(ps, parseExpression(ps));
-    properties.push({ key, value });
     if (isPunct(ps, ',')) {
       next(ps); // allow trailing comma
-    } else {
-      // continue until '}' or error
-      if (!isPunct(ps, '}')) {
-        // if next is not closing brace and not comma, it's an error
-        // but we let loop handle it
-      }
     }
   }
   expectPunct(ps, '}');
