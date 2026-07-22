@@ -48,40 +48,58 @@ function isInlineableMacroCall(
 //     compile time)
 const EXPR_RUNTIME_FALLBACK_MACROS = new Set(['String', 'Number', 'Boolean']);
 
-function referencesContextParam(node: ts.Node, paramName: string): boolean {
+function referencesName(
+  node: ts.Node,
+  isTargetName: (name: string) => boolean,
+): boolean {
   if (ts.isIdentifier(node)) {
-    return node.text === paramName;
+    return isTargetName(node.text);
   }
   // Property names/keys are text labels, not value references: `foo.bar` or
   // `{ bar: 1 }` never "reference" a variable named `bar`, even if it's
-  // spelled the same as paramName. A generic ts.forEachChild walk would
+  // spelled the same as a target name. A generic ts.forEachChild walk would
   // still visit those identifiers as children and false-positive on them,
   // so member/property access is special-cased to only recurse into the
   // actual value-position subtrees (mirroring how collectConstReplacements
   // itself already distinguishes value vs. label positions elsewhere in
   // this file).
   if (ts.isPropertyAccessExpression(node)) {
-    return referencesContextParam(node.expression, paramName);
+    return referencesName(node.expression, isTargetName);
   }
   if (ts.isElementAccessExpression(node)) {
     return (
-      referencesContextParam(node.expression, paramName) ||
-      referencesContextParam(node.argumentExpression, paramName)
+      referencesName(node.expression, isTargetName) ||
+      referencesName(node.argumentExpression, isTargetName)
     );
   }
   if (ts.isPropertyAssignment(node)) {
     const keyReferences =
       ts.isComputedPropertyName(node.name) &&
-      referencesContextParam(node.name.expression, paramName);
-    return keyReferences || referencesContextParam(node.initializer, paramName);
+      referencesName(node.name.expression, isTargetName);
+    return keyReferences || referencesName(node.initializer, isTargetName);
   }
   if (ts.isShorthandPropertyAssignment(node)) {
-    return node.name.text === paramName;
+    return isTargetName(node.name.text);
   }
   return (
     ts.forEachChild(node, child =>
-      referencesContextParam(child, paramName) ? true : undefined,
+      referencesName(child, isTargetName) ? true : undefined,
     ) === true
+  );
+}
+
+// Whether folding `node` to a compile-time literal is even possible: it must
+// not touch the context param (a runtime-only value) nor any name bound by
+// an enclosing nested callback (e.g. the `row` in
+// `ctx.matrix.map(row => row.filter(x => x > 0).length)`, which is just as
+// unresolvable at compile time as the context itself).
+function referencesUnfoldableName(
+  node: ts.Node,
+  context: ExprReplacementContext,
+): boolean {
+  return referencesName(
+    node,
+    name => name === context.paramName || !!context.boundNames?.has(name),
   );
 }
 
@@ -115,6 +133,12 @@ type ExprReplacementContext = {
   macroImportsMap: { [filePath: string]: Set<string> };
   evaluatedFiles: Set<string>;
   options?: MacroOptions;
+  // Parameter names bound by a nested arrow/function callback (e.g. the `i`
+  // in `ctx.queue.filter(i => i < 5)`) that this subtree is nested inside.
+  // These are local values scoped to that callback, not compile-time
+  // constants and not context access, so identifier-folding must leave them
+  // untouched wherever they're referenced.
+  boundNames?: Set<string>;
 };
 
 const EXPR_CALLBACK_ERROR =
@@ -790,6 +814,303 @@ function collectContextComputedReplacements(
   }
 }
 
+const NESTED_CALLBACK_ERROR =
+  'expr callback: a nested function passed as a call argument must have parameters that are plain identifiers (optionally defaulted) or a single level of object/array destructuring (optionally defaulted, no computed keys, no nested patterns), with at most one trailing rest parameter; it must not have type annotations, must not be async or a generator, and its body must be a single expression or a single return statement';
+
+// A nested callback (e.g. the predicate in `ctx.queue.filter(i => i < 5)`)
+// only ever needs to reach values already available in its own scope: the
+// current expr context and its own parameters. So instead of evaluating it
+// at compile time, it's down-leveled into the same runtime expr-DSL text as
+// the rest of the body — arrow-with-expression-body forms pass through
+// almost unchanged, while block-bodied arrows and `function` expressions get
+// rewritten into `params => body` text. @conf-ts/expr-core's grammar only
+// ever needs to parse the latter (plain expression-bodied arrows), keeping
+// the runtime DSL itself free of statements/blocks.
+function assertNestedCallbackShape(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  sourceFile: ts.SourceFile,
+): void {
+  const isAsync =
+    fn.modifiers?.some(
+      modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword,
+    ) ?? false;
+  const isGenerator = ts.isFunctionExpression(fn) && !!fn.asteriskToken;
+  if (isAsync || isGenerator || !!fn.typeParameters?.length || !!fn.type) {
+    throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, fn.getStart()),
+    });
+  }
+}
+
+type NestedCallbackParamInfo = {
+  names: string[];
+  // Default-value expressions (either a whole parameter's `= expr`, or one
+  // destructured element's own `= expr`) that need the same const-folding /
+  // context-substitution treatment as the callback body itself, since they
+  // become part of the compiled expr-DSL text too.
+  defaultExpressions: ts.Expression[];
+};
+
+function assertNotShadowingContext(
+  identifier: ts.Identifier,
+  contextParamName: string,
+  sourceFile: ts.SourceFile,
+): void {
+  if (identifier.text === contextParamName) {
+    throw new ConfTSError(
+      `expr callback: a nested function's parameter cannot shadow the context parameter '${contextParamName}'`,
+      {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, identifier.getStart()),
+      },
+    );
+  }
+}
+
+// Collects every identifier bound by a parameter's binding name, recursing
+// one level into an object/array destructuring pattern — never deeper, and
+// never through a rest element nested inside a pattern (only a top-level
+// trailing parameter may be a rest parameter; see collectNestedCallbackParams).
+// Recurses into one destructured property/element's own binding, and (since
+// it's a value-position expression too) queues its default for the same
+// const-folding/context-substitution treatment as everything else — shared
+// by the object- and array-pattern branches below.
+function collectPatternElementInfo(
+  element: ts.BindingElement,
+  contextParamName: string,
+  sourceFile: ts.SourceFile,
+  info: NestedCallbackParamInfo,
+): void {
+  collectBindingNameInfo(
+    element.name,
+    contextParamName,
+    sourceFile,
+    false,
+    info,
+  );
+  if (element.initializer) {
+    info.defaultExpressions.push(element.initializer);
+  }
+}
+
+function collectBindingNameInfo(
+  name: ts.BindingName,
+  contextParamName: string,
+  sourceFile: ts.SourceFile,
+  allowPattern: boolean,
+  info: NestedCallbackParamInfo,
+): void {
+  if (ts.isIdentifier(name)) {
+    assertNotShadowingContext(name, contextParamName, sourceFile);
+    info.names.push(name.text);
+    return;
+  }
+  if (!allowPattern) {
+    throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, name.getStart()),
+    });
+  }
+  if (ts.isObjectBindingPattern(name)) {
+    for (const element of name.elements) {
+      if (
+        element.dotDotDotToken ||
+        (element.propertyName &&
+          ts.isComputedPropertyName(element.propertyName))
+      ) {
+        throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(sourceFile, element.getStart()),
+        });
+      }
+      collectPatternElementInfo(element, contextParamName, sourceFile, info);
+    }
+    return;
+  }
+  if (ts.isArrayBindingPattern(name)) {
+    for (const element of name.elements) {
+      if (ts.isOmittedExpression(element)) {
+        continue; // hole, e.g. the middle slot in `[a, , b]`
+      }
+      if (element.dotDotDotToken) {
+        throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(sourceFile, element.getStart()),
+        });
+      }
+      collectPatternElementInfo(element, contextParamName, sourceFile, info);
+    }
+  }
+}
+
+// A default referencing an earlier parameter in the same list (real JS
+// allows e.g. `(a, b = a + 1) => ...`) isn't supported: default expressions
+// are resolved against the enclosing (ancestor) scope only, the same as any
+// other expression outside this callback's own body. Referencing a sibling
+// parameter surfaces as an ordinary "can't resolve" compile error.
+function collectNestedCallbackParams(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  contextParamName: string,
+  sourceFile: ts.SourceFile,
+): NestedCallbackParamInfo {
+  const info: NestedCallbackParamInfo = { names: [], defaultExpressions: [] };
+  fn.parameters.forEach((param, index) => {
+    if (param.type) {
+      throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, param.getStart()),
+      });
+    }
+    if (param.dotDotDotToken) {
+      if (
+        index !== fn.parameters.length - 1 ||
+        !ts.isIdentifier(param.name) ||
+        !!param.initializer
+      ) {
+        throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+          file: sourceFile.fileName,
+          ...ts.getLineAndCharacterOfPosition(sourceFile, param.getStart()),
+        });
+      }
+      assertNotShadowingContext(param.name, contextParamName, sourceFile);
+      info.names.push(param.name.text);
+      return;
+    }
+    collectBindingNameInfo(
+      param.name,
+      contextParamName,
+      sourceFile,
+      true,
+      info,
+    );
+    if (param.initializer) {
+      info.defaultExpressions.push(param.initializer);
+    }
+  });
+  return info;
+}
+
+// Finds the parameter list's own parentheses by scanning source text rather
+// than walking the TS AST's child list: identifiers/keywords can't contain
+// '(' or ')', so the first '(' at/after the function's start is always the
+// param list's opening paren (skipping past `function`/a name for a
+// FunctionExpression; arrows have nothing before it), and the first ')'
+// at/after the last parameter's own end (which already spans past that
+// parameter's default value, so a paren inside a string literal there can't
+// be mistaken for it) is always the closing one.
+function findParamListParens(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  sourceFile: ts.SourceFile,
+): { openPos: number; closePos: number } {
+  const text = sourceFile.text;
+  const fnStart = fn.getStart(sourceFile);
+  const openPos = text.indexOf('(', fnStart);
+  const lastParam = fn.parameters[fn.parameters.length - 1];
+  const searchFrom = lastParam ? lastParam.getEnd() : openPos + 1;
+  const closePos = openPos === -1 ? -1 : text.indexOf(')', searchFrom);
+  if (openPos === -1 || closePos === -1) {
+    throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+      file: sourceFile.fileName,
+      ...ts.getLineAndCharacterOfPosition(sourceFile, fnStart),
+    });
+  }
+  return { openPos, closePos };
+}
+
+function getNestedCallbackBodyExpression(
+  body: ts.Block | ts.Expression,
+  sourceFile: ts.SourceFile,
+  errorNode: ts.Node,
+): ts.Expression {
+  if (ts.isBlock(body)) {
+    const stmts = body.statements;
+    if (
+      stmts.length !== 1 ||
+      !ts.isReturnStatement(stmts[0]) ||
+      !stmts[0].expression
+    ) {
+      throw new ConfTSError(NESTED_CALLBACK_ERROR, {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, errorNode.getStart()),
+      });
+    }
+    return (stmts[0] as ts.ReturnStatement).expression!;
+  }
+  return body;
+}
+
+function processNestedCallback(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  context: ExprReplacementContext,
+): void {
+  const { sourceFile, bodyStart } = context;
+  assertNestedCallbackShape(fn, sourceFile);
+  const { names: paramNames, defaultExpressions } = collectNestedCallbackParams(
+    fn,
+    context.paramName,
+    sourceFile,
+  );
+  const bodyExpr = getNestedCallbackBodyExpression(fn.body, sourceFile, fn);
+
+  // Default-value expressions can reference outer consts/context, so they
+  // need the same treatment as the body — resolved against the ancestor
+  // scope, since they run before any of this callback's own params exist.
+  for (const defaultExpr of defaultExpressions) {
+    collectConstReplacements(defaultExpr, context);
+  }
+
+  const isConciseArrow = ts.isArrowFunction(fn) && !ts.isBlock(fn.body);
+  if (!isConciseArrow) {
+    const isSimpleSingleParam =
+      fn.parameters.length === 1 &&
+      ts.isIdentifier(fn.parameters[0].name) &&
+      !fn.parameters[0].initializer &&
+      !fn.parameters[0].dotDotDotToken;
+    if (isSimpleSingleParam) {
+      // Nothing in the param list to preserve — synthesize a minimal bare
+      // `name => ` prefix rather than copying source text verbatim.
+      const paramName = (fn.parameters[0].name as ts.Identifier).text;
+      context.replacements.push([
+        fn.getStart(sourceFile) - bodyStart,
+        bodyExpr.getStart(sourceFile) - bodyStart,
+        `${paramName} => `,
+      ]);
+    } else {
+      // Anything more than a single plain identifier (destructuring,
+      // defaults, rest, multiple params) always needs real parentheses in
+      // valid JS, so keep that original `(...)` text — including whatever
+      // nested replacements collectConstReplacements below adds inside it —
+      // instead of trying to reconstruct it from scratch.
+      const { openPos, closePos } = findParamListParens(fn, sourceFile);
+      const fnStart = fn.getStart(sourceFile);
+      if (openPos > fnStart) {
+        context.replacements.push([
+          fnStart - bodyStart,
+          openPos - bodyStart,
+          '',
+        ]);
+      }
+      context.replacements.push([
+        closePos + 1 - bodyStart,
+        bodyExpr.getStart(sourceFile) - bodyStart,
+        ' => ',
+      ]);
+    }
+    context.replacements.push([
+      bodyExpr.getEnd() - bodyStart,
+      fn.getEnd() - bodyStart,
+      '',
+    ]);
+  }
+
+  const nestedContext: ExprReplacementContext = {
+    ...context,
+    boundNames: new Set([...(context.boundNames ?? []), ...paramNames]),
+  };
+  collectConstReplacements(bodyExpr, nestedContext);
+}
+
 // The callee of a call is never itself invoked at compile time (the
 // compiler has no general facility for executing arbitrary functions), so a
 // member-access callee like `[1, 2].includes` or `someArray.includes` must be
@@ -835,7 +1156,21 @@ function collectConstReplacements(
     ts.isPropertyAccessExpression(node) ||
     ts.isElementAccessExpression(node)
   ) {
+    // A base that touches the context param, or a name bound by an
+    // enclosing nested callback, somewhere further down (e.g. a call chain
+    // like `ctx.queue.filter(...).length`) can't be resolved to a
+    // compile-time value — keep the member-access chain as runtime source
+    // text instead, the same way a call's callee already is.
+    if (referencesUnfoldableName(node, context)) {
+      collectCallCalleeReplacements(node, context);
+      return;
+    }
     addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
+    return;
+  }
+
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+    processNestedCallback(node, context);
     return;
   }
 
@@ -852,7 +1187,7 @@ function collectConstReplacements(
     if (
       EXPR_RUNTIME_FALLBACK_MACROS.has(calleeName) &&
       node.arguments.length === 1 &&
-      referencesContextParam(node, paramName)
+      referencesUnfoldableName(node, context)
     ) {
       node.arguments.forEach(arg => collectConstReplacements(arg, context));
       return;
@@ -905,7 +1240,11 @@ function collectConstReplacements(
     return;
   }
 
-  if (ts.isIdentifier(node) && node.text !== paramName) {
+  if (
+    ts.isIdentifier(node) &&
+    node.text !== paramName &&
+    !context.boundNames?.has(node.text)
+  ) {
     addNodeReplacement(node, evaluateNodeLiteral(node, context), context);
     return;
   }

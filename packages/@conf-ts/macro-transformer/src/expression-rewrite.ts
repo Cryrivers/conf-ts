@@ -166,6 +166,8 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
       if (value === '?' && tokens[i + 1]?.value === '.') {
         output = trimRight(output) + '?.';
         i++;
+      } else if (value === '=>') {
+        output = `${trimRight(output)} => `;
       } else if (value === '(' && /\s$/u.test(output)) {
         // Preserve the separator emitted after a binary/keyword operator,
         // while calls and unary operators still render compactly (`fn()` /
@@ -176,7 +178,17 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
       } else if ([']', ')', '}'].includes(value)) {
         output = trimRight(output) + value;
       } else if (value === ',') {
-        output = trimRight(output) + ', ';
+        // Drop a trailing comma before a call/object closer (Prettier
+        // commonly adds one when a call wraps its sole argument — e.g. a
+        // nested callback — onto multiple lines). `]` is deliberately
+        // excluded: a trailing comma there can be a real elision
+        // (`[1, 2, ,]`), so dropping it could silently change the array.
+        const next = tokens[i + 1];
+        const isTrailingComma =
+          next?.kind === 'punct' && (next.value === ')' || next.value === '}');
+        if (!isTrailingComma) {
+          output = trimRight(output) + ', ';
+        }
       } else if (value === ':' || value === '?') {
         output = `${trimRight(output)} ${value} `;
       } else {

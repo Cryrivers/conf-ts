@@ -105,38 +105,48 @@ fn is_inlineable_macro_call(
 //     compile time)
 const EXPR_RUNTIME_FALLBACK_MACROS: &[&str] = &["String", "Number", "Boolean"];
 
-fn references_context_param(expr: &Expression, param_name: &str) -> bool {
+// Whether folding `expr` to a compile-time literal is even possible: it must
+// not touch the context param (a runtime-only value) nor any name bound by
+// an enclosing nested callback (e.g. the `row` in
+// `ctx.matrix.map(row => row.filter(x => x > 0).length)`, which is just as
+// unresolvable at compile time as the context itself).
+fn references_unfoldable_name(expr: &Expression, param_name: &str, bound_names: &[String]) -> bool {
   match expr {
-    Expression::Identifier(ident) => ident.name.as_str() == param_name,
+    Expression::Identifier(ident) => {
+      ident.name.as_str() == param_name
+        || bound_names.iter().any(|name| name == ident.name.as_str())
+    }
     Expression::BinaryExpression(bin) => {
-      references_context_param(&bin.left, param_name)
-        || references_context_param(&bin.right, param_name)
+      references_unfoldable_name(&bin.left, param_name, bound_names)
+        || references_unfoldable_name(&bin.right, param_name, bound_names)
     }
     Expression::LogicalExpression(log) => {
-      references_context_param(&log.left, param_name)
-        || references_context_param(&log.right, param_name)
+      references_unfoldable_name(&log.left, param_name, bound_names)
+        || references_unfoldable_name(&log.right, param_name, bound_names)
     }
-    Expression::UnaryExpression(unary) => references_context_param(&unary.argument, param_name),
+    Expression::UnaryExpression(unary) => {
+      references_unfoldable_name(&unary.argument, param_name, bound_names)
+    }
     Expression::ConditionalExpression(cond) => {
-      references_context_param(&cond.test, param_name)
-        || references_context_param(&cond.consequent, param_name)
-        || references_context_param(&cond.alternate, param_name)
+      references_unfoldable_name(&cond.test, param_name, bound_names)
+        || references_unfoldable_name(&cond.consequent, param_name, bound_names)
+        || references_unfoldable_name(&cond.alternate, param_name, bound_names)
     }
     Expression::ParenthesizedExpression(paren) => {
-      references_context_param(&paren.expression, param_name)
+      references_unfoldable_name(&paren.expression, param_name, bound_names)
     }
     Expression::TemplateLiteral(tpl) => tpl
       .expressions
       .iter()
-      .any(|e| references_context_param(e, param_name)),
+      .any(|e| references_unfoldable_name(e, param_name, bound_names)),
     Expression::ArrayExpression(arr) => arr.elements.iter().any(|elem| match elem {
       ArrayExpressionElement::SpreadElement(spread) => {
-        references_context_param(&spread.argument, param_name)
+        references_unfoldable_name(&spread.argument, param_name, bound_names)
       }
       ArrayExpressionElement::Elision(_) => false,
       other => other
         .as_expression()
-        .is_some_and(|e| references_context_param(e, param_name)),
+        .is_some_and(|e| references_unfoldable_name(e, param_name, bound_names)),
     }),
     Expression::ObjectExpression(obj) => obj.properties.iter().any(|prop| match prop {
       ObjectPropertyKind::ObjectProperty(p) => {
@@ -144,70 +154,84 @@ fn references_context_param(expr: &Expression, param_name: &str) -> bool {
           && p
             .key
             .as_expression()
-            .is_some_and(|e| references_context_param(e, param_name));
-        key_references || references_context_param(&p.value, param_name)
+            .is_some_and(|e| references_unfoldable_name(e, param_name, bound_names));
+        key_references || references_unfoldable_name(&p.value, param_name, bound_names)
       }
       ObjectPropertyKind::SpreadProperty(spread) => {
-        references_context_param(&spread.argument, param_name)
+        references_unfoldable_name(&spread.argument, param_name, bound_names)
       }
     }),
     Expression::TaggedTemplateExpression(tagged) => {
-      references_context_param(&tagged.tag, param_name)
+      references_unfoldable_name(&tagged.tag, param_name, bound_names)
         || tagged
           .quasi
           .expressions
           .iter()
-          .any(|e| references_context_param(e, param_name))
+          .any(|e| references_unfoldable_name(e, param_name, bound_names))
     }
-    Expression::CallExpression(call) => call_references_context_param(call, param_name),
+    Expression::CallExpression(call) => {
+      call_references_unfoldable_name(call, param_name, bound_names)
+    }
     Expression::StaticMemberExpression(member) => {
-      references_context_param(&member.object, param_name)
+      references_unfoldable_name(&member.object, param_name, bound_names)
     }
     Expression::ComputedMemberExpression(member) => {
-      references_context_param(&member.object, param_name)
-        || references_context_param(&member.expression, param_name)
+      references_unfoldable_name(&member.object, param_name, bound_names)
+        || references_unfoldable_name(&member.expression, param_name, bound_names)
     }
     Expression::ChainExpression(chain) => match &chain.expression {
       ChainElement::StaticMemberExpression(member) => {
-        references_context_param(&member.object, param_name)
+        references_unfoldable_name(&member.object, param_name, bound_names)
       }
       ChainElement::ComputedMemberExpression(member) => {
-        references_context_param(&member.object, param_name)
-          || references_context_param(&member.expression, param_name)
+        references_unfoldable_name(&member.object, param_name, bound_names)
+          || references_unfoldable_name(&member.expression, param_name, bound_names)
       }
-      ChainElement::CallExpression(call) => call_references_context_param(call, param_name),
+      ChainElement::CallExpression(call) => {
+        call_references_unfoldable_name(call, param_name, bound_names)
+      }
       ChainElement::TSNonNullExpression(ts_nn) => {
-        references_context_param(&ts_nn.expression, param_name)
+        references_unfoldable_name(&ts_nn.expression, param_name, bound_names)
       }
       _ => false,
     },
-    Expression::TSAsExpression(ts_as) => references_context_param(&ts_as.expression, param_name),
+    Expression::TSAsExpression(ts_as) => {
+      references_unfoldable_name(&ts_as.expression, param_name, bound_names)
+    }
     Expression::TSSatisfiesExpression(ts_sat) => {
-      references_context_param(&ts_sat.expression, param_name)
+      references_unfoldable_name(&ts_sat.expression, param_name, bound_names)
     }
     Expression::TSNonNullExpression(ts_nn) => {
-      references_context_param(&ts_nn.expression, param_name)
+      references_unfoldable_name(&ts_nn.expression, param_name, bound_names)
     }
     Expression::TSTypeAssertion(assertion) => {
-      references_context_param(&assertion.expression, param_name)
+      references_unfoldable_name(&assertion.expression, param_name, bound_names)
     }
     Expression::TSInstantiationExpression(instantiation) => {
-      references_context_param(&instantiation.expression, param_name)
+      references_unfoldable_name(&instantiation.expression, param_name, bound_names)
     }
     Expression::SequenceExpression(seq) => seq
       .expressions
       .iter()
-      .any(|e| references_context_param(e, param_name)),
+      .any(|e| references_unfoldable_name(e, param_name, bound_names)),
+    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+      nested_callback_recursion_target(expr)
+        .is_some_and(|body| references_unfoldable_name(body, param_name, bound_names))
+    }
     _ => false,
   }
 }
 
-fn call_references_context_param(call: &CallExpression, param_name: &str) -> bool {
-  references_context_param(&call.callee, param_name)
+fn call_references_unfoldable_name(
+  call: &CallExpression,
+  param_name: &str,
+  bound_names: &[String],
+) -> bool {
+  references_unfoldable_name(&call.callee, param_name, bound_names)
     || call.arguments.iter().any(|arg| {
       arg
         .as_expression()
-        .is_some_and(|e| references_context_param(e, param_name))
+        .is_some_and(|e| references_unfoldable_name(e, param_name, bound_names))
     })
 }
 
@@ -856,6 +880,348 @@ fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
   }
 }
 
+const NESTED_CALLBACK_ERROR: &str = "expr callback: a nested function passed as a call argument must have parameters that are plain identifiers (optionally defaulted) or a single level of object/array destructuring (optionally defaulted, no computed keys, no nested patterns), with at most one trailing rest parameter; it must not have type annotations, must not be async or a generator, and its body must be a single expression or a single return statement";
+
+fn invalid_nested_callback_error(file_ctx: &FileContext, span_start: u32) -> ConfTSError {
+  let (line, character) = get_location(&file_ctx.line_index, span_start);
+  ConfTSError::new(NESTED_CALLBACK_ERROR, &file_ctx.file_path, line, character)
+}
+
+// Extracts the single body expression of a nested arrow/function callback
+// (e.g. the predicate in `ctx.queue.filter(i => i < 5)`) if its body already
+// has the shape collect_const_replacements accepts: a concise arrow
+// expression, or a block containing exactly one `return` statement. Returns
+// None for any other shape — call sites that need a hard error construct one
+// themselves (via `nested_callback_body_expr` below); the handful that only
+// need a best-effort peek (references_unfoldable_name and friends) just treat
+// None as "nothing to recurse into".
+fn nested_callback_body_expr_unchecked<'e, 'a>(
+  body: &'e FunctionBody<'a>,
+  is_concise: bool,
+) -> Option<&'e Expression<'a>> {
+  if is_concise {
+    return match body.statements.first() {
+      Some(Statement::ExpressionStatement(expr_stmt)) => Some(&expr_stmt.expression),
+      _ => None,
+    };
+  }
+  if body.statements.len() == 1
+    && let Statement::ReturnStatement(ret) = &body.statements[0]
+  {
+    return ret.argument.as_ref();
+  }
+  None
+}
+
+// Dispatches nested_callback_body_expr_unchecked over whichever of the two
+// nested-callback node kinds `expr` is (or None for anything else) — shared
+// by every read-only pass that just needs to recurse into a callback's body
+// without re-validating its shape (references_unfoldable_name,
+// collect_type_syntax_erasures, collect_string_requotes,
+// collect_context_replacements, validate_expr_syntax).
+fn nested_callback_recursion_target<'e, 'a>(
+  expr: &'e Expression<'a>,
+) -> Option<&'e Expression<'a>> {
+  match expr {
+    Expression::ArrowFunctionExpression(arrow) => {
+      nested_callback_body_expr_unchecked(&arrow.body, arrow.expression)
+    }
+    Expression::FunctionExpression(func) => func
+      .body
+      .as_ref()
+      .and_then(|body| nested_callback_body_expr_unchecked(body, false)),
+    _ => None,
+  }
+}
+
+fn nested_callback_body_expr<'e, 'a>(
+  body: &'e FunctionBody<'a>,
+  is_concise: bool,
+  file_ctx: &FileContext,
+  error_span_start: u32,
+) -> Result<&'e Expression<'a>, ConfTSError> {
+  nested_callback_body_expr_unchecked(body, is_concise)
+    .ok_or_else(|| invalid_nested_callback_error(file_ctx, error_span_start))
+}
+
+fn shadow_error(
+  identifier: &BindingIdentifier,
+  contextual_param_name: &str,
+  file_ctx: &FileContext,
+) -> ConfTSError {
+  let (line, character) = get_location(&file_ctx.line_index, identifier.span.start);
+  ConfTSError::new(
+    format!(
+      "expr callback: a nested function's parameter cannot shadow the context parameter '{}'",
+      contextual_param_name
+    ),
+    &file_ctx.file_path,
+    line,
+    character,
+  )
+}
+
+// Collects every identifier bound by a binding pattern, recursing one level
+// into an object/array destructuring pattern — never deeper — and gathers
+// any default-value expressions found along the way (a nested element's own
+// `= expr`, via `BindingPattern::AssignmentPattern`) so the caller can fold
+// them the same way the callback body is folded. Rest elements nested
+// *inside* a pattern (`{a, ...rest}`, `[a, ...rest]`) aren't supported —
+// only a top-level trailing parameter may be a rest parameter (see
+// collect_nested_callback_params).
+fn collect_binding_name_info<'a>(
+  pattern: &'a BindingPattern<'a>,
+  contextual_param_name: &str,
+  file_ctx: &FileContext,
+  allow_pattern: bool,
+  names: &mut Vec<String>,
+  default_expressions: &mut Vec<&'a Expression<'a>>,
+) -> Result<(), ConfTSError> {
+  match pattern {
+    BindingPattern::BindingIdentifier(ident) => {
+      if ident.name.as_str() == contextual_param_name {
+        return Err(shadow_error(ident, contextual_param_name, file_ctx));
+      }
+      names.push(ident.name.as_str().to_string());
+      Ok(())
+    }
+    BindingPattern::AssignmentPattern(assignment) => {
+      collect_binding_name_info(
+        &assignment.left,
+        contextual_param_name,
+        file_ctx,
+        allow_pattern,
+        names,
+        default_expressions,
+      )?;
+      default_expressions.push(&assignment.right);
+      Ok(())
+    }
+    BindingPattern::ObjectPattern(object) if allow_pattern => {
+      if object.rest.is_some() {
+        return Err(invalid_nested_callback_error(file_ctx, object.span.start));
+      }
+      for property in &object.properties {
+        if property.computed {
+          return Err(invalid_nested_callback_error(file_ctx, property.span.start));
+        }
+        collect_binding_name_info(
+          &property.value,
+          contextual_param_name,
+          file_ctx,
+          false,
+          names,
+          default_expressions,
+        )?;
+      }
+      Ok(())
+    }
+    BindingPattern::ArrayPattern(array) if allow_pattern => {
+      if array.rest.is_some() {
+        return Err(invalid_nested_callback_error(file_ctx, array.span.start));
+      }
+      for element in &array.elements {
+        let Some(element_pattern) = element else {
+          continue; // hole, e.g. the middle slot in `[a, , b]`
+        };
+        collect_binding_name_info(
+          element_pattern,
+          contextual_param_name,
+          file_ctx,
+          false,
+          names,
+          default_expressions,
+        )?;
+      }
+      Ok(())
+    }
+    _ => Err(invalid_nested_callback_error(
+      file_ctx,
+      pattern.span().start,
+    )),
+  }
+}
+
+// A default referencing an earlier parameter in the same list (real JS
+// allows e.g. `(a, b = a + 1) => ...`) isn't supported: default expressions
+// are resolved against the enclosing (ancestor) scope only, the same as any
+// other expression outside this callback's own body.
+fn collect_nested_callback_params<'a>(
+  params: &'a FormalParameters<'a>,
+  contextual_param_name: &str,
+  file_ctx: &FileContext,
+) -> Result<(Vec<String>, Vec<&'a Expression<'a>>), ConfTSError> {
+  let mut names = Vec::with_capacity(params.items.len());
+  let mut default_expressions: Vec<&'a Expression<'a>> = Vec::new();
+  for item in &params.items {
+    if item.type_annotation.is_some() {
+      return Err(invalid_nested_callback_error(file_ctx, item.span.start));
+    }
+    collect_binding_name_info(
+      &item.pattern,
+      contextual_param_name,
+      file_ctx,
+      true,
+      &mut names,
+      &mut default_expressions,
+    )?;
+    if let Some(initializer) = &item.initializer {
+      default_expressions.push(initializer);
+    }
+  }
+  if let Some(rest) = &params.rest {
+    if rest.type_annotation.is_some() {
+      return Err(invalid_nested_callback_error(file_ctx, rest.span.start));
+    }
+    let BindingPattern::BindingIdentifier(ident) = &rest.rest.argument else {
+      return Err(invalid_nested_callback_error(file_ctx, rest.span.start));
+    };
+    if ident.name.as_str() == contextual_param_name {
+      return Err(shadow_error(ident, contextual_param_name, file_ctx));
+    }
+    names.push(ident.name.as_str().to_string());
+  }
+  Ok((names, default_expressions))
+}
+
+fn is_simple_single_identifier_params(params: &FormalParameters) -> bool {
+  params.rest.is_none()
+    && params.items.len() == 1
+    && params.items[0].initializer.is_none()
+    && matches!(
+      params.items[0].pattern,
+      BindingPattern::BindingIdentifier(_)
+    )
+}
+
+// The end of the *last individual parameter* (or rest element) — unlike
+// `FormalParameters::span`, which (per oxc, unlike TS's NodeArray
+// convention) extends through the closing paren itself, so using it as a
+// search-start would skip past that paren entirely.
+fn last_param_end(params: &FormalParameters) -> Option<u32> {
+  params
+    .rest
+    .as_ref()
+    .map(|rest| rest.span.end)
+    .or_else(|| params.items.last().map(|item| item.span.end))
+}
+
+// Mirrors macro-transformer/src/macro.ts's findParamListParens: identifiers
+// and keywords can't contain '(' or ')', so the first '(' at/after the
+// function's start is always the param list's own opening paren (skipping
+// past `function`/a name for a FunctionExpression; arrows have nothing
+// before it), and the first ')' at/after the end of the last parameter
+// (which already spans past that parameter's own default value, so a paren
+// inside a string literal there can't be mistaken for it) is always the
+// closing one.
+fn find_param_list_parens(
+  source: &str,
+  fn_start: u32,
+  last_param_end: Option<u32>,
+) -> Option<(u32, u32)> {
+  let open_offset = source.get(fn_start as usize..)?.find('(')?;
+  let open_pos = fn_start + open_offset as u32;
+  let search_from = last_param_end.unwrap_or(open_pos + 1).max(open_pos + 1);
+  let close_offset = source.get(search_from as usize..)?.find(')')?;
+  Some((open_pos, search_from + close_offset as u32))
+}
+
+// Handles a nested arrow/function callback found while collecting
+// const-replacements: down-levels its shell (`function (a) { return ... }` /
+// `(a) => { return ...; }`) into plain `a => ...` text when needed, then
+// recurses into the body with `params` pushed onto the expr-local-names
+// stack so identifiers they bind aren't mistaken for compile-time constants.
+#[allow(clippy::too_many_arguments)]
+fn handle_nested_callback<'a>(
+  node: &Expression<'a>,
+  body_expr: &Expression<'a>,
+  params: &[String],
+  default_expressions: &[&Expression<'a>],
+  is_simple_single_param: bool,
+  needs_shell_rewrite: bool,
+  last_param_end: Option<u32>,
+  param_name: &str,
+  bound_names: &[String],
+  body_start: u32,
+  replacements: &mut Vec<ExprReplacement>,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<(), ConfTSError> {
+  // Default-value expressions can reference outer consts/context, so they
+  // need the same treatment as the body — resolved against the ancestor
+  // scope, since they run before any of this callback's own params exist.
+  for default_expr in default_expressions {
+    collect_const_replacements(
+      default_expr,
+      param_name,
+      bound_names,
+      body_start,
+      replacements,
+      file_ctx,
+      ctx,
+      options,
+    )?;
+    // collect_const_replacements only folds constants — a bare `ctx.foo`
+    // reference inside a default expression is deliberately left alone by
+    // that pass (it's not a constant), so context.foo -> foo stripping has
+    // to be applied here explicitly too, the same as it is for body_expr in
+    // evaluate_expr below.
+    collect_context_replacements(default_expr, param_name, body_start, replacements, file_ctx)?;
+  }
+
+  if needs_shell_rewrite {
+    let fn_start = node.span().start;
+    if is_simple_single_param {
+      // Nothing in the param list to preserve — synthesize a minimal bare
+      // `name => ` prefix rather than copying source text verbatim.
+      let prefix_start = fn_start as usize - body_start as usize;
+      let prefix_end = body_expr.span().start as usize - body_start as usize;
+      replacements.push((prefix_start, prefix_end, format!("{} => ", params[0])));
+    } else {
+      // Anything more than a single plain identifier (destructuring,
+      // defaults, rest, multiple params) always needs real parentheses in
+      // valid JS, so keep that original `(...)` text — including whatever
+      // nested replacements were just added inside it for default values —
+      // instead of trying to reconstruct it from scratch.
+      let source = file_ctx.parsed.source();
+      let Some((open_pos, close_pos)) = find_param_list_parens(source, fn_start, last_param_end)
+      else {
+        return Err(invalid_nested_callback_error(file_ctx, fn_start));
+      };
+      if open_pos > fn_start {
+        replacements.push((
+          fn_start as usize - body_start as usize,
+          open_pos as usize - body_start as usize,
+          String::new(),
+        ));
+      }
+      replacements.push((
+        close_pos as usize + 1 - body_start as usize,
+        body_expr.span().start as usize - body_start as usize,
+        " => ".to_string(),
+      ));
+    }
+    let suffix_start = body_expr.span().end as usize - body_start as usize;
+    let suffix_end = node.span().end as usize - body_start as usize;
+    replacements.push((suffix_start, suffix_end, String::new()));
+  }
+  // The body sees this callback's own params in addition to whatever was
+  // already in scope from enclosing callbacks — extend, don't replace.
+  let mut body_bound_names = bound_names.to_vec();
+  body_bound_names.extend(params.iter().cloned());
+  collect_const_replacements(
+    body_expr,
+    param_name,
+    &body_bound_names,
+    body_start,
+    replacements,
+    file_ctx,
+    ctx,
+    options,
+  )
+}
+
 // The callee of a call is never itself invoked at compile time (the native
 // evaluator has no general facility for executing arbitrary functions), so a
 // member-access callee like `[1, 2].includes` or `someArray.includes` must be
@@ -865,9 +1231,11 @@ fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
 // below, which does fold non-context-rooted property access to a value).
 // Only the non-member base of the chain (and any computed keys) still need
 // the normal constant-folding / context-substitution treatment.
+#[allow(clippy::too_many_arguments)]
 fn collect_call_callee_replacements(
   expr: &Expression,
   param_name: &str,
+  bound_names: &[String],
   body_start: u32,
   replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
@@ -878,6 +1246,7 @@ fn collect_call_callee_replacements(
     Expression::StaticMemberExpression(member) => collect_call_callee_replacements(
       &member.object,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -888,6 +1257,7 @@ fn collect_call_callee_replacements(
       collect_call_callee_replacements(
         &member.object,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -897,6 +1267,7 @@ fn collect_call_callee_replacements(
       collect_const_replacements(
         &member.expression,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -907,6 +1278,7 @@ fn collect_call_callee_replacements(
     Expression::TSAsExpression(ts_as) => collect_call_callee_replacements(
       &ts_as.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -916,6 +1288,7 @@ fn collect_call_callee_replacements(
     Expression::TSSatisfiesExpression(ts_sat) => collect_call_callee_replacements(
       &ts_sat.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -925,6 +1298,7 @@ fn collect_call_callee_replacements(
     Expression::TSNonNullExpression(ts_nn) => collect_call_callee_replacements(
       &ts_nn.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -934,6 +1308,7 @@ fn collect_call_callee_replacements(
     Expression::TSTypeAssertion(assertion) => collect_call_callee_replacements(
       &assertion.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -943,6 +1318,7 @@ fn collect_call_callee_replacements(
     Expression::ParenthesizedExpression(paren) => collect_call_callee_replacements(
       &paren.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -952,6 +1328,7 @@ fn collect_call_callee_replacements(
     _ => collect_const_replacements(
       expr,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -961,9 +1338,11 @@ fn collect_call_callee_replacements(
   }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_const_replacements(
   expr: &Expression,
   param_name: &str,
+  bound_names: &[String],
   body_start: u32,
   replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
@@ -977,6 +1356,24 @@ fn collect_const_replacements(
         return collect_const_replacements(
           &member.object,
           param_name,
+          bound_names,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        );
+      }
+      // A base that touches the context param, or a name bound by an
+      // enclosing nested callback, somewhere further down (e.g. a call
+      // chain like `ctx.queue.filter(...).length`) can't be resolved to a
+      // compile-time value — keep the member-access chain as runtime
+      // source text instead, the same way a call's callee already is.
+      if references_unfoldable_name(&member.object, param_name, bound_names) {
+        return collect_call_callee_replacements(
+          expr,
+          param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1018,13 +1415,76 @@ fn collect_const_replacements(
       }
     }
 
-    Expression::Identifier(ident) if ident.name.as_str() != param_name => {
+    Expression::Identifier(ident)
+      if ident.name.as_str() != param_name
+        && !bound_names.iter().any(|name| name == ident.name.as_str()) =>
+    {
       let value = evaluate(expr, file_ctx, ctx, None, options)?;
       let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
       let start = expr.span().start as usize - body_start as usize;
       let end = expr.span().end as usize - body_start as usize;
       replacements.push((start, end, literal));
       Ok(())
+    }
+
+    Expression::ArrowFunctionExpression(arrow) => {
+      if arrow.r#async || arrow.type_parameters.is_some() || arrow.return_type.is_some() {
+        return Err(invalid_nested_callback_error(file_ctx, arrow.span.start));
+      }
+      let (params, default_expressions) =
+        collect_nested_callback_params(&arrow.params, param_name, file_ctx)?;
+      let body_expr =
+        nested_callback_body_expr(&arrow.body, arrow.expression, file_ctx, arrow.span.start)?;
+      let is_simple_single_param = is_simple_single_identifier_params(&arrow.params);
+      handle_nested_callback(
+        expr,
+        body_expr,
+        &params,
+        &default_expressions,
+        is_simple_single_param,
+        !arrow.expression,
+        last_param_end(&arrow.params),
+        param_name,
+        bound_names,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
+    }
+
+    Expression::FunctionExpression(func) => {
+      if func.r#async
+        || func.generator
+        || func.type_parameters.is_some()
+        || func.return_type.is_some()
+      {
+        return Err(invalid_nested_callback_error(file_ctx, func.span.start));
+      }
+      let Some(body) = &func.body else {
+        return Err(invalid_nested_callback_error(file_ctx, func.span.start));
+      };
+      let (params, default_expressions) =
+        collect_nested_callback_params(&func.params, param_name, file_ctx)?;
+      let body_expr = nested_callback_body_expr(body, false, file_ctx, func.span.start)?;
+      let is_simple_single_param = is_simple_single_identifier_params(&func.params);
+      handle_nested_callback(
+        expr,
+        body_expr,
+        &params,
+        &default_expressions,
+        is_simple_single_param,
+        true,
+        last_param_end(&func.params),
+        param_name,
+        bound_names,
+        body_start,
+        replacements,
+        file_ctx,
+        ctx,
+        options,
+      )
     }
 
     Expression::CallExpression(call) => {
@@ -1083,13 +1543,14 @@ fn collect_const_replacements(
         if EXPR_RUNTIME_FALLBACK_MACROS.contains(&callee_name.as_str())
           && call.arguments.len() == 1
           && call.arguments[0].as_expression().is_some()
-          && references_context_param(expr, param_name)
+          && references_unfoldable_name(expr, param_name, bound_names)
         {
           for arg in &call.arguments {
             if let Some(e) = arg.as_expression() {
               collect_const_replacements(
                 e,
                 param_name,
+                bound_names,
                 body_start,
                 replacements,
                 file_ctx,
@@ -1110,6 +1571,7 @@ fn collect_const_replacements(
       walk_const_children(
         expr,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1121,6 +1583,7 @@ fn collect_const_replacements(
     _ => walk_const_children(
       expr,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1130,9 +1593,11 @@ fn collect_const_replacements(
   }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_const_children(
   expr: &Expression,
   param_name: &str,
+  bound_names: &[String],
   body_start: u32,
   replacements: &mut Vec<ExprReplacement>,
   file_ctx: &FileContext,
@@ -1144,6 +1609,7 @@ fn walk_const_children(
       collect_const_replacements(
         &bin.left,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1153,6 +1619,7 @@ fn walk_const_children(
       collect_const_replacements(
         &bin.right,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1164,6 +1631,7 @@ fn walk_const_children(
       collect_const_replacements(
         &log.left,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1173,6 +1641,7 @@ fn walk_const_children(
       collect_const_replacements(
         &log.right,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1183,6 +1652,7 @@ fn walk_const_children(
     Expression::UnaryExpression(unary) => collect_const_replacements(
       &unary.argument,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1193,6 +1663,7 @@ fn walk_const_children(
       collect_const_replacements(
         &cond.test,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1202,6 +1673,7 @@ fn walk_const_children(
       collect_const_replacements(
         &cond.consequent,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1211,6 +1683,7 @@ fn walk_const_children(
       collect_const_replacements(
         &cond.alternate,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1221,6 +1694,7 @@ fn walk_const_children(
     Expression::ParenthesizedExpression(paren) => collect_const_replacements(
       &paren.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1232,6 +1706,7 @@ fn walk_const_children(
         collect_const_replacements(
           e,
           param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1245,6 +1720,7 @@ fn walk_const_children(
       collect_const_replacements(
         &tagged.tag,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1255,6 +1731,7 @@ fn walk_const_children(
         collect_const_replacements(
           expression,
           param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1267,6 +1744,7 @@ fn walk_const_children(
     Expression::TSInstantiationExpression(instantiation) => collect_const_replacements(
       &instantiation.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1280,6 +1758,7 @@ fn walk_const_children(
             collect_const_replacements(
               &spread.argument,
               param_name,
+              bound_names,
               body_start,
               replacements,
               file_ctx,
@@ -1293,6 +1772,7 @@ fn walk_const_children(
               collect_const_replacements(
                 e,
                 param_name,
+                bound_names,
                 body_start,
                 replacements,
                 file_ctx,
@@ -1313,6 +1793,7 @@ fn walk_const_children(
               collect_const_replacements(
                 &prop.value,
                 param_name,
+                bound_names,
                 body_start,
                 replacements,
                 file_ctx,
@@ -1325,6 +1806,7 @@ fn walk_const_children(
             collect_const_replacements(
               &spread.argument,
               param_name,
+              bound_names,
               body_start,
               replacements,
               file_ctx,
@@ -1340,6 +1822,7 @@ fn walk_const_children(
       collect_call_callee_replacements(
         &call.callee,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1351,6 +1834,7 @@ fn walk_const_children(
           collect_const_replacements(
             e,
             param_name,
+            bound_names,
             body_start,
             replacements,
             file_ctx,
@@ -1365,6 +1849,7 @@ fn walk_const_children(
       collect_const_replacements(
         &member.object,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1374,6 +1859,7 @@ fn walk_const_children(
       collect_const_replacements(
         &member.expression,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1385,6 +1871,7 @@ fn walk_const_children(
       ChainElement::StaticMemberExpression(member) => collect_const_replacements(
         &member.object,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1395,6 +1882,7 @@ fn walk_const_children(
         collect_const_replacements(
           &member.object,
           param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1404,6 +1892,7 @@ fn walk_const_children(
         collect_const_replacements(
           &member.expression,
           param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1415,6 +1904,7 @@ fn walk_const_children(
         collect_call_callee_replacements(
           &call.callee,
           param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1426,6 +1916,7 @@ fn walk_const_children(
             collect_const_replacements(
               expression,
               param_name,
+              bound_names,
               body_start,
               replacements,
               file_ctx,
@@ -1439,6 +1930,7 @@ fn walk_const_children(
       ChainElement::TSNonNullExpression(ts_non_null) => collect_const_replacements(
         &ts_non_null.expression,
         param_name,
+        bound_names,
         body_start,
         replacements,
         file_ctx,
@@ -1450,6 +1942,7 @@ fn walk_const_children(
     Expression::TSAsExpression(ts_as) => collect_const_replacements(
       &ts_as.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1459,6 +1952,7 @@ fn walk_const_children(
     Expression::TSSatisfiesExpression(ts_sat) => collect_const_replacements(
       &ts_sat.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1468,6 +1962,7 @@ fn walk_const_children(
     Expression::TSNonNullExpression(ts_nn) => collect_const_replacements(
       &ts_nn.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1477,6 +1972,7 @@ fn walk_const_children(
     Expression::TSTypeAssertion(assertion) => collect_const_replacements(
       &assertion.expression,
       param_name,
+      bound_names,
       body_start,
       replacements,
       file_ctx,
@@ -1488,6 +1984,7 @@ fn walk_const_children(
         collect_const_replacements(
           e,
           param_name,
+          bound_names,
           body_start,
           replacements,
           file_ctx,
@@ -1501,10 +1998,47 @@ fn walk_const_children(
   }
 }
 
+// Prettier commonly puts a trailing comma after the last argument/property
+// when it wraps a call or object literal onto multiple lines — very likely
+// now that a single nested-callback argument (see handle_nested_callback
+// above) can itself span several lines. Array literals are deliberately
+// excluded: a trailing comma there can be a real elision (`[1, 2, ,]`), so
+// erasing it could silently change the array's length/holes.
+fn erase_trailing_comma(
+  file_ctx: &FileContext,
+  last_item_end: u32,
+  container_end: u32,
+  body_start: u32,
+  replacements: &mut Vec<ExprReplacement>,
+) {
+  if container_end == 0 || container_end <= last_item_end {
+    return;
+  }
+  let source = file_ctx.parsed.source();
+  let closer_start = container_end as usize - 1;
+  if closer_start > source.len() || last_item_end as usize > closer_start {
+    return;
+  }
+  let gap = &source[last_item_end as usize..closer_start];
+  let Some(comma_offset) = gap.find(',') else {
+    return;
+  };
+  if gap.trim() != "," {
+    return;
+  }
+  let comma_pos = last_item_end as usize + comma_offset;
+  let start = comma_pos - body_start as usize;
+  let end = start + 1;
+  if !is_span_covered_by_prior(start, end, replacements) {
+    replacements.push((start, end, String::new()));
+  }
+}
+
 fn collect_type_syntax_erasures(
   expr: &Expression,
   body_start: u32,
   replacements: &mut Vec<ExprReplacement>,
+  file_ctx: &FileContext,
 ) {
   let start = expr.span().start as usize - body_start as usize;
   let end = expr.span().end as usize - body_start as usize;
@@ -1519,7 +2053,7 @@ fn collect_type_syntax_erasures(
         ts_as.span.end as usize - body_start as usize,
         String::new(),
       ));
-      collect_type_syntax_erasures(&ts_as.expression, body_start, replacements);
+      collect_type_syntax_erasures(&ts_as.expression, body_start, replacements, file_ctx);
     }
     Expression::TSSatisfiesExpression(ts_satisfies) => {
       replacements.push((
@@ -1527,7 +2061,7 @@ fn collect_type_syntax_erasures(
         ts_satisfies.span.end as usize - body_start as usize,
         String::new(),
       ));
-      collect_type_syntax_erasures(&ts_satisfies.expression, body_start, replacements);
+      collect_type_syntax_erasures(&ts_satisfies.expression, body_start, replacements, file_ctx);
     }
     Expression::TSNonNullExpression(ts_non_null) => {
       replacements.push((
@@ -1535,7 +2069,7 @@ fn collect_type_syntax_erasures(
         ts_non_null.span.end as usize - body_start as usize,
         String::new(),
       ));
-      collect_type_syntax_erasures(&ts_non_null.expression, body_start, replacements);
+      collect_type_syntax_erasures(&ts_non_null.expression, body_start, replacements, file_ctx);
     }
     Expression::TSTypeAssertion(assertion) => {
       replacements.push((
@@ -1543,33 +2077,38 @@ fn collect_type_syntax_erasures(
         assertion.expression.span().start as usize - body_start as usize,
         String::new(),
       ));
-      collect_type_syntax_erasures(&assertion.expression, body_start, replacements);
+      collect_type_syntax_erasures(&assertion.expression, body_start, replacements, file_ctx);
     }
     Expression::BinaryExpression(binary) => {
-      collect_type_syntax_erasures(&binary.left, body_start, replacements);
-      collect_type_syntax_erasures(&binary.right, body_start, replacements);
+      collect_type_syntax_erasures(&binary.left, body_start, replacements, file_ctx);
+      collect_type_syntax_erasures(&binary.right, body_start, replacements, file_ctx);
     }
     Expression::LogicalExpression(logical) => {
-      collect_type_syntax_erasures(&logical.left, body_start, replacements);
-      collect_type_syntax_erasures(&logical.right, body_start, replacements);
+      collect_type_syntax_erasures(&logical.left, body_start, replacements, file_ctx);
+      collect_type_syntax_erasures(&logical.right, body_start, replacements, file_ctx);
     }
     Expression::UnaryExpression(unary) => {
-      collect_type_syntax_erasures(&unary.argument, body_start, replacements);
+      collect_type_syntax_erasures(&unary.argument, body_start, replacements, file_ctx);
     }
     Expression::ConditionalExpression(conditional) => {
-      collect_type_syntax_erasures(&conditional.test, body_start, replacements);
-      collect_type_syntax_erasures(&conditional.consequent, body_start, replacements);
-      collect_type_syntax_erasures(&conditional.alternate, body_start, replacements);
+      collect_type_syntax_erasures(&conditional.test, body_start, replacements, file_ctx);
+      collect_type_syntax_erasures(&conditional.consequent, body_start, replacements, file_ctx);
+      collect_type_syntax_erasures(&conditional.alternate, body_start, replacements, file_ctx);
     }
     Expression::ParenthesizedExpression(parenthesized) => {
-      collect_type_syntax_erasures(&parenthesized.expression, body_start, replacements);
+      collect_type_syntax_erasures(
+        &parenthesized.expression,
+        body_start,
+        replacements,
+        file_ctx,
+      );
     }
     Expression::StaticMemberExpression(member) => {
-      collect_type_syntax_erasures(&member.object, body_start, replacements);
+      collect_type_syntax_erasures(&member.object, body_start, replacements, file_ctx);
     }
     Expression::ComputedMemberExpression(member) => {
-      collect_type_syntax_erasures(&member.object, body_start, replacements);
-      collect_type_syntax_erasures(&member.expression, body_start, replacements);
+      collect_type_syntax_erasures(&member.object, body_start, replacements, file_ctx);
+      collect_type_syntax_erasures(&member.expression, body_start, replacements, file_ctx);
     }
     Expression::CallExpression(call) => {
       if let Some(type_arguments) = &call.type_arguments {
@@ -1579,20 +2118,29 @@ fn collect_type_syntax_erasures(
           String::new(),
         ));
       }
-      collect_type_syntax_erasures(&call.callee, body_start, replacements);
+      collect_type_syntax_erasures(&call.callee, body_start, replacements, file_ctx);
       for argument in &call.arguments {
         if let Some(expression) = argument.as_expression() {
-          collect_type_syntax_erasures(expression, body_start, replacements);
+          collect_type_syntax_erasures(expression, body_start, replacements, file_ctx);
         }
+      }
+      if let Some(last_arg) = call.arguments.last() {
+        erase_trailing_comma(
+          file_ctx,
+          last_arg.span().end,
+          call.span.end,
+          body_start,
+          replacements,
+        );
       }
     }
     Expression::ChainExpression(chain) => match &chain.expression {
       ChainElement::StaticMemberExpression(member) => {
-        collect_type_syntax_erasures(&member.object, body_start, replacements);
+        collect_type_syntax_erasures(&member.object, body_start, replacements, file_ctx);
       }
       ChainElement::ComputedMemberExpression(member) => {
-        collect_type_syntax_erasures(&member.object, body_start, replacements);
-        collect_type_syntax_erasures(&member.expression, body_start, replacements);
+        collect_type_syntax_erasures(&member.object, body_start, replacements, file_ctx);
+        collect_type_syntax_erasures(&member.expression, body_start, replacements, file_ctx);
       }
       ChainElement::CallExpression(call) => {
         if let Some(type_arguments) = &call.type_arguments {
@@ -1602,11 +2150,20 @@ fn collect_type_syntax_erasures(
             String::new(),
           ));
         }
-        collect_type_syntax_erasures(&call.callee, body_start, replacements);
+        collect_type_syntax_erasures(&call.callee, body_start, replacements, file_ctx);
         for argument in &call.arguments {
           if let Some(expression) = argument.as_expression() {
-            collect_type_syntax_erasures(expression, body_start, replacements);
+            collect_type_syntax_erasures(expression, body_start, replacements, file_ctx);
           }
+        }
+        if let Some(last_arg) = call.arguments.last() {
+          erase_trailing_comma(
+            file_ctx,
+            last_arg.span().end,
+            call.span.end,
+            body_start,
+            replacements,
+          );
         }
       }
       ChainElement::TSNonNullExpression(ts_non_null) => {
@@ -1615,14 +2172,14 @@ fn collect_type_syntax_erasures(
           ts_non_null.span.end as usize - body_start as usize,
           String::new(),
         ));
-        collect_type_syntax_erasures(&ts_non_null.expression, body_start, replacements);
+        collect_type_syntax_erasures(&ts_non_null.expression, body_start, replacements, file_ctx);
       }
       _ => {}
     },
     Expression::ArrayExpression(array) => {
       for element in &array.elements {
         if let Some(expression) = element.as_expression() {
-          collect_type_syntax_erasures(expression, body_start, replacements);
+          collect_type_syntax_erasures(expression, body_start, replacements, file_ctx);
         }
       }
     }
@@ -1630,17 +2187,26 @@ fn collect_type_syntax_erasures(
       for property in &object.properties {
         match property {
           ObjectPropertyKind::ObjectProperty(property) => {
-            collect_type_syntax_erasures(&property.value, body_start, replacements);
+            collect_type_syntax_erasures(&property.value, body_start, replacements, file_ctx);
           }
           ObjectPropertyKind::SpreadProperty(spread) => {
-            collect_type_syntax_erasures(&spread.argument, body_start, replacements);
+            collect_type_syntax_erasures(&spread.argument, body_start, replacements, file_ctx);
           }
         }
+      }
+      if let Some(last_property) = object.properties.last() {
+        erase_trailing_comma(
+          file_ctx,
+          last_property.span().end,
+          object.span.end,
+          body_start,
+          replacements,
+        );
       }
     }
     Expression::TemplateLiteral(template) => {
       for expression in &template.expressions {
-        collect_type_syntax_erasures(expression, body_start, replacements);
+        collect_type_syntax_erasures(expression, body_start, replacements, file_ctx);
       }
     }
     Expression::TaggedTemplateExpression(tagged) => {
@@ -1651,9 +2217,9 @@ fn collect_type_syntax_erasures(
           String::new(),
         ));
       }
-      collect_type_syntax_erasures(&tagged.tag, body_start, replacements);
+      collect_type_syntax_erasures(&tagged.tag, body_start, replacements, file_ctx);
       for expression in &tagged.quasi.expressions {
-        collect_type_syntax_erasures(expression, body_start, replacements);
+        collect_type_syntax_erasures(expression, body_start, replacements, file_ctx);
       }
     }
     Expression::TSInstantiationExpression(instantiation) => {
@@ -1662,11 +2228,21 @@ fn collect_type_syntax_erasures(
         instantiation.type_arguments.span.end as usize - body_start as usize,
         String::new(),
       ));
-      collect_type_syntax_erasures(&instantiation.expression, body_start, replacements);
+      collect_type_syntax_erasures(
+        &instantiation.expression,
+        body_start,
+        replacements,
+        file_ctx,
+      );
     }
     Expression::SequenceExpression(sequence) => {
       for expression in &sequence.expressions {
-        collect_type_syntax_erasures(expression, body_start, replacements);
+        collect_type_syntax_erasures(expression, body_start, replacements, file_ctx);
+      }
+    }
+    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+      if let Some(body_expr) = nested_callback_recursion_target(expr) {
+        collect_type_syntax_erasures(body_expr, body_start, replacements, file_ctx);
       }
     }
     _ => {}
@@ -1887,6 +2463,11 @@ fn collect_string_requotes(
         collect_string_requotes(expression, body_start, prior, out, quote);
       }
     }
+    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+      if let Some(body_expr) = nested_callback_recursion_target(expr) {
+        collect_string_requotes(body_expr, body_start, prior, out, quote);
+      }
+    }
     _ => {}
   }
 }
@@ -1995,6 +2576,7 @@ fn evaluate_expr(
   collect_const_replacements(
     body_expr,
     &param_name,
+    &[],
     body_start,
     &mut replacements,
     file_ctx,
@@ -2008,7 +2590,7 @@ fn evaluate_expr(
     &mut replacements,
     file_ctx,
   )?;
-  collect_type_syntax_erasures(body_expr, body_start, &mut replacements);
+  collect_type_syntax_erasures(body_expr, body_start, &mut replacements, file_ctx);
   collect_comment_erasures(
     file_ctx,
     body_start,
@@ -2362,6 +2944,14 @@ fn walk_expr_children(
       }
       Ok(())
     }
+    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+      match nested_callback_recursion_target(expr) {
+        Some(body_expr) => {
+          collect_context_replacements(body_expr, param_name, body_start, replacements, file_ctx)
+        }
+        None => Ok(()),
+      }
+    }
     _ => Ok(()),
   }
 }
@@ -2454,6 +3044,14 @@ fn validate_expr_syntax(expr: &Expression, file_ctx: &FileContext) -> Result<(),
         validate_expr_syntax(e, file_ctx)?;
       }
       Ok(())
+    }
+    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+      match nested_callback_recursion_target(expr) {
+        Some(body_expr) => validate_expr_syntax(body_expr, file_ctx),
+        // Malformed shapes surface later, with a clearer message, from
+        // collect_const_replacements.
+        None => Ok(()),
+      }
     }
     _ => Ok(()),
   }

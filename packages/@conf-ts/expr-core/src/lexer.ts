@@ -356,6 +356,10 @@ const readOperatorOrPunct = (st: LexerState): Token => {
     st.pos += 2;
     return { kind: 'operator', value: three, pos: startPos };
   }
+  if (two === '=>') {
+    st.pos += 1;
+    return { kind: 'punct', value: '=>', pos: startPos };
+  }
   if (twoCharOps.has(two)) {
     st.pos += 1;
     return { kind: 'operator', value: two, pos: startPos };

@@ -153,6 +153,143 @@ describe('Function Calls and this Binding', () => {
   });
 });
 
+describe('Arrow Function Expressions', () => {
+  test('Single-parameter arrow used as an array callback', () => {
+    const expr = expression('queue.filter(i => i < 5).length');
+    expect(expr({ queue: [1, 2, 3, 4, 5, 6, 7, 8] })).toBe(4);
+  });
+
+  test('Parenthesized single parameter', () => {
+    const expr = expression('queue.filter((i) => i < 5).length');
+    expect(expr({ queue: [1, 2, 3, 4, 5, 6, 7, 8] })).toBe(4);
+  });
+
+  test('Zero-parameter arrow', () => {
+    const expr = expression('queue.some(() => flag)');
+    expect(expr({ queue: [1], flag: true })).toBe(true);
+    expect(expr({ queue: [1], flag: false })).toBe(false);
+    expect(expr({ queue: [], flag: true })).toBe(false);
+  });
+
+  test('Multi-parameter arrow (reduce)', () => {
+    const expr = expression('values.reduce((sum, value) => sum + value, 0)');
+    expect(expr({ values: [1, 2, 3, 4] })).toBe(10);
+  });
+
+  test('Arrow body closes over the surrounding scope', () => {
+    const expr = expression('queue.filter(i => i > threshold).length');
+    expect(expr({ queue: [1, 5, 10, 15], threshold: 6 })).toBe(2);
+  });
+
+  test('Arrow parameters do not leak into or mutate the outer scope', () => {
+    const expr = expression('queue.filter(value => value > 0).length + value');
+    const env = { queue: [-1, 1, 2], value: 100 };
+    expect(expr(env)).toBe(102);
+    // The callback's own `value` parameter must never overwrite the caller's env.
+    expect(env.value).toBe(100);
+  });
+
+  test('Nested arrows (two levels)', () => {
+    const expr = expression(
+      'matrix.filter(row => row.some(cell => cell > 0)).length',
+    );
+    expect(
+      expr({
+        matrix: [[1, -1], [-1, -2], [3]],
+      }),
+    ).toBe(2);
+  });
+
+  test('Chained callbacks on the same expression', () => {
+    const expr = expression('queue.filter(i => i > 0).map(i => i * 2)');
+    expect(expr({ queue: [1, -1, 2, -2, 3] })).toEqual([2, 4, 6]);
+  });
+
+  test('Arrow body extends across binary/logical operators up to the call boundary', () => {
+    const expr = expression('queue.filter(i => i > 0 && i < 5).length');
+    expect(expr({ queue: [-1, 1, 5, 3, 8] })).toBe(2);
+  });
+
+  test('Curried arrows parse and evaluate as nested closures', () => {
+    const expr = expression('a => b => a + b');
+    const curried = expr({}) as (a: number) => (b: number) => number;
+    expect(curried(1)(2)).toBe(3);
+  });
+
+  test('Object destructuring parameters, including renamed properties', () => {
+    const expr = expression('pairs.some(({a, b}) => a < b)');
+    expect(
+      expr({
+        pairs: [
+          { a: 5, b: 2 },
+          { a: 1, b: 9 },
+        ],
+      }),
+    ).toBe(true);
+
+    const renamed = expression('pairs.some(({a: x, b: y}) => x < y)');
+    expect(
+      renamed({
+        pairs: [
+          { a: 5, b: 2 },
+          { a: 1, b: 9 },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test('Array destructuring parameters, including holes', () => {
+    const expr = expression('rows.map(([, b]) => b)');
+    expect(
+      expr({
+        rows: [
+          [1, 2],
+          [3, 4],
+        ],
+      }),
+    ).toEqual([2, 4]);
+  });
+
+  test('Default values on plain, object, and array parameters', () => {
+    const plain = expression('(a = 5) => a');
+    expect(plain({})(undefined)).toBe(5);
+    expect(plain({})(10)).toBe(10);
+
+    const object = expression('({a} = {a: 9}) => a');
+    expect(object({})(undefined)).toBe(9);
+    expect(object({})({ a: 1 })).toBe(1);
+
+    const property = expression('({a, b = 3}) => a + b');
+    expect(property({})({ a: 1 })).toBe(4);
+    expect(property({})({ a: 1, b: 10 })).toBe(11);
+  });
+
+  test('Later defaults can reference earlier parameters in the same list', () => {
+    const expr = expression('(a, b = a + 1) => b');
+    expect(expr({})(5, undefined)).toBe(6);
+  });
+
+  test('Destructuring null or undefined without a default throws', () => {
+    const expr = expression('({a}) => a');
+    expect(() => expr({})(null)).toThrow(
+      'Cannot destructure null or undefined',
+    );
+    expect(() => expr({})(undefined)).toThrow(
+      'Cannot destructure null or undefined',
+    );
+  });
+
+  test('Rest parameter collects all remaining arguments', () => {
+    const expr = expression('(first, ...rest) => rest.length');
+    expect(expr({})(1, 2, 3, 4)).toBe(3);
+
+    const reducer = expression(
+      'values.reduce((sum, ...rest) => sum + rest.length, 0)',
+    );
+    expect(reducer({ values: [1, 2, 3] })).toBe(9);
+  });
+});
+
 describe('Operators and Precedence', () => {
   test('Arithmetic and parentheses precedence', () => {
     // Verify precedence for * / % vs + -, and parentheses

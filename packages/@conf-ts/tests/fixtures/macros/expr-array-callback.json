@@ -1,0 +1,12 @@
+{
+  "arrowExpressionBody": "[1, 2].includes(quota) && queue.filter(i => i < 5).length > 5",
+  "functionExpressionBody": "queue.filter(a => a < 5).length > 5",
+  "blockBodiedArrow": "queue.filter(a => a >= threshold).length > 0",
+  "reduceSum": "scores.reduce((sum, value) => sum + value, 0)",
+  "someAboveZero": "queue.some(() => quota > 0)",
+  "anyAboveMinScore": "scores.some(value => value > 3)",
+  "chainedFilterMap": "queue.filter(i => i > 0).map(i => i * 2)",
+  "filterAboveThreshold": "queue.filter(i => i > threshold).length",
+  "countPositiveRows": "matrix.filter(row => row.some(cell => cell > 0)).length",
+  "complexCombination": "matrix.filter(r => r.some(c => r.some(p => p > c && p < threshold))).length > 0"
+}

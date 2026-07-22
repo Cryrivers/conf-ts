@@ -105,6 +105,164 @@ describe('Expr Macro', () => {
     expect(expression(output.stringIncludes)({ name: 'z' })).toBe(false);
   });
 
+  it('should down-level arrow, function-expression, and block-bodied callbacks passed to array methods', () => {
+    assertMacroOutput('expr-array-callback');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-array-callback.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const base = {
+      quota: 1,
+      queue: [1, 2, 3, 4, 5, 6, -1, -2, 10],
+      scores: [1, 2, 3, 4, 5],
+      threshold: 4,
+      matrix: [[1, -1], [-1, -2], [3]],
+    };
+
+    // Arrow function with an expression body.
+    expect(expression(output.arrowExpressionBody)(base)).toBe(true);
+    expect(expression(output.arrowExpressionBody)({ ...base, quota: 9 })).toBe(
+      false,
+    );
+
+    // `function` expression callback, down-leveled into arrow syntax.
+    expect(expression(output.functionExpressionBody)(base)).toBe(true);
+    expect(
+      expression(output.functionExpressionBody)({
+        ...base,
+        queue: [10, 20, 30],
+      }),
+    ).toBe(false);
+
+    // Block-bodied arrow callback, down-leveled the same way.
+    expect(expression(output.blockBodiedArrow)(base)).toBe(true);
+    expect(
+      expression(output.blockBodiedArrow)({ ...base, threshold: 100 }),
+    ).toBe(false);
+
+    // Multiple callback parameters.
+    expect(expression(output.reduceSum)(base)).toBe(15);
+
+    // Zero-parameter callback that still reaches into the outer context.
+    expect(expression(output.someAboveZero)(base)).toBe(true);
+    expect(expression(output.someAboveZero)({ ...base, quota: -1 })).toBe(
+      false,
+    );
+    expect(
+      expression(output.someAboveZero)({ ...base, queue: [], quota: 5 }),
+    ).toBe(false);
+
+    // Callback referencing an outer compile-time constant.
+    expect(expression(output.anyAboveMinScore)(base)).toBe(true);
+    expect(
+      expression(output.anyAboveMinScore)({ ...base, scores: [1, 2, 3] }),
+    ).toBe(false);
+
+    // Chained callbacks on the same expression.
+    expect(expression(output.chainedFilterMap)(base)).toEqual([
+      2, 4, 6, 8, 10, 12, 20,
+    ]);
+
+    // Nested callback referencing the outer context parameter.
+    expect(expression(output.filterAboveThreshold)(base)).toBe(3);
+
+    // Two levels of nested callbacks.
+    expect(expression(output.countPositiveRows)(base)).toBe(2);
+
+    // Three levels of nested callbacks (arrow -> `function` expression ->
+    // arrow), where the innermost callback cross-references names bound at
+    // every enclosing level, not just its immediate parent.
+    expect(expression(output.complexCombination)(base)).toBe(true);
+    expect(
+      expression(output.complexCombination)({ ...base, threshold: -10 }),
+    ).toBe(false);
+  });
+
+  it('should support object/array destructuring, defaults, and rest parameters in nested callbacks', () => {
+    assertMacroOutput('expr-array-callback-patterns');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(
+        __dirname,
+        'fixtures/macros/expr-array-callback-patterns.conf.ts',
+      ),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const base = {
+      pairs: [
+        { a: 5, b: 2 },
+        { a: 1, b: 9 },
+      ],
+      matrix: [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+      ],
+      queue: [1, 2, 3],
+      threshold: 4,
+    };
+
+    // Object destructuring (shorthand properties).
+    expect(expression(output.objectDestructure)(base)).toBe(true);
+    expect(
+      expression(output.objectDestructure)({
+        ...base,
+        pairs: [{ a: 5, b: 2 }],
+      }),
+    ).toBe(false);
+
+    // Array destructuring, including a hole.
+    expect(expression(output.arrayDestructureWithHole)(base)).toEqual([
+      2, 4, 6,
+    ]);
+
+    // Destructured property with its own default value.
+    expect(expression(output.destructureWithDefault)(base)).toBe(true);
+    expect(
+      expression(output.destructureWithDefault)({ ...base, pairs: [{ a: 1 }] }),
+    ).toBe(true);
+
+    // Rest parameter.
+    expect(expression(output.restParam)(base)).toBe(9);
+
+    // Plain parameter default value — never triggers here since real array
+    // elements are never `undefined`, but confirms no regression.
+    expect(expression(output.defaultParam)(base)).toBe(false);
+    expect(expression(output.defaultParam)({ ...base, queue: [] })).toBe(false);
+
+    // `function` expression with a destructured parameter, down-leveled
+    // into arrow syntax, still reaching into the outer context.
+    expect(expression(output.functionExprDestructure)(base)).toBe(false);
+
+    // Destructuring + a default value expression that itself references
+    // the outer context + an outer constant, all in one callback.
+    expect(expression(output.combinedPatterns)(base)).toBe(true);
+    expect(
+      expression(output.combinedPatterns)({
+        ...base,
+        pairs: [{ a: 1 }],
+        threshold: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it('should reject a nested callback parameter that shadows the context parameter', () => {
+    assertMacroError('expr-invalid-callback-shadow', unsupportedExprError);
+  });
+
+  it('should reject a nested callback block body with more than a single return statement', () => {
+    assertMacroError('expr-invalid-callback-block', unsupportedExprError);
+  });
+
+  it('should reject an async nested callback', () => {
+    assertMacroError('expr-invalid-callback-async', unsupportedExprError);
+  });
+
   it('should reject invalid quote options', () => {
     assertMacroError('expr', "quote must be 'single' or 'double'", {
       quote: 'nope' as any,

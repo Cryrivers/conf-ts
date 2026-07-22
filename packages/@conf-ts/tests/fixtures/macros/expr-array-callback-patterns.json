@@ -1,0 +1,9 @@
+{
+  "objectDestructure": "pairs.some(({a, b}) => a < b)",
+  "arrayDestructureWithHole": "matrix.map(([, b]) => b)",
+  "destructureWithDefault": "pairs.some(({a, b = 3}) => a < b)",
+  "restParam": "queue.reduce((sum,...rest) => sum + rest.length, 0)",
+  "defaultParam": "queue.some((v = 3) => v > threshold)",
+  "functionExprDestructure": "pairs.some(({a, b}) => a < b && b < threshold)",
+  "combinedPatterns": "pairs.some(({a, b = threshold}) => a + 3 < b)"
+}

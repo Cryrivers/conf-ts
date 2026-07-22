@@ -38,7 +38,8 @@ export type ASTNode =
   | ElisionNode
   | ObjectNode
   | TemplateLiteralNode
-  | TaggedTemplateNode;
+  | TaggedTemplateNode
+  | ArrowFunctionNode;
 
 export interface LiteralNode {
   type: 'Literal';
@@ -161,6 +162,49 @@ export interface TaggedTemplateNode {
   type: 'TaggedTemplateExpression';
   tag: ASTNode; // Identifier or MemberExpression
   quasi: TemplateLiteralNode;
+}
+
+// One level of destructuring only: an object/array pattern's own elements
+// must be plain (optionally defaulted, optionally renamed) identifiers, not
+// further nested patterns.
+export type ArrowParam =
+  IdentifierParam | ObjectPatternParam | ArrayPatternParam | RestParam;
+
+export interface IdentifierParam {
+  kind: 'identifier';
+  name: string;
+  default?: ASTNode;
+}
+
+export interface ObjectPatternProperty {
+  key: string;
+  value: IdentifierParam;
+}
+
+export interface ObjectPatternParam {
+  kind: 'object';
+  properties: ObjectPatternProperty[];
+  default?: ASTNode;
+}
+
+export interface ArrayPatternParam {
+  kind: 'array';
+  // `null` marks an elided ("hole") element, e.g. the middle slot in `[a, , b]`.
+  elements: Array<IdentifierParam | null>;
+  default?: ASTNode;
+}
+
+// Must be the last entry in `params`, and can only bind a plain identifier
+// (matching real JS: `...rest` can't itself be destructured or defaulted).
+export interface RestParam {
+  kind: 'rest';
+  name: string;
+}
+
+export interface ArrowFunctionNode {
+  type: 'ArrowFunctionExpression';
+  params: ArrowParam[];
+  body: ASTNode;
 }
 
 export type Env = Record<string, unknown>;

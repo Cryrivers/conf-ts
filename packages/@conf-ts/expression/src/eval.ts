@@ -1,4 +1,6 @@
 import type {
+  ArrowFunctionNode,
+  ArrowParam,
   ASTNode,
   BinaryNode,
   CallNode,
@@ -319,6 +321,83 @@ const copySpread = (target: object, source: unknown): void => {
   }
 };
 
+const isNullish = (value: unknown): value is null | undefined =>
+  value === null || value === undefined;
+
+// A default only kicks in when the argument is strictly `undefined` —
+// shared by all three param kinds below (a plain identifier's own default,
+// or the whole-pattern default on `({a} = {...}) => ...` / `([a] = [...]) => ...`).
+const resolveWithDefault = (
+  arg: unknown,
+  defaultNode: ASTNode | undefined,
+  env: Env,
+  options?: EvalOptions,
+): unknown =>
+  arg === undefined && defaultNode !== undefined
+    ? evaluate(defaultNode, env, options)
+    : arg;
+
+// Destructuring `null`/`undefined` (once any default has already been
+// applied) throws, just like `const {a} = null` would.
+const requireDestructurable = (source: unknown): unknown => {
+  if (isNullish(source)) {
+    throw new TypeError('Cannot destructure null or undefined');
+  }
+  return source;
+};
+
+// Binds one parameter (which may itself be a one-level destructuring
+// pattern) against an incoming argument, writing directly into `env`.
+const bindArrowParam = (
+  param: ArrowParam,
+  arg: unknown,
+  env: Env,
+  options?: EvalOptions,
+): void => {
+  switch (param.kind) {
+    case 'identifier': {
+      env[param.name] = resolveWithDefault(arg, param.default, env, options);
+      return;
+    }
+    case 'object': {
+      const source = requireDestructurable(
+        resolveWithDefault(arg, param.default, env, options),
+      ) as Record<PropertyKey, unknown>;
+      for (const property of param.properties) {
+        bindArrowParam(property.value, source[property.key], env, options);
+      }
+      return;
+    }
+    case 'array': {
+      const source = requireDestructurable(
+        resolveWithDefault(arg, param.default, env, options),
+      ) as ArrayLike<unknown>;
+      param.elements.forEach((element, index) => {
+        if (element === null) return; // hole, e.g. the middle slot in `[a, , b]`
+        bindArrowParam(element, source[index], env, options);
+      });
+      return;
+    }
+  }
+};
+
+// Params shadow the outer scope: the merge always starts from a fresh plain
+// object with the outer env's own properties, then overwrites param names —
+// never mutates `env` itself, since it may be the caller's shared context.
+const evaluateArrowFunction =
+  (node: ArrowFunctionNode, env: Env, options?: EvalOptions) =>
+  (...args: unknown[]): unknown => {
+    const localEnv: Env = { ...env };
+    node.params.forEach((param, index) => {
+      if (param.kind === 'rest') {
+        localEnv[param.name] = args.slice(index);
+        return;
+      }
+      bindArrowParam(param, args[index], localEnv, options);
+    });
+    return evaluate(node.body, localEnv, options);
+  };
+
 const evaluateTaggedTemplate = (
   node: TaggedTemplateNode,
   env: Env,
@@ -430,5 +509,7 @@ export const evaluate = (
     }
     case 'TaggedTemplateExpression':
       return evaluateTaggedTemplate(node, env, options);
+    case 'ArrowFunctionExpression':
+      return evaluateArrowFunction(node, env, options);
   }
 };
