@@ -1338,7 +1338,6 @@ fn collect_call_callee_replacements(
   }
 }
 
-#[allow(clippy::too_many_arguments)]
 // Normalizes the separator between a non-shorthand property's key and value
 // to a plain `: ` (no space before, one space after) regardless of how the
 // user's source spaced it — matching both the native encoder's usual style
@@ -1370,6 +1369,7 @@ fn normalize_property_colon(
   }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_const_replacements(
   expr: &Expression,
   param_name: &str,
