@@ -251,6 +251,43 @@ describe('Expr Macro', () => {
     ).toBe(false);
   });
 
+  it('should support array spread, object shorthand, and computed object keys', () => {
+    assertMacroOutput('expr-new-syntax');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-new-syntax.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const base = { items: [1, 2, 3], key: 'k', value: 5 };
+
+    // Array spread.
+    expect(expression(output.arraySpread)(base)).toEqual([1, 2, 3, 99]);
+
+    // Shorthand referencing a nested callback's own bound parameter — not a
+    // compile-time constant, so it stays as runtime shorthand text.
+    expect(expression(output.shorthandNestedParam)(base)).toEqual([
+      { item: 1, doubled: 2 },
+      { item: 2, doubled: 4 },
+      { item: 3, doubled: 6 },
+    ]);
+
+    // Shorthand referencing an outer compile-time constant, folded to a
+    // literal alongside an explicit context property.
+    expect(expression(output.shorthandOuterConst)(base)).toEqual({
+      TAX_RATE: 0.08,
+      key: 'k',
+    });
+
+    // Computed key rooted in the context parameter.
+    expect(expression(output.computedContextKey)(base)).toEqual({ k: 5 });
+
+    // Computed key referencing an outer compile-time constant, folded to a
+    // literal key.
+    expect(expression(output.computedConstKey)(base)).toEqual({ dyn: 5 });
+  });
+
   it('should reject a nested callback parameter that shadows the context parameter', () => {
     assertMacroError('expr-invalid-callback-shadow', unsupportedExprError);
   });

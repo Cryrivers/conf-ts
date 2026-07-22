@@ -134,6 +134,14 @@ function isUnarySymbolOperator(
 
 function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
   let output = '';
+  // A ':' is ambiguous in a flat token stream: it closes a ternary
+  // (`cond ? a : b`, spaced on both sides) or separates an object/computed
+  // property's key from its value (`key: value` / `[key]: value`, compact —
+  // matching the native encoder and ordinary Prettier style). This stack
+  // tracks which one is currently open — a bare (non-optional-chaining) '?'
+  // pushes 'ternary'; '{'/'('/'[' push 'bracket' and pop on their closer —
+  // so a ':' renders ternary-style only when it closes a 'ternary' on top.
+  const stack: Array<'ternary' | 'bracket'> = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     const value = renderTokenValue(token, quote);
@@ -173,10 +181,15 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
         // while calls and unary operators still render compactly (`fn()` /
         // `!(value)`). This also matches the native expression encoder.
         output += value;
+        stack.push('bracket');
       } else if (['.', '[', '(', '{'].includes(value)) {
         output = trimRight(output) + value;
+        if (value !== '.') {
+          stack.push('bracket');
+        }
       } else if ([']', ')', '}'].includes(value)) {
         output = trimRight(output) + value;
+        stack.pop();
       } else if (value === ',') {
         // Drop a trailing comma before a call/object closer (Prettier
         // commonly adds one when a call wraps its sole argument — e.g. a
@@ -189,8 +202,16 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
         if (!isTrailingComma) {
           output = trimRight(output) + ', ';
         }
-      } else if (value === ':' || value === '?') {
+      } else if (value === '?') {
+        stack.push('ternary');
         output = `${trimRight(output)} ${value} `;
+      } else if (value === ':') {
+        if (stack[stack.length - 1] === 'ternary') {
+          stack.pop();
+          output = `${trimRight(output)} ${value} `;
+        } else {
+          output = `${trimRight(output)}${value} `;
+        }
       } else {
         output += value;
       }

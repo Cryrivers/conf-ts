@@ -647,7 +647,15 @@ export function evaluate(
     ) {
       return context[expression.text];
     }
-    const symbol = typeChecker.getSymbolAtLocation(expression);
+    // A shorthand property's own name (`{ a }`) resolves through
+    // getSymbolAtLocation to the object literal's property symbol, not the
+    // referenced variable — getShorthandAssignmentValueSymbol is the API
+    // that follows it to the actual value declaration instead.
+    const symbol =
+      ts.isShorthandPropertyAssignment(expression.parent) &&
+      expression.parent.name === expression
+        ? typeChecker.getShorthandAssignmentValueSymbol(expression.parent)
+        : typeChecker.getSymbolAtLocation(expression);
     if (symbol) {
       let resolvedSymbol = symbol;
       if (symbol.flags & ts.SymbolFlags.Alias) {

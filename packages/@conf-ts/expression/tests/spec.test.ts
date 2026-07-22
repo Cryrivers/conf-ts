@@ -675,3 +675,76 @@ describe('Object Spread', () => {
     expect(() => expr({ bad })).toThrow('bad');
   });
 });
+
+describe('Array Spread', () => {
+  test('Basic spread expands elements in place', () => {
+    const expr = expression('[...a]');
+    expect(expr({ a: [1, 2, 3] })).toEqual([1, 2, 3]);
+  });
+
+  test('Spread combined with leading/trailing elements', () => {
+    const expr = expression('[0, ...a, 4]');
+    expect(expr({ a: [1, 2, 3] })).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test('Multiple spreads', () => {
+    const expr = expression('[...a, ...b]');
+    expect(expr({ a: [1, 2], b: [3, 4] })).toEqual([1, 2, 3, 4]);
+  });
+
+  test('Spreads any iterable, not just arrays', () => {
+    const expr = expression('[...a]');
+    expect(expr({ a: 'abc' })).toEqual(['a', 'b', 'c']);
+    expect(expr({ a: new Set([1, 2, 2, 3]) })).toEqual([1, 2, 3]);
+  });
+
+  test('Spreading a non-iterable throws, matching native [...x]', () => {
+    const expr = expression('[...a]');
+    expect(() => expr({ a: 1 })).toThrow(TypeError);
+    expect(() => expr({ a: null })).toThrow(TypeError);
+    expect(() => expr({ a: undefined })).toThrow(TypeError);
+  });
+});
+
+describe('Object Shorthand and Computed Keys', () => {
+  test('Shorthand property is short for key: value', () => {
+    const expr = expression('{ a, b }');
+    expect(expr({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 });
+  });
+
+  test('Shorthand mixes with explicit properties and spread', () => {
+    const expr = expression('{ ...base, a, c: 3 }');
+    expect(expr({ base: { x: 1 }, a: 2 })).toEqual({ x: 1, a: 2, c: 3 });
+  });
+
+  test('Only a plain identifier can be shorthand (string keys cannot)', () => {
+    expect(() => expression('{ "a" }')).toThrow();
+  });
+
+  test('Computed key evaluates the key expression', () => {
+    const expr = expression('{ [key]: value }');
+    expect(expr({ key: 'dynamic', value: 42 })).toEqual({ dynamic: 42 });
+  });
+
+  test('Computed key coerces non-string/non-symbol keys like JavaScript', () => {
+    const expr = expression('{ [key]: 1 }');
+    expect(expr({ key: 1 })).toEqual({ '1': 1 });
+
+    const sym = Symbol('s');
+    const result = expr({ key: sym }) as Record<symbol, number>;
+    expect(result[sym]).toBe(1);
+  });
+
+  test('Computed key combines with shorthand and spread', () => {
+    const expr = expression('{ ...base, [key]: value, a }');
+    expect(expr({ base: { x: 1 }, key: 'y', value: 2, a: 3 })).toEqual({
+      x: 1,
+      y: 2,
+      a: 3,
+    });
+  });
+
+  test('A computed key without a value is a syntax error', () => {
+    expect(() => expression('{ [key] }')).toThrow();
+  });
+});

@@ -1,0 +1,7 @@
+{
+  "arraySpread": "[...items, 99]",
+  "shorthandNestedParam": "items.map(item => ({item, doubled: item * 2}))",
+  "shorthandOuterConst": "({TAX_RATE: 0.08, key: key})",
+  "computedContextKey": "({[key]: value})",
+  "computedConstKey": "({[\"dyn\"]: value})"
+}
