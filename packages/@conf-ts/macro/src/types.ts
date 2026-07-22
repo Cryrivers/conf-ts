@@ -41,11 +41,7 @@ type LooseContext<
       ? T | undefined
       : T;
 
-export type RuntimeEnv = Record<string, unknown>;
-
-export type Expr<Context extends RuntimeEnv, ReturnType> = ((
-  ctx: Context,
-) => ReturnType) &
+export type Expr<Context, ReturnType> = ((ctx: Context) => ReturnType) &
   string & {
     readonly [EXPR_CALLBACK]: true;
   };
@@ -54,7 +50,7 @@ export type Expr<Context extends RuntimeEnv, ReturnType> = ((
 // type-checking only; the compiled output is identical to Expr and must be
 // evaluated with optionalMemberAccess/loose: true for the loosened types to
 // match runtime behavior.
-export type LooseExpr<Context extends RuntimeEnv, ReturnType> = Expr<
+export type LooseExpr<Context, ReturnType> = Expr<
   LooseContext<Context>,
   ReturnType
 >;

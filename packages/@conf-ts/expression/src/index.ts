@@ -5,7 +5,7 @@ import {
   tokenize,
   type ASTNode,
 } from '@conf-ts/expr-core';
-import type { Expr, LooseExpr, RuntimeEnv } from '@conf-ts/macro';
+import type { Expr, LooseExpr } from '@conf-ts/macro';
 
 import { evaluate, type EvalOptions } from './eval';
 
@@ -15,7 +15,7 @@ type ExpressionOptions = {
   loose?: boolean;
 };
 
-type Compiled<Context extends RuntimeEnv = RuntimeEnv, ReturnType = unknown> = (
+type Compiled<Context = unknown, ReturnType = unknown> = (
   env: Context,
 ) => ReturnType;
 
@@ -47,26 +47,17 @@ function cacheGet(key: string): Compiled | undefined {
   return value;
 }
 
-function expression<
-  Context extends RuntimeEnv = RuntimeEnv,
-  ReturnType = unknown,
->(
+function expression<Context = unknown, ReturnType = unknown>(
   expr: LooseExpr<Context, ReturnType>,
   options: ExpressionOptions &
     ({ optionalMemberAccess: true } | { loose: true }),
 ): Compiled<Context, ReturnType>;
-function expression<
-  Context extends RuntimeEnv = RuntimeEnv,
-  ReturnType = unknown,
->(
+function expression<Context = unknown, ReturnType = unknown>(
   expr: Expr<Context, ReturnType>,
   options?: ExpressionOptions,
 ): Compiled<Context, ReturnType>;
 function expression(expr: string, options?: ExpressionOptions): Compiled;
-function expression<
-  Context extends RuntimeEnv = RuntimeEnv,
-  ReturnType = unknown,
->(
+function expression<Context = unknown, ReturnType = unknown>(
   expr: Expr<Context, ReturnType> | string,
   options?: ExpressionOptions,
 ): Compiled<Context, ReturnType> {
@@ -119,4 +110,4 @@ function expression<
 }
 
 export default expression;
-export type { Expr, ExpressionOptions, LooseExpr, RuntimeEnv };
+export type { Expr, ExpressionOptions, LooseExpr };

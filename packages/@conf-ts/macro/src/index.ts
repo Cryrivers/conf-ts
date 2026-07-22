@@ -1,10 +1,10 @@
-import { Expr, RuntimeEnv } from './types';
+import { Expr } from './types';
 
 console.warn(
   '@conf-ts/macro has been imported. This package is intended for compile-time macro expansion and should not be directly imported into runtime code.',
 );
 
-export type { Expr, LooseExpr, RuntimeEnv } from './types';
+export type { Expr, LooseExpr } from './types';
 
 function macroNotTransformed(name: string): never {
   throw new Error(
@@ -12,10 +12,9 @@ function macroNotTransformed(name: string): never {
   );
 }
 
-export function expr<
-  Context extends RuntimeEnv = RuntimeEnv,
-  ReturnType = unknown,
->(_callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType> {
+export function expr<Context = unknown, ReturnType = unknown>(
+  _callback: (ctx: Context) => ReturnType,
+): Expr<Context, ReturnType> {
   return macroNotTransformed('expr');
 }
 

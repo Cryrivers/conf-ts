@@ -2,15 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import expression from '../src';
 import * as expressionModule from '../src';
-import type { Expr, LooseExpr, RuntimeEnv } from '../src';
+import type { Expr, LooseExpr } from '../src';
 
 // Mirrors @conf-ts/macro's `expr()` type signature without depending on that
 // package (the macro-transformer replaces expr(cb) with a compiled string;
 // here we only need the identity behavior to exercise the type surface).
-function fakeExpr<
-  Context extends RuntimeEnv = RuntimeEnv,
-  ReturnType = unknown,
->(callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType> {
+function fakeExpr<Context = unknown, ReturnType = unknown>(
+  callback: (ctx: Context) => ReturnType,
+): Expr<Context, ReturnType> {
   return callback as unknown as Expr<Context, ReturnType>;
 }
 
