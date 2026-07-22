@@ -2,9 +2,19 @@
 
 Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, composable, and multi-file — then emit plain data for production.
 
-### Try it now
+**[Try it in the playground →](https://conf-ts.by.zhongliang.wang)**
 
-- **Playground**: [conf-ts.by.zhongliang.wang](https://conf-ts.by.zhongliang.wang)
+### Contents
+
+- [Why conf-ts](#why-conf-ts)
+- [Quick start](#quick-start)
+- [Packages in this monorepo](#packages-in-this-monorepo)
+- [Macro transform](#macro-transform)
+- [Runtime expression evaluator](#runtime-expression-evaluator)
+- [Programmatic API](#programmatic-api)
+- [Webpack plugin](#webpack-plugin)
+- [Reference: supported TypeScript](#reference-supported-typescript)
+- [Performance](#performance-js-vs-compiler-native)
 
 ## Why conf-ts
 
@@ -13,44 +23,37 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - **Macro transform (opt-in)**: Compile-time helpers for casting, array transforms, env injection, and typed runtime expressions.
 - **Multi-file + path aliases**: Works across files and honors `tsconfig.json` path aliases.
 
-## Packages in this monorepo
-
-- `@conf-ts/cli`: CLI to compile `.ts`/`.conf.ts` to JSON/YAML
-- `@conf-ts/compiler`: Core compiler APIs (`compile`, `compileInMemory`)
-- `@conf-ts/compiler-native`: Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`)
-- `@conf-ts/expr-core`: Shared expression lexer, parser, AST types, and parse errors
-- `@conf-ts/expression`: JavaScript-like runtime expression evaluator
-- `@conf-ts/macro`: Macro functions consumed by the transform
-- `@conf-ts/macro-transformer`: TypeScript source transformer for macros
-- `@conf-ts/macro-transformer-native`: Oxc-backed native source transformer
-- `@conf-ts/webpack-plugin`: Webpack plugin that emits generated JSON/YAML files
-
-### Performance: JS vs compiler-native
-
-Benchmarked with `@conf-ts/tests` on `complex-types.conf.ts` (2s per task, Node v24.11.1, local M-series Mac).
-
-```text
-┌─────────┬──────────────────────────┬────────────────────┬──────────────────────┬────────────────────────┬────────────────────────┬─────────┐
-│ (index) │ Task name                │ Latency avg (ns)   │ Latency med (ns)     │ Throughput avg (ops/s) │ Throughput med (ops/s) │ Samples │
-├─────────┼──────────────────────────┼────────────────────┼──────────────────────┼────────────────────────┼────────────────────────┼─────────┤
-│ 0       │ compiler (JS)            │ 97685109 ± 1.27%   │ 95375041 ± 1973083   │ 10 ± 1.20%             │ 10 ± 0                 │ 64      │
-│ 1       │ compiler-native (Rust)   │ 42164 ± 1.09%      │ 38750 ± 791.00       │ 24616 ± 0.10%          │ 25806 ± 538            │ 47434   │
-└─────────┴──────────────────────────┴────────────────────┴──────────────────────┴────────────────────────┴────────────────────────┴─────────┘
-```
-
-In this setup, **`@conf-ts/compiler-native` achieves roughly 2,400× higher throughput** than the pure JS compiler on the same config file.
-
-## Installation
+## Quick start
 
 ```bash
 pnpm add -D @conf-ts/cli
-# or
-npm i -D @conf-ts/cli
-# or
-yarn add -D @conf-ts/cli
 ```
 
-## CLI usage
+```ts
+// config.conf.ts
+export default {
+  appName: 'My App',
+  port: 3000,
+};
+```
+
+```bash
+conf-ts config.conf.ts
+# {"appName":"My App","port":3000}
+
+conf-ts -f yaml config.conf.ts
+# appName: My App
+# port: 3000
+```
+
+That covers plain TypeScript data. When you need compile-time helpers — type casting, array transforms, env injection, or typed runtime expressions — add `--macro` and import them from `@conf-ts/macro`; see [Macro transform](#macro-transform).
+
+```bash
+conf-ts --macro config.conf.ts
+```
+
+<details>
+<summary>All CLI flags</summary>
 
 ```bash
 conf-ts <fileEntry>
@@ -66,9 +69,28 @@ conf-ts --macro src/config.conf.ts
 
 # Single-quoted expr macro output
 conf-ts --macro --quote single src/config.conf.ts
+
+# Preserve object key order
+conf-ts -p src/config.conf.ts
 ```
 
 The compiled output is printed to stdout.
+
+</details>
+
+## Packages in this monorepo
+
+| Package                              | Purpose                                                              |
+| ------------------------------------- | --------------------------------------------------------------------- |
+| `@conf-ts/cli`                        | CLI to compile `.ts`/`.conf.ts` to JSON/YAML                          |
+| `@conf-ts/compiler`                   | Core compiler APIs (`compile`, `compileInMemory`)                     |
+| `@conf-ts/compiler-native`            | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
+| `@conf-ts/expr-core`                  | Shared expression lexer, parser, AST types, and parse errors          |
+| `@conf-ts/expression`                 | JavaScript-like runtime expression evaluator                          |
+| `@conf-ts/macro`                      | Macro functions consumed by the transform                             |
+| `@conf-ts/macro-transformer`         | TypeScript source transformer for macros                              |
+| `@conf-ts/macro-transformer-native` | Oxc-backed native source transformer                                  |
+| `@conf-ts/webpack-plugin`            | Webpack plugin that emits generated JSON/YAML files                   |
 
 ## Macro transform
 
@@ -86,148 +108,30 @@ export default {
 };
 ```
 
-### Arrays: `arrayMap(array, item => expr)`
-
-Constraints:
-
-- Callback must be an arrow function with exactly one parameter
-- Body must be a single return expression (or expression body)
-- The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
+### Arrays: `arrayMap`, `arrayFilter`, `arrayFlatMap`
 
 ```ts
-import { arrayMap } from '@conf-ts/macro';
+import { arrayFilter, arrayFlatMap, arrayMap } from '@conf-ts/macro';
 
 const nums = [1, 2, 3, 4];
+
 export default {
-  doubled: arrayMap(nums, x => x * 2),
+  doubled: arrayMap(nums, x => x * 2), // [2, 4, 6, 8]
+  evens: arrayFilter(nums, x => x % 2 === 0), // [2, 4]
+  expanded: arrayFlatMap(nums, x => [x, x * 10]), // [1,10,2,20,3,30,4,40]
 };
 ```
 
-### Arrays: `arrayFilter(array, item => predicate)`
+<details>
+<summary>Constraints and nested macros</summary>
 
-Constraints:
-
-- Callback must be an arrow function with exactly one parameter
-- Body must be a single return expression (or expression body)
+- Each callback must be an arrow function with exactly one parameter.
+- The body must be a single return expression (or expression body).
 - The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
-- The returned expression is coerced to boolean to decide inclusion
+- `arrayFilter`'s returned expression is coerced to boolean to decide inclusion.
+- `arrayFlatMap` flattens only one level, matching JavaScript `Array.prototype.flatMap`.
 
-```ts
-import { arrayFilter } from '@conf-ts/macro';
-
-const nums = [1, 2, 3, 4];
-export default {
-  evens: arrayFilter(nums, x => x % 2 === 0),
-};
-```
-
-### Arrays: `arrayFlatMap(array, item => expr)`
-
-Constraints:
-
-- Callback must be an arrow function with exactly one parameter
-- Body must be a single return expression (or expression body)
-- The callback parameter can be used in property access chains (e.g., `item.name`) and object keys (e.g., `{ [item.id]: item.value }`).
-- Array results are flattened by one level; non-array results are kept as single items
-
-```ts
-import { arrayFlatMap } from '@conf-ts/macro';
-
-const nums = [1, 2, 3];
-export default {
-  expanded: arrayFlatMap(nums, x => [x, x * 10]),
-};
-```
-
-### Environment: `env(key)`
-
-```ts
-import { env } from '@conf-ts/macro';
-
-export default {
-  nodeEnv: env('NODE_ENV'),
-  port: Number(env('PORT') ?? '3000'),
-};
-```
-
-### Type-safe runtime expressions: `expr(ctx => expression)`
-
-`expr()` marks a typed arrow expression for configuration compilation. During normal runtime execution it preserves and returns the callback, including its closure. During JSON/YAML compilation it emits a portable expression string: accesses to the callback parameter become root identifiers, and serializable `const` and enum values are resolved.
-
-Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set macro transform option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native Oxc transformers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
-
-```ts
-import { expr } from '@conf-ts/macro';
-
-enum Status {
-  Active = 'active',
-}
-
-const MIN_AGE = 18;
-
-type UserContext = {
-  user: { age: number; status: Status };
-};
-
-export default {
-  canEnter: expr<UserContext, boolean>(
-    ctx => ctx.user.age >= MIN_AGE && ctx.user.status === Status.Active,
-  ),
-};
-```
-
-The generated value is a portable expression string:
-
-```json
-{
-  "canEnter": "user.age >= 18 && user.status === \"active\""
-}
-```
-
-Evaluate it against runtime data:
-
-```ts
-import expression from '@conf-ts/expression';
-
-import config from './config.generated.json';
-
-const canEnter = expression(config.canEnter);
-
-canEnter({ user: { age: 20, status: 'active' } }); // true
-canEnter({ user: { age: 16, status: 'active' } }); // false
-```
-
-Constraints:
-
-- The callback must be a synchronous arrow function with exactly one identifier parameter and an expression body.
-- Root context access must use a property name, such as `ctx.user` or `ctx['user']`. Direct `ctx` use is rejected. A computed root key such as `ctx[key]` must resolve to a valid identifier name when compiled.
-- Nested access, calls, templates, object/array literals, and the operators listed in [Runtime expression syntax](#runtime-expression-syntax) are supported.
-- Assignment, update, function/arrow, `new`, regular expression, and other syntax outside that grammar is rejected during compilation.
-
-Compiled `Expr` values can be composed by calling them with the current
-callback context. The transformer recursively inlines the compiled expression
-and adds parentheses to preserve operator precedence:
-
-```ts
-import { expr } from '@conf-ts/macro';
-
-type Context = { a: boolean; b: boolean; c: boolean };
-
-const subCondExpr = expr<Context, boolean>(ctx => ctx.b || ctx.c);
-const condition = expr<Context, boolean>(ctx => ctx.a && subCondExpr(ctx)); // "a && (b || c)"
-```
-
-Composition supports local `const` aliases and directly named/default imported
-Expr values, at any nesting depth. The argument must be the current callback's
-bare parameter identifier (the identifier does not have to be named `ctx`). A
-confirmed Expr called with a property, another value, no argument, multiple
-arguments, or a spread argument is rejected during transformation. Namespace
-properties, function-returned Expr values, and re-export chains are not
-resolved as composed Expr sources.
-
-### Nested macros
-
-Macros can be nested inside other macros and within array callbacks. Context (the callback parameter) is correctly scoped during nested evaluation.
+Macros can be nested inside other macros and within array callbacks; the callback parameter stays correctly scoped during nested evaluation:
 
 ```ts
 import {
@@ -263,37 +167,111 @@ export default {
 };
 ```
 
-Constraints remain the same for array callbacks:
+</details>
 
-- Callback must be an arrow function with exactly one parameter
-- Body must be a single expression
-- Only the callback parameter and literals are allowed (property access and computed keys with the parameter are fine)
-- Nested macros are allowed both in the array argument and inside the callback body
-- `arrayFlatMap` flattens only one level, matching JavaScript `Array.prototype.flatMap`
+### Environment: `env(key)`
 
-## Runtime expression evaluator
+```ts
+import { env } from '@conf-ts/macro';
 
-Install `@conf-ts/expression` when an application needs to evaluate expressions emitted by `expr()` or expressions supplied as strings:
-
-```bash
-pnpm add @conf-ts/expression
+export default {
+  nodeEnv: env('NODE_ENV'),
+  port: Number(env('PORT') ?? '3000'),
+};
 ```
 
-The default export accepts either a serialized expression string or an `Expr` callback and returns a reusable function. String expressions are parsed; callback expressions are returned directly so their closures remain available. The function receives a plain environment object whose properties become the serialized expression's root identifiers.
+### Typed runtime expressions: `expr(ctx => expression)`
+
+Use `expr()` when a value can only be evaluated later, against data that's available at runtime — a permission check, a feature-flag rule, a pricing formula. Write it as ordinary, type-checked TypeScript; during JSON/YAML compilation the macro turns it into a portable expression string instead of running it.
+
+```ts
+import { expr } from '@conf-ts/macro';
+
+enum Status {
+  Active = 'active',
+}
+
+const MIN_AGE = 18;
+
+type UserContext = {
+  user: { age: number; status: Status };
+};
+
+export default {
+  canEnter: expr<UserContext, boolean>(
+    ctx => ctx.user.age >= MIN_AGE && ctx.user.status === Status.Active,
+  ),
+};
+```
+
+```json
+{
+  "canEnter": "user.age >= 18 && user.status === \"active\""
+}
+```
+
+Evaluate it against runtime data with [`@conf-ts/expression`](packages/@conf-ts/expression) — see [Runtime expression evaluator](#runtime-expression-evaluator):
 
 ```ts
 import expression from '@conf-ts/expression';
 
-const calculate = expression('subtotal * (1 + taxRate)');
+import config from './config.generated.json';
 
-calculate({ subtotal: 100, taxRate: 0.08 }); // 108
+const canEnter = expression(config.canEnter);
+
+canEnter({ user: { age: 20, status: 'active' } }); // true
+canEnter({ user: { age: 16, status: 'active' } }); // false
 ```
 
-Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
+The body can also call methods that take their own callback, e.g. `ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold))` — see [Nested callbacks](#nested-callbacks-inside-expr) below.
 
-Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
+<details>
+<summary>Constraints, formatting, and composing <code>Expr</code> values</summary>
+
+- The callback must be a synchronous arrow function with exactly one identifier parameter and an expression body.
+- Root context access must use a property name, such as `ctx.user` or `ctx['user']`. Direct `ctx` use is rejected. A computed root key such as `ctx[key]` must resolve to a valid identifier name when compiled.
+- Nested access, calls, templates, object/array literals, and the operators listed in [Runtime expression syntax](#runtime-expression-syntax) are supported.
+- Assignment, update, `new`, regular expression, and other syntax outside that grammar is rejected during compilation (nested callback arguments are the one exception — see below).
+
+Generated expression strings are compact: formatting newlines, tabs, and repeated spaces are collapsed to a single space without changing whitespace inside string or template literal values. String literals use double quotes by default. Set macro transform option `quote: 'single'` or CLI `--quote single` to emit single-quoted expression literals instead. The TypeScript and native Oxc transformers normalize expression string literals with the same encoder so their output stays byte-for-byte aligned.
+
+Compiled `Expr` values can be composed by calling them with the current callback context. The transformer recursively inlines the compiled expression and adds parentheses to preserve operator precedence:
+
+```ts
+import { expr } from '@conf-ts/macro';
+
+type Context = { a: boolean; b: boolean; c: boolean };
+
+const subCondExpr = expr<Context, boolean>(ctx => ctx.b || ctx.c);
+const condition = expr<Context, boolean>(ctx => ctx.a && subCondExpr(ctx)); // "a && (b || c)"
+```
+
+Composition supports local `const` aliases and directly named/default imported Expr values, at any nesting depth. The argument must be the current callback's bare parameter identifier (the identifier does not have to be named `ctx`). A confirmed Expr called with a property, another value, no argument, multiple arguments, or a spread argument is rejected during transformation. Namespace properties, function-returned Expr values, and re-export chains are not resolved as composed Expr sources.
+
+</details>
+
+#### Nested callbacks inside `expr()`
+
+The expression body can call methods that take their own callback — `ctx.queue.filter(i => i < 5)`, `ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold))`, `ctx.scores.reduce((sum, value) => sum + value, 0)`, and so on. A nested callback can be an arrow function or a `function` expression, with either an expression body or a block body containing a single `return` statement; both forms are down-leveled to the same expression-bodied arrow text that `@conf-ts/expression` evaluates at runtime. Nested callback parameters may be plain identifiers, one level of object/array destructuring (with defaults, renamed properties, and holes), and a single trailing rest parameter. Callbacks can nest arbitrarily deep and freely reference the outer `expr()` context and bindings from any enclosing callback.
+
+```ts
+import { expr } from '@conf-ts/macro';
+
+type Context = { matrix: number[][]; threshold: number };
+
+export default {
+  countPositiveRows: expr<Context, number>(
+    ctx => ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold)).length,
+  ),
+};
+```
+
+Not supported inside a nested callback: `async`/generator functions, type annotations, more than one statement in a block body, and a parameter name that shadows the `expr()` context parameter or a name bound by an enclosing callback.
 
 #### `LooseExpr`: omitting `?.` for deeply optional context types
+
+<details>
+<summary>Expand</summary>
 
 `LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr<Context, ReturnType>`. When a `Context` has nested optional properties (e.g. `{ a?: { b?: { c?: number } } }`), annotating an `expr(...)` result as `LooseExpr` presents the callback with a deeply-required view of `Context`, so the body can be written without `?.` at every level:
 
@@ -321,6 +299,26 @@ const compiled = expression(check, { loose: true });
 compiled({}); // fine: `a` is optional in the original Context
 ```
 
+</details>
+
+## Runtime expression evaluator
+
+Install [`@conf-ts/expression`](packages/@conf-ts/expression) when an application needs to evaluate expressions emitted by `expr()` or expressions supplied as strings:
+
+```bash
+pnpm add @conf-ts/expression
+```
+
+```ts
+import expression from '@conf-ts/expression';
+
+const calculate = expression('subtotal * (1 + taxRate)');
+
+calculate({ subtotal: 100, taxRate: 0.08 }); // 108
+```
+
+The default export accepts either a serialized expression string or an `Expr` callback and returns a reusable function. String expressions are parsed; callback expressions are returned directly so their closures remain available. The function receives a plain environment object whose properties become the serialized expression's root identifiers.
+
 ### Runtime expression syntax
 
 | Category    | Supported syntax                                                                                            |
@@ -329,6 +327,7 @@ compiled({}); // fine: `a` is optional in the original Context
 | Collections | Array literals; object literals with identifier/string keys, trailing commas, and object spread             |
 | Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`) |
 | Calls       | Functions and methods supplied by the environment; method calls preserve `this`                             |
+| Functions   | Arrow function expressions (`x => x * 2`, `(a, b) => a + b`) as callback arguments — expression bodies only, with identifier/destructured/rest/defaulted parameters, nesting, and closures over the surrounding scope |
 | Templates   | Template literals, nested interpolation, and tagged templates                                               |
 | Arithmetic  | `+`, `-`, `*`, `/`, `%`, `**`                                                                               |
 | Comparison  | `<`, `<=`, `>`, `>=`, `==`, `!=`, `===`, `!==`, `in`, `instanceof`                                          |
@@ -337,9 +336,14 @@ compiled({}); // fine: `a` is optional in the original Context
 | Unary       | Unary `+`/`-`, `typeof`, `void`, `delete`                                                                   |
 | Control     | Parentheses and conditional expressions (`condition ? yes : no`)                                            |
 
-The parser applies JavaScript-style precedence to the supported operators, including right-associative exponentiation.
+The parser applies JavaScript-style precedence to the supported operators, including right-associative exponentiation. Not supported: assignments, `++`/`--`, array spread, object shorthand/computed keys, block-bodied statements (arrow functions are limited to expression bodies), `new`, classes, regular expressions, or comments. See the [package README](packages/@conf-ts/expression/README.md) for the full syntax table plus a detailed comparison against other expression-parser libraries.
 
-### Runtime semantics and safety
+<details>
+<summary>Options, caching, safety, and <code>LooseExpr</code> evaluation</summary>
+
+Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
+
+Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
 
 Within the supported grammar, serialized expressions follow JavaScript semantics:
 
@@ -350,7 +354,9 @@ Within the supported grammar, serialized expressions follow JavaScript semantics
 
 This package is an evaluator, not a security sandbox. Expressions can read objects and invoke functions exposed through the environment. Do not expose capabilities that untrusted expressions must not access.
 
-The runtime grammar does not support assignments, `++`/`--`, array spread, object shorthand/computed keys, arrow or function expressions, `new`, classes, regular expressions, comments, or statements.
+`LooseExpr` values must be evaluated with `optionalMemberAccess: true` (or `loose: true`) — see the `LooseExpr` section above for why.
+
+</details>
 
 ## Programmatic API
 
@@ -380,9 +386,7 @@ const { output, dependencies } = compileInMemory(
 );
 ```
 
-The compiler also accepts source supplied by a loader or editor.
-The supplied `code` wins over the matching file in the optional project
-snapshot, so compilation never needs a macro-specific API:
+The compiler also accepts source supplied by a loader or editor. The supplied `code` wins over the matching file in the optional project snapshot, so compilation never needs a macro-specific API:
 
 ```ts
 compile(
@@ -417,8 +421,7 @@ compileInMemory(
 
 ### Macro transform
 
-Macros are a source transform, not a compiler mode. Transform the current
-module first, then pass the resulting ordinary TypeScript to either compiler:
+Macros are a source transform, not a compiler mode. Transform the current module first, then pass the resulting ordinary TypeScript to either compiler:
 
 ```ts
 import { readFileSync } from 'node:fs';
@@ -440,8 +443,7 @@ const transformed = transform(
 const result = compile({ filename, code: transformed.code, project }, 'json');
 ```
 
-For a multi-file project, use the batch API so project parsing, binding and
-enum analysis happen once:
+For a multi-file project, use the batch API so project parsing, binding and enum analysis happen once:
 
 ```ts
 const batch = transformProject(
@@ -459,13 +461,7 @@ Object.assign(
 );
 ```
 
-`createMacroProjectSnapshot`, `transformProject`, and `transform` are also
-exported by `@conf-ts/macro-transformer-native` with the same project and result
-shapes. The native snapshot builder scans and resolves the TypeScript project
-in Rust, so native-only callers do not need to load the TypeScript transformer.
-Its `transformed` record is sparse, and each file reports only itself and files
-actually used during macro evaluation. The compiler only receives ordinary
-TypeScript and never expands macros.
+`createMacroProjectSnapshot`, `transformProject`, and `transform` are also exported by `@conf-ts/macro-transformer-native` with the same project and result shapes. The native snapshot builder scans and resolves the TypeScript project in Rust, so native-only callers do not need to load the TypeScript transformer. Its `transformed` record is sparse, and each file reports only itself and files actually used during macro evaluation. The compiler only receives ordinary TypeScript and never expands macros.
 
 ## Webpack plugin
 
@@ -512,24 +508,21 @@ new ConfTsWebpackPlugin({
 
 With `compiler: 'auto'` (the default), the plugin loads `@conf-ts/compiler-native` if it's installed and falls back to `@conf-ts/compiler` otherwise. Force one or the other with `compiler: 'native'` (errors if the native binding can't be loaded) or `compiler: 'js'`.
 
-Use `NativeMacroTransformPlugin` instead when the native Oxc-backed transformer is
-installed. It intentionally does not fall back to the TypeScript transformer.
-Its project graph scan, module resolution, incremental reference check, and
-macro transformation all run in Rust; the TypeScript transformer is not loaded
-by the native plugin path.
-The same plugins are available from
-`@conf-ts/webpack-plugin/macro-transform-plugin/typescript` and
-`@conf-ts/webpack-plugin/macro-transform-plugin/native`.
+Use `NativeMacroTransformPlugin` instead when the native Oxc-backed transformer is installed. It intentionally does not fall back to the TypeScript transformer. Its project graph scan, module resolution, incremental reference check, and macro transformation all run in Rust; the TypeScript transformer is not loaded by the native plugin path. The same plugins are available from `@conf-ts/webpack-plugin/macro-transform-plugin/typescript` and `@conf-ts/webpack-plugin/macro-transform-plugin/native`.
 
-Run `pnpm --filter @conf-ts/webpack-plugin bench:compare` to compare the
-TypeScript and native implementations. The benchmark reports module-level
-module loading, project snapshot, macro transform, compiler, macro pipeline, and
-full snapshot-to-output pipeline timings, followed by overall webpack cold/watch
-results for the JavaScript compiler, native compiler, and batched context-module
-scenarios. Each comparison includes the native/TypeScript ratio and
-TypeScript-over-native speedup.
+<details>
+<summary>Benchmarking the TypeScript vs. native plugin</summary>
 
-## Supported config TypeScript
+Run `pnpm --filter @conf-ts/webpack-plugin bench:compare` to compare the TypeScript and native implementations. The benchmark reports module-level module loading, project snapshot, macro transform, compiler, macro pipeline, and full snapshot-to-output pipeline timings, followed by overall webpack cold/watch results for the JavaScript compiler, native compiler, and batched context-module scenarios. Each comparison includes the native/TypeScript ratio and TypeScript-over-native speedup.
+
+</details>
+
+## Reference: supported TypeScript
+
+<details>
+<summary>Full list of supported and unsupported config syntax</summary>
+
+### Supported config TypeScript
 
 - Literals: string, number, boolean, null
 - `undefined` with JS serialization semantics
@@ -551,12 +544,29 @@ TypeScript-over-native speedup.
 - Sequence/comma expressions
 - Parenthesized and `as`/`satisfies` expressions
 
-## Not supported in config values
+### Not supported in config values
 
 - Functions (arrow/function expressions) in values
 - `new Date()` and other `new` expressions
 - Regular expressions
 - `let`/`var` for referenced variables (only `const` is allowed)
+
+</details>
+
+## Performance: JS vs compiler-native
+
+Benchmarked with `@conf-ts/tests` on `complex-types.conf.ts` (2s per task, Node v24.11.1, local M-series Mac).
+
+```text
+┌─────────┬──────────────────────────┬────────────────────┬──────────────────────┬────────────────────────┬────────────────────────┬─────────┐
+│ (index) │ Task name                │ Latency avg (ns)   │ Latency med (ns)     │ Throughput avg (ops/s) │ Throughput med (ops/s) │ Samples │
+├─────────┼──────────────────────────┼────────────────────┼──────────────────────┼────────────────────────┼────────────────────────┼─────────┤
+│ 0       │ compiler (JS)            │ 97685109 ± 1.27%   │ 95375041 ± 1973083   │ 10 ± 1.20%             │ 10 ± 0                 │ 64      │
+│ 1       │ compiler-native (Rust)   │ 42164 ± 1.09%      │ 38750 ± 791.00       │ 24616 ± 0.10%          │ 25806 ± 538            │ 47434   │
+└─────────┴──────────────────────────┴────────────────────┴──────────────────────┴────────────────────────┴────────────────────────┴─────────┘
+```
+
+In this setup, **`@conf-ts/compiler-native` achieves roughly 2,400× higher throughput** than the pure JS compiler on the same config file.
 
 ## Scripts
 
