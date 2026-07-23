@@ -1,0 +1,87 @@
+{
+  "name": "@conf-ts/diff",
+  "version": "0.0.17",
+  "description": "Structural and evaluated diffing for conf.ts configuration source.",
+  "type": "module",
+  "sideEffects": false,
+  "author": {
+    "name": "Zhongliang Wang",
+    "email": "hello@zhongliang.wang",
+    "url": "https://zhongliang.wang"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cryrivers/conf-ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "conf-ts-diff": "./dist/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.mts",
+        "default": "./dist/react.mjs"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "bench": "pnpm build && node benchmark.mjs",
+    "dev": "tsdown --watch",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@conf-ts/compiler-native": "workspace:*",
+    "@conf-ts/diff-native": "workspace:*",
+    "@conf-ts/macro-transformer-native": "workspace:*",
+    "commander": "^15.0.0"
+  },
+  "peerDependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@monaco-editor/react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "@monaco-editor/react": "^4.7.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "prettier": "^3.9.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tsdown": "^0.22.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

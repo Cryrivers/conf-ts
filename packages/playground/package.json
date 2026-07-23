@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@conf-ts/compiler": "workspace:*",
+    "@conf-ts/diff": "workspace:*",
     "@conf-ts/macro-transformer": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@shikijs/monaco": "^4.3.1",

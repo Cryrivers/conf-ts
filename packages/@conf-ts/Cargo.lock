@@ -125,6 +125,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "diff_native"
+version = "0.0.17"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_span",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dragonbox_ecma"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

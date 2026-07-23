@@ -1,0 +1,81 @@
+import type { DiffReport, HtmlReportOptions } from './types.js';
+
+function safeJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll('<', '\\u003c')
+    .replaceAll('\u2028', '\\u2028')
+    .replaceAll('\u2029', '\\u2029');
+}
+
+export function renderHtml(
+  report: DiffReport,
+  options: HtmlReportOptions = {},
+): string {
+  const title = options.title ?? 'conf.ts structural diff';
+  const initialView = options.initialView ?? 'structure';
+  const theme = options.theme ?? 'auto';
+  return `<!doctype html>
+<html lang="en" data-theme="${theme}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:">
+<title>${title.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</title>
+<style>
+:root{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--panel2:#f0f2f5;--fg:#17191d;--muted:#68707d;--border:#dfe3e8;--accent:#3159d8;--add:#1c7a48;--remove:#bd3340;--modify:#a45a05;--move:#2671a9;--source:#7857a5;--shadow:0 12px 35px rgba(30,38,55,.08)}
+@media(prefers-color-scheme:dark){html[data-theme=auto]{color-scheme:dark;--bg:#0d0f13;--panel:#14171d;--panel2:#1a1e26;--fg:#eef1f5;--muted:#9ba5b3;--border:#2a303a;--accent:#8da7ff;--add:#5ac68b;--remove:#ff7c87;--modify:#f3b562;--move:#73b7e8;--source:#c2a2e8;--shadow:none}}
+html[data-theme=dark]{color-scheme:dark;--bg:#0d0f13;--panel:#14171d;--panel2:#1a1e26;--fg:#eef1f5;--muted:#9ba5b3;--border:#2a303a;--accent:#8da7ff;--add:#5ac68b;--remove:#ff7c87;--modify:#f3b562;--move:#73b7e8;--source:#c2a2e8;--shadow:none}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select{font:inherit;color:inherit}button{cursor:pointer}.app{min-height:100vh;display:grid;grid-template-rows:auto auto 1fr}.top{padding:16px 20px;border-bottom:1px solid var(--border);background:var(--panel);display:flex;gap:18px;align-items:center;justify-content:space-between}.title{font-weight:650;font-size:16px}.compare{color:var(--muted);font-size:12px;margin-top:3px}.summary{display:flex;gap:8px;flex-wrap:wrap}.pill{padding:4px 9px;background:var(--panel2);border-radius:999px;font-size:12px}.pill strong{font-variant-numeric:tabular-nums}.toolbar{padding:9px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px;background:var(--panel);flex-wrap:wrap}.toolbar input,.toolbar select{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:6px 9px}.toolbar input{min-width:220px}.btn{border:1px solid var(--border);background:var(--panel);border-radius:7px;padding:6px 9px}.btn[aria-pressed=true]{background:var(--accent);color:white;border-color:var(--accent)}.workspace{min-height:0;display:grid;grid-template-columns:290px minmax(0,1fr) 330px;gap:1px;background:var(--border)}.pane{min-width:0;background:var(--panel);overflow:auto}.navigator{padding:9px}.change{width:100%;text-align:left;border:0;border-radius:7px;background:transparent;padding:9px;display:grid;grid-template-columns:22px 1fr;gap:6px}.change:hover,.change.selected{background:var(--panel2)}.mark{font-weight:700}.mark.add{color:var(--add)}.mark.remove{color:var(--remove)}.mark.modify{color:var(--modify)}.mark.move,.mark.rename{color:var(--move)}.mark.source-only{color:var(--source)}.path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.meta{font-size:11px;color:var(--muted);margin-top:2px}.main{padding:15px}.tabs{display:flex;gap:4px;margin-bottom:14px}.tab{border:0;background:transparent;padding:7px 10px;border-radius:7px}.tab.active{background:var(--panel2);color:var(--accent)}.view[hidden]{display:none}.tree ul{list-style:none;margin:0;padding-left:19px;border-left:1px solid var(--border)}.tree>ul{padding-left:0;border:0}.tree button{border:0;background:transparent;padding:4px 6px;border-radius:5px;text-align:left}.tree button:hover{background:var(--panel2)}.kind{color:var(--muted);font-size:11px;margin-left:6px}.codegrid,.valuegrid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border)}.codebox,.valuebox{min-width:0;background:var(--bg)}.boxhead{padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.code{margin:0;padding:12px;overflow:auto;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}.code .line{display:block}.code .line.hit{background:color-mix(in srgb,var(--accent) 18%,transparent)}.valuebox pre{margin:0;padding:12px;overflow:auto;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.graph{display:grid;gap:7px}.file,.edge{width:100%;text-align:left;cursor:pointer}.file{padding:9px 10px;border:0;border-left:3px solid var(--border);background:var(--panel2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.file.changed{border-color:var(--modify)}.edge{border:0;background:transparent;color:var(--muted);padding:5px 5px 5px 16px;font-size:12px}.file:hover,.edge:hover{color:var(--accent)}.inspector{padding:15px}.inspector h2{font-size:13px;margin:0 0 12px}.inspector h3{margin:16px 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.inspector dl{display:grid;grid-template-columns:86px 1fr;gap:7px;margin:0}.inspector dt{color:var(--muted)}.inspector dd{margin:0;overflow-wrap:anywhere}.preview{margin-top:14px;padding:10px;background:var(--panel2);border-radius:7px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}.origin{padding:6px 8px;background:var(--panel2);border-radius:6px;margin-top:5px;font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.empty{color:var(--muted);padding:40px;text-align:center}.diagnostics{margin-top:18px}.diagnostic{border-left:3px solid var(--modify);padding:8px 10px;background:var(--panel2);margin-top:7px}.diagnostic.error{border-color:var(--remove)}@media(max-width:1000px){.workspace{grid-template-columns:250px 1fr}.inspector{display:none}}@media(max-width:700px){.top{align-items:flex-start;flex-direction:column}.workspace{display:block}.navigator{max-height:230px;border-bottom:1px solid var(--border)}.codegrid,.valuegrid{grid-template-columns:1fr}.toolbar input{min-width:140px;flex:1}.main{padding:10px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div><div class="title">${title.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</div><div class="compare" id="comparison"></div></div>
+    <div class="summary" id="summary"></div>
+  </header>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Filter by JSON Pointer or file" aria-label="Filter changes">
+    <select id="classification" aria-label="Change classification"><option value="">All layers</option><option value="semantic">Semantic</option><option value="source-only">Source-only</option><option value="unknown">Unknown</option></select>
+    <select id="kind" aria-label="Change kind"><option value="">All kinds</option>${['add', 'remove', 'modify', 'rename', 'move', 'reorder', 'type', 'comment', 'refactor'].map(kind => `<option value="${kind}">${kind}</option>`).join('')}</select>
+    <button class="btn" id="prev" type="button">↑ Previous</button><button class="btn" id="next" type="button">↓ Next</button>
+    <button class="btn" id="expanded" type="button" aria-pressed="false">Raw source</button>
+    <button class="btn" id="theme" type="button">Theme</button>
+  </div>
+  <div class="workspace">
+    <nav class="pane navigator" id="navigator" aria-label="Changes"></nav>
+    <main class="pane main">
+      <div class="tabs" role="tablist">
+        ${['structure', 'source', 'value', 'dependencies'].map(view => `<button class="tab${view === initialView ? ' active' : ''}" data-view="${view}" role="tab">${view[0].toUpperCase()}${view.slice(1)}</button>`).join('')}
+      </div>
+      <section class="view tree" id="view-structure"></section>
+      <section class="view" id="view-source" hidden></section>
+      <section class="view" id="view-value" hidden></section>
+      <section class="view" id="view-dependencies" hidden></section>
+    </main>
+    <aside class="pane inspector" id="inspector"></aside>
+  </div>
+</div>
+<script>const report=${safeJson(report)};
+const state={selected:null,view:${safeJson(initialView)},query:"",classification:"",kind:"",expanded:false};
+const symbols={add:"+",remove:"−",modify:"~",rename:"↪",move:"↕",reorder:"⇅",type:"T",comment:"#",refactor:"◇"};
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+const pathOf=c=>c.pathAfter??c.pathBefore??"/";
+const visible=()=>report.changes.filter(c=>!c.ignored&&(!state.classification||c.classification===state.classification)&&(!state.kind||c.kind===state.kind)&&(!state.query||pathOf(c).toLowerCase().includes(state.query)||JSON.stringify(c.spans).toLowerCase().includes(state.query)));
+function setHash(){if(state.selected)history.replaceState(null,"","#change="+encodeURIComponent(state.selected)+"&view="+state.view)}
+function summary(){document.getElementById("comparison").textContent=report.comparison.left.label+"  →  "+report.comparison.right.label;document.getElementById("summary").innerHTML=[["semantic",report.summary.semantic],["source-only",report.summary.sourceOnly],["unknown",report.summary.unknown],["ignored",report.summary.ignored??0]].map(([k,v])=>'<span class="pill"><strong>'+v+"</strong> "+k+"</span>").join("")+'<span class="pill">evaluation '+esc(report.summary.evaluationStatus)+"</span>"}
+function nav(){const items=visible();document.getElementById("navigator").innerHTML=items.length?items.map(c=>'<button class="change '+(c.id===state.selected?"selected":"")+'" data-id="'+esc(c.id)+'"><span class="mark '+esc(c.kind)+" "+esc(c.classification)+'">'+symbols[c.kind]+'</span><span><span class="path">'+esc(pathOf(c))+'</span><span class="meta">'+esc(c.classification)+" · "+esc(c.kind)+'</span></span></button>').join(""):'<div class="empty">No matching changes</div>';document.querySelectorAll(".change").forEach(b=>b.onclick=()=>select(b.dataset.id))}
+function node(n){if(!n)return'<div class="empty">Structure unavailable</div>';return'<ul><li><button data-path="'+esc(n.path)+'"><span class="path">'+esc(n.path||"/")+'</span><span class="kind">'+esc(n.kind)+'</span></button>'+n.children.map(node).join("")+"</li></ul>"}
+function lines(source,span){if(source==null)return'<div class="empty">Source omitted</div>';return'<pre class="code">'+source.split("\\n").map((line,i)=>'<span class="line '+(span&&i+1>=span.line&&i+1<=span.endLine?"hit":"")+'"><span style="color:var(--muted)">'+String(i+1).padStart(4)+" </span>"+esc(line)+"</span>").join("")+"</pre>"}
+function views(){const change=report.changes.find(c=>c.id===state.selected);document.getElementById("view-structure").innerHTML='<div class="codegrid"><div class="codebox"><div class="boxhead">Before structure</div>'+node(report.structure.before)+'</div><div class="codebox"><div class="boxhead">After structure</div>'+node(report.structure.after)+"</div></div>";const f=report.files[0]||{},beforeSource=state.expanded?(f.beforeExpandedSource??f.beforeSource):f.beforeSource,afterSource=state.expanded?(f.afterExpandedSource??f.afterSource):f.afterSource;document.getElementById("view-source").innerHTML='<div class="codegrid"><div class="codebox"><div class="boxhead">'+esc(f.pathBefore??"Before")+"</div>"+lines(beforeSource,change?.spans.before)+'</div><div class="codebox"><div class="boxhead">'+esc(f.pathAfter??"After")+"</div>"+lines(afterSource,change?.spans.after)+"</div></div>";document.getElementById("view-value").innerHTML='<div class="valuegrid"><div class="valuebox"><div class="boxhead">Before value</div><pre>'+esc(JSON.stringify(report.evaluation.before,null,2))+'</pre></div><div class="valuebox"><div class="boxhead">After value</div><pre>'+esc(JSON.stringify(report.evaluation.after,null,2))+"</pre></div></div>";document.getElementById("view-dependencies").innerHTML='<div class="graph">'+report.dependencyGraph.nodes.map(n=>'<button type="button" data-file="'+esc(n.path)+'" class="file '+(n.before!==n.after?"changed":"")+'">'+esc(n.path)+' <span class="meta">'+(n.before&&n.after?"both":n.before?"removed":"added")+"</span></button>").join("")+report.dependencyGraph.edges.map(e=>'<button type="button" data-file="'+esc(e.to)+'" class="edge">'+esc(e.from)+" → "+esc(e.to)+" · "+esc(e.specifier)+"</button>").join("")+"</div>";document.querySelectorAll(".view").forEach(v=>v.hidden=v.id!=="view-"+state.view);document.querySelectorAll(".tab").forEach(t=>{const active=t.dataset.view===state.view;t.classList.toggle("active",active);t.setAttribute("aria-selected",String(active))});document.querySelectorAll("[data-path]").forEach(b=>b.onclick=()=>selectPath(b.dataset.path));document.querySelectorAll("[data-file]").forEach(b=>b.onclick=()=>selectFile(b.dataset.file))}
+function inspector(){const c=report.changes.find(c=>c.id===state.selected);const el=document.getElementById("inspector");if(!c){el.innerHTML='<div class="empty">Select a change</div>';return}el.innerHTML='<h2>'+esc(pathOf(c))+'</h2><dl><dt>Layer</dt><dd>'+esc(c.classification)+'</dd><dt>Change</dt><dd>'+esc(c.kind)+'</dd><dt>Before</dt><dd>'+esc(c.pathBefore??"∅")+'</dd><dt>After</dt><dd>'+esc(c.pathAfter??"∅")+'</dd><dt>Types</dt><dd>'+esc(c.before?.valueType??"∅")+" → "+esc(c.after?.valueType??"∅")+'</dd><dt>Match</dt><dd>'+esc(c.matchReason??"direct")+'</dd><dt>Sensitive</dt><dd>'+(c.sensitive?"redacted":"no")+'</dd><dt>Location</dt><dd>'+esc(c.spans.after?c.spans.after.file+":"+c.spans.after.line:c.spans.before?c.spans.before.file+":"+c.spans.before.line:"—")+'</dd></dl><div class="preview">'+esc(JSON.stringify({before:c.before?.preview,after:c.after?.preview},null,2))+'</div><h3>Origin chain</h3>'+(c.originChain.length?c.originChain.map(o=>'<div class="origin">'+esc(o.file+":"+o.line+":"+o.column)+"</div>").join(""):'<div class="meta">No mapped origin</div>')+'<div class="diagnostics">'+report.diagnostics.map(d=>'<div class="diagnostic '+esc(d.severity)+'"><strong>'+esc(d.code)+'</strong><br>'+esc(d.message)+"</div>").join("")+"</div>"}
+function select(id){state.selected=id;nav();views();inspector();setHash()}
+function selectPath(path){const c=report.changes.find(item=>pathOf(item)===path);if(c)select(c.id)}
+function selectFile(file){const c=report.changes.find(item=>item.spans.before?.file===file||item.spans.after?.file===file);if(c)select(c.id)}
+function move(delta){const items=visible();if(!items.length)return;const i=Math.max(0,items.findIndex(c=>c.id===state.selected));select(items[(i+delta+items.length)%items.length].id)}
+document.getElementById("search").oninput=e=>{state.query=e.target.value.toLowerCase();nav()};document.getElementById("classification").onchange=e=>{state.classification=e.target.value;nav()};document.getElementById("kind").onchange=e=>{state.kind=e.target.value;nav()};document.getElementById("prev").onclick=()=>move(-1);document.getElementById("next").onclick=()=>move(1);document.getElementById("expanded").onclick=e=>{state.expanded=!state.expanded;e.currentTarget.ariaPressed=String(state.expanded);e.currentTarget.textContent=state.expanded?"Expanded macros":"Raw source";views()};document.getElementById("theme").onclick=()=>{const h=document.documentElement;h.dataset.theme=h.dataset.theme==="dark"?"light":"dark"};document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{state.view=t.dataset.view;views();setHash()});document.addEventListener("keydown",e=>{if(!e.altKey)return;if(e.key==="ArrowUp"){e.preventDefault();move(-1)}else if(e.key==="ArrowDown"){e.preventDefault();move(1)}});
+const params=new URLSearchParams(location.hash.slice(1)),requestedView=params.get("view");if(["structure","source","value","dependencies"].includes(requestedView))state.view=requestedView;state.selected=params.get("change")||visible()[0]?.id||null;summary();nav();views();inspector();</script>
+</body>
+</html>`;
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import { RotateCcw } from 'lucide-react';
+import { ArrowLeftRight, RotateCcw } from 'lucide-react';
 import Link from 'next/link';
 import { createParser, useQueryState } from 'nuqs';
 import {
@@ -259,6 +259,13 @@ function PageContent() {
             </div>
 
             <div className="flex items-center gap-4">
+              <Link
+                href="/diff"
+                className="flex items-center gap-2 text-xs font-medium text-neutral-500 hover:text-white transition-colors"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+                Structural diff
+              </Link>
               <button
                 onClick={handleResetStep}
                 className="flex items-center gap-2 text-xs font-medium text-neutral-500 hover:text-white transition-colors"

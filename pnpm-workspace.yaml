@@ -1,6 +1,7 @@
 packages:
   - packages/@conf-ts/*
   - packages/@conf-ts/compiler-native/npm/*
+  - packages/@conf-ts/diff-native/npm/*
   - packages/@conf-ts/macro-transformer-native/npm/*
   - packages/playground
 

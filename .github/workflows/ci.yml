@@ -164,7 +164,7 @@ jobs:
         run: pnpm install
 
       - name: Build
-        run: pnpm --workspace-concurrency=1 --filter @conf-ts/compiler-native --filter @conf-ts/macro-transformer-native exec napi build --platform --release ${{ matrix.settings.args }}
+        run: pnpm --workspace-concurrency=1 --filter @conf-ts/compiler-native --filter @conf-ts/diff-native --filter @conf-ts/macro-transformer-native exec napi build --platform --release ${{ matrix.settings.args }}
         shell: bash
 
       - name: Upload compiler artifact
@@ -179,6 +179,13 @@ jobs:
         with:
           name: macro-transformer-native-${{ matrix.settings.target }}
           path: packages/@conf-ts/macro-transformer-native/macro-transformer-native.*.node
+          if-no-files-found: error
+
+      - name: Upload diff artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: diff-native-${{ matrix.settings.target }}
+          path: packages/@conf-ts/diff-native/diff-native.*.node
           if-no-files-found: error
 
   publish:
@@ -209,6 +216,7 @@ jobs:
       - name: Create native npm packages
         run: |
           pnpm --filter @conf-ts/compiler-native exec napi create-npm-dirs
+          pnpm --filter @conf-ts/diff-native exec napi create-npm-dirs
           pnpm --filter @conf-ts/macro-transformer-native exec napi create-npm-dirs
 
       - name: Download compiler native artifacts
@@ -225,9 +233,17 @@ jobs:
           path: packages/@conf-ts/macro-transformer-native/artifacts
           merge-multiple: true
 
+      - name: Download diff native artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: diff-native-*
+          path: packages/@conf-ts/diff-native/artifacts
+          merge-multiple: true
+
       - name: Assemble native packages
         run: |
           pnpm --filter @conf-ts/compiler-native exec napi artifacts --output-dir artifacts
+          pnpm --filter @conf-ts/diff-native exec napi artifacts --output-dir artifacts
           pnpm --filter @conf-ts/macro-transformer-native exec napi artifacts --output-dir artifacts
 
       - name: Build packages
@@ -236,6 +252,7 @@ jobs:
           pnpm --filter @conf-ts/expression build
           pnpm --filter @conf-ts/macro build
           pnpm --filter @conf-ts/compiler build
+          pnpm --filter @conf-ts/diff build
           pnpm --filter @conf-ts/macro-transformer build
           pnpm --filter @conf-ts/cli build
           pnpm --filter @conf-ts/webpack-plugin build
@@ -270,12 +287,14 @@ jobs:
           git status
           git diff
           pnpm publish -r --filter "@conf-ts/compiler-native*" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/diff-native*" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro-transformer-native*" --access public ${{ steps.tag.outputs.tag }}
           git status
           git diff
           pnpm publish -r --filter "@conf-ts/expr-core" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/expression" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/compiler" --access public ${{ steps.tag.outputs.tag }}
+          pnpm publish -r --filter "@conf-ts/diff" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/macro-transformer" --access public ${{ steps.tag.outputs.tag }}
           pnpm publish -r --filter "@conf-ts/cli" --access public ${{ steps.tag.outputs.tag }}

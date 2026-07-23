@@ -9,6 +9,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 - [Why conf-ts](#why-conf-ts)
 - [Quick start](#quick-start)
 - [Packages in this monorepo](#packages-in-this-monorepo)
+- [Structural diff](#structural-diff)
 - [Macro transform](#macro-transform)
 - [Runtime expression evaluator](#runtime-expression-evaluator)
 - [Programmatic API](#programmatic-api)
@@ -85,12 +86,97 @@ The compiled output is printed to stdout.
 | `@conf-ts/cli`                      | CLI to compile `.ts`/`.conf.ts` to JSON/YAML                              |
 | `@conf-ts/compiler`                 | Core compiler APIs (`compile`, `compileInMemory`)                         |
 | `@conf-ts/compiler-native`          | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
+| `@conf-ts/diff`                     | Oxc-backed structural and evaluated config diff, CLI, and React explorer  |
 | `@conf-ts/expr-core`                | Shared expression lexer, parser, AST types, and parse errors              |
 | `@conf-ts/expression`               | JavaScript-like runtime expression evaluator                              |
 | `@conf-ts/macro`                    | Macro functions consumed by the transform                                 |
 | `@conf-ts/macro-transformer`        | TypeScript source transformer for macros                                  |
 | `@conf-ts/macro-transformer-native` | Oxc-backed native source transformer                                      |
 | `@conf-ts/webpack-plugin`           | Webpack plugin that emits generated JSON/YAML files                       |
+
+## Structural diff
+
+`@conf-ts/diff` compares both the TypeScript structure and the evaluated
+configuration. Formatting is ignored, object order is reported as source-only,
+and arrays automatically use unique `id`, `name`, or `key` fields to distinguish
+moves from replacements.
+
+```bash
+pnpm add -D @conf-ts/diff
+
+# Two files
+conf-ts-diff config.before.conf.ts config.after.conf.ts
+
+# The same file across Git sources
+conf-ts-diff src/config.conf.ts --from HEAD --to worktree
+
+# Machine-readable and self-contained visual reports
+conf-ts-diff src/config.conf.ts --format sarif -o diff.sarif
+conf-ts-diff src/config.conf.ts --format html -o diff.html
+```
+
+The CLI also accepts `index`, branches, tags, and commit hashes. Exit codes are
+`0` when the selected policy passes, `1` when a diff violates the policy, and
+`2` for an incomplete parse, evaluation, or Git operation. Use
+`--fail-on none|semantic|any` to select the CI policy.
+
+```ts
+import { diff, diffProjects, renderHtml } from '@conf-ts/diff';
+
+const report = await diff(
+  { kind: 'git', path: 'src/config.conf.ts', ref: 'main' },
+  { kind: 'git', path: 'src/config.conf.ts', ref: 'worktree' },
+  {
+    arrayKeys: { '/services': 'id' },
+    ignore: ['/generatedAt'],
+    redact: ['/secrets/**'],
+  },
+);
+
+const html = renderHtml(report);
+```
+
+The serializable report has a versioned schema and stable change IDs. It
+contains semantic, source-only, and unknown changes; source spans; evaluated
+values; and dependency graph data. The same model powers the terminal, JSON,
+SARIF, offline HTML, and the public React explorer:
+
+```tsx
+import { DiffExplorer } from '@conf-ts/diff/react';
+
+export function Review({ report }) {
+  return <DiffExplorer report={report} />;
+}
+```
+
+Macros are detected automatically. `env()` never inherits `process.env`; pass
+explicit values with `--env`, `--env-file`, or `macro.env`. Environment-derived
+values are redacted from serialized reports. Project defaults can be placed in
+`.conf-ts-diff.json`.
+
+```json
+{
+  "macro": { "mode": "auto", "env": {} },
+  "arrayKeys": { "/services": "id" },
+  "ignore": ["/generatedAt", "/build/**"],
+  "redact": ["/secrets/**"],
+  "policies": [
+    { "match": "/metadata/**", "failOn": "none" },
+    { "match": "/production/**", "failOn": "semantic" }
+  ],
+  "failOn": "any",
+  "maxMatchWork": 100000
+}
+```
+
+Pointer patterns use `*` for one segment and `**` for descendants. Policy
+entries are evaluated in order, with the last matching entry winning; explicit
+CLI values override project defaults. `--omit-source` creates a restricted
+artifact, while `--reveal-sensitive` is accepted only for an interactive local
+terminal and is never exposed through the serializable API.
+
+Run `pnpm --filter @conf-ts/diff bench` to exercise the 10k-node object, 5k
+keyed-array, and budget-limited 5k fallback benchmarks.
 
 ## Macro transform
 
@@ -269,8 +355,9 @@ const withTax = exprTemplate<Context, number, [number]>(
 const singaporeTotal = withTax(0.09);
 // "subtotal * (1 + 0.09)"
 
-const discounted: LooseExprTemplate<Context, boolean, [number]> =
-  exprTemplate((ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum);
+const discounted: LooseExprTemplate<Context, boolean, [number]> = exprTemplate(
+  (ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum,
+);
 ```
 
 Template arguments may be literals, enums, imported/local `const` values, or

@@ -17,7 +17,7 @@ const MonacoEditor = dynamic(async () => import('@monaco-editor/react'), {
   ),
 });
 
-const SHIKI_THEME = 'github-dark';
+export const PLAYGROUND_MONACO_THEME = 'github-dark';
 const SHIKI_MONACO_SETUP_PROPERTY = '__confTsShikiMonacoSetup';
 const MONACO_CANCEL_HANDLER_PROPERTY = '__confTsMonacoCancelHandlerInstalled';
 
@@ -88,16 +88,16 @@ function setupShikiMonaco(monaco: Monaco) {
   installMonacoCancellationHandler();
 
   monacoWithSetup[SHIKI_MONACO_SETUP_PROPERTY] ??= createHighlighter({
-    themes: [SHIKI_THEME],
+    themes: [PLAYGROUND_MONACO_THEME],
     langs: typescriptWithTsxSyntax,
   })
     .then(highlighter => {
       shikiToMonaco(highlighter, monaco);
 
       const theme = textmateThemeToMonacoTheme(
-        highlighter.getTheme(SHIKI_THEME),
+        highlighter.getTheme(PLAYGROUND_MONACO_THEME),
       ) as MonacoThemeData;
-      monaco.editor.defineTheme(SHIKI_THEME, {
+      monaco.editor.defineTheme(PLAYGROUND_MONACO_THEME, {
         ...theme,
         colors: {
           ...theme.colors,
@@ -107,7 +107,7 @@ function setupShikiMonaco(monaco: Monaco) {
           'editorLineNumber.activeForeground': '#666666',
         },
       });
-      monaco.editor.setTheme(SHIKI_THEME);
+      monaco.editor.setTheme(PLAYGROUND_MONACO_THEME);
     })
     .catch(error => {
       monacoWithSetup[SHIKI_MONACO_SETUP_PROPERTY] = undefined;
@@ -142,7 +142,7 @@ export function Editor({
         defaultLanguage={language}
         language={language}
         path={path}
-        theme="vs-dark"
+        theme={PLAYGROUND_MONACO_THEME}
         value={value}
         onChange={onChange}
         options={{
@@ -168,21 +168,23 @@ export function Editor({
             useShadows: false,
           },
         }}
-        onMount={(editor, monaco) => {
-          // Custom theme to match the deep black aesthetic
-          monaco.editor.defineTheme('vs-dark', {
+        beforeMount={monaco => {
+          // Monaco may mount before the asynchronous Shiki highlighter is ready.
+          // Register the same public theme name up front so both the native and
+          // Shiki-wrapped setTheme implementations can use one stable identifier.
+          monaco.editor.defineTheme(PLAYGROUND_MONACO_THEME, {
             base: 'vs-dark',
             inherit: true,
             rules: [],
             colors: {
-              'editor.background': '#050505', // Match global background
+              'editor.background': '#050505',
               'editor.lineHighlightBackground': '#ffffff05',
               'editorLineNumber.foreground': '#333333',
               'editorLineNumber.activeForeground': '#666666',
             },
           });
-          monaco.editor.setTheme('vs-dark');
-
+        }}
+        onMount={(editor, monaco) => {
           void setupShikiMonaco(monaco);
 
           // Configure compiler options
