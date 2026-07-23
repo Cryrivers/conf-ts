@@ -333,6 +333,15 @@ function macroImportReplacements(
   return replacements;
 }
 
+/** Snapshot `process.env`, dropping keys whose value is `undefined`. */
+export function snapshotProcessEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+}
+
 function nodeEnvironment(
   explicit: Record<string, string> | undefined,
   inheritProcessEnv = true,
@@ -340,11 +349,7 @@ function nodeEnvironment(
   const processEnvironment =
     !inheritProcessEnv || typeof process === 'undefined'
       ? undefined
-      : Object.fromEntries(
-          Object.entries(process.env).filter(
-            (entry): entry is [string, string] => entry[1] !== undefined,
-          ),
-        );
+      : snapshotProcessEnv();
   if (!processEnvironment && !explicit) return undefined;
   return { ...processEnvironment, ...explicit };
 }

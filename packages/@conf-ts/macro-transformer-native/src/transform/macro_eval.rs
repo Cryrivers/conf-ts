@@ -23,14 +23,37 @@ pub fn evaluate_macro(
   if let Some(val) = evaluate_type_casting(&callee, call, file_ctx, ctx, local_context, options)? {
     return Ok(val);
   }
-  if let Some(val) = evaluate_array_map(&callee, call, file_ctx, ctx, local_context, options)? {
+  if let Some(val) = evaluate_array_macro(
+    ArrayMacroMethod::Map,
+    &callee,
+    call,
+    file_ctx,
+    ctx,
+    local_context,
+    options,
+  )? {
     return Ok(val);
   }
-  if let Some(val) = evaluate_array_flat_map(&callee, call, file_ctx, ctx, local_context, options)?
-  {
+  if let Some(val) = evaluate_array_macro(
+    ArrayMacroMethod::FlatMap,
+    &callee,
+    call,
+    file_ctx,
+    ctx,
+    local_context,
+    options,
+  )? {
     return Ok(val);
   }
-  if let Some(val) = evaluate_array_filter(&callee, call, file_ctx, ctx, local_context, options)? {
+  if let Some(val) = evaluate_array_macro(
+    ArrayMacroMethod::Filter,
+    &callee,
+    call,
+    file_ctx,
+    ctx,
+    local_context,
+    options,
+  )? {
     return Ok(val);
   }
   if let Some(val) = evaluate_env(&callee, call, file_ctx, ctx, local_context, options)? {
@@ -350,162 +373,25 @@ fn evaluate_env(
   }
 }
 
-fn evaluate_array_map(
-  callee: &str,
-  call: &CallExpression,
-  file_ctx: &FileContext,
-  ctx: &mut EvalContext,
-  local_context: Option<&HashMap<String, Value>>,
-  options: &CompileOptions,
-) -> Result<Option<Value>, ConfTSError> {
-  if callee != "arrayMap" || call.arguments.len() != 2 {
-    return Ok(None);
-  }
-
-  if !check_macro_import(callee, call, file_ctx, ctx) {
-    let (line, character) = get_location(&file_ctx.line_index, call.span.start);
-    return Err(ConfTSError::new(
-      format!(
-        "Macro function '{}' must be imported from '@conf-ts/macro' to use in macro mode",
-        callee
-      ),
-      &file_ctx.file_path,
-      line,
-      character,
-    ));
-  }
-
-  let arr_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
-  let arr = evaluate(arr_expr, file_ctx, ctx, local_context, options)?;
-  let callback = expect_expression_argument(&call.arguments[1], file_ctx, callee)?;
-  let arrow = match callback {
-    Expression::ArrowFunctionExpression(arrow) => arrow,
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
-      return Err(ConfTSError::new(
-        "arrayMap: callback must be an arrow function",
-        &file_ctx.file_path,
-        line,
-        character,
-      ));
-    }
-  };
-
-  if arrow.params.items.len() != 1 {
-    let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
-    return Err(ConfTSError::new(
-      "arrayMap: callback must have exactly one parameter",
-      &file_ctx.file_path,
-      line,
-      character,
-    ));
-  }
-
-  let param_name = extract_param_name(
-    &arrow.params.items[0].pattern,
-    file_ctx,
-    callback,
-    "arrayMap",
-  )?;
-
-  let body_expr = get_arrow_body_expr(arrow, file_ctx, "arrayMap")?;
-
-  let items = match arr {
-    Value::Array(items) => items,
-    _ => return Ok(Some(Value::Array(Vec::new()))),
-  };
-
-  let mut result = Vec::new();
-  for item in items {
-    let mut local = HashMap::new();
-    local.insert(param_name.clone(), item);
-    let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
-    result.push(val);
-  }
-
-  Ok(Some(Value::Array(result)))
+#[derive(Clone, Copy)]
+enum ArrayMacroMethod {
+  Map,
+  FlatMap,
+  Filter,
 }
 
-fn evaluate_array_flat_map(
-  callee: &str,
-  call: &CallExpression,
-  file_ctx: &FileContext,
-  ctx: &mut EvalContext,
-  local_context: Option<&HashMap<String, Value>>,
-  options: &CompileOptions,
-) -> Result<Option<Value>, ConfTSError> {
-  if callee != "arrayFlatMap" || call.arguments.len() != 2 {
-    return Ok(None);
-  }
-
-  if !check_macro_import(callee, call, file_ctx, ctx) {
-    let (line, character) = get_location(&file_ctx.line_index, call.span.start);
-    return Err(ConfTSError::new(
-      format!(
-        "Macro function '{}' must be imported from '@conf-ts/macro' to use in macro mode",
-        callee
-      ),
-      &file_ctx.file_path,
-      line,
-      character,
-    ));
-  }
-
-  let arr_expr = expect_expression_argument(&call.arguments[0], file_ctx, callee)?;
-  let arr = evaluate(arr_expr, file_ctx, ctx, local_context, options)?;
-  let callback = expect_expression_argument(&call.arguments[1], file_ctx, callee)?;
-  let arrow = match callback {
-    Expression::ArrowFunctionExpression(arrow) => arrow,
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
-      return Err(ConfTSError::new(
-        "arrayFlatMap: callback must be an arrow function",
-        &file_ctx.file_path,
-        line,
-        character,
-      ));
-    }
-  };
-
-  if arrow.params.items.len() != 1 {
-    let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
-    return Err(ConfTSError::new(
-      "arrayFlatMap: callback must have exactly one parameter",
-      &file_ctx.file_path,
-      line,
-      character,
-    ));
-  }
-
-  let param_name = extract_param_name(
-    &arrow.params.items[0].pattern,
-    file_ctx,
-    callback,
-    "arrayFlatMap",
-  )?;
-
-  let body_expr = get_arrow_body_expr(arrow, file_ctx, "arrayFlatMap")?;
-
-  let items = match arr {
-    Value::Array(items) => items,
-    _ => return Ok(Some(Value::Array(Vec::new()))),
-  };
-
-  let mut result = Vec::new();
-  for item in items {
-    let mut local = HashMap::new();
-    local.insert(param_name.clone(), item);
-    let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
-    match val {
-      Value::Array(items) => result.extend(items),
-      value => result.push(value),
+impl ArrayMacroMethod {
+  fn name(self) -> &'static str {
+    match self {
+      ArrayMacroMethod::Map => "arrayMap",
+      ArrayMacroMethod::FlatMap => "arrayFlatMap",
+      ArrayMacroMethod::Filter => "arrayFilter",
     }
   }
-
-  Ok(Some(Value::Array(result)))
 }
 
-fn evaluate_array_filter(
+fn evaluate_array_macro(
+  method: ArrayMacroMethod,
   callee: &str,
   call: &CallExpression,
   file_ctx: &FileContext,
@@ -513,7 +399,8 @@ fn evaluate_array_filter(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
-  if callee != "arrayFilter" || call.arguments.len() != 2 {
+  let name = method.name();
+  if callee != name || call.arguments.len() != 2 {
     return Ok(None);
   }
 
@@ -538,7 +425,7 @@ fn evaluate_array_filter(
     _ => {
       let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
       return Err(ConfTSError::new(
-        "arrayFilter: callback must be an arrow function",
+        format!("{}: callback must be an arrow function", name),
         &file_ctx.file_path,
         line,
         character,
@@ -549,21 +436,16 @@ fn evaluate_array_filter(
   if arrow.params.items.len() != 1 {
     let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
     return Err(ConfTSError::new(
-      "arrayFilter: callback must have exactly one parameter",
+      format!("{}: callback must have exactly one parameter", name),
       &file_ctx.file_path,
       line,
       character,
     ));
   }
 
-  let param_name = extract_param_name(
-    &arrow.params.items[0].pattern,
-    file_ctx,
-    callback,
-    "arrayFilter",
-  )?;
+  let param_name = extract_param_name(&arrow.params.items[0].pattern, file_ctx, callback, name)?;
 
-  let body_expr = get_arrow_body_expr(arrow, file_ctx, "arrayFilter")?;
+  let body_expr = get_arrow_body_expr(arrow, file_ctx, name)?;
 
   let items = match arr {
     Value::Array(items) => items,
@@ -572,11 +454,30 @@ fn evaluate_array_filter(
 
   let mut result = Vec::new();
   for item in items {
-    let mut local = HashMap::new();
-    local.insert(param_name.clone(), item.clone());
-    let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
-    if val.is_truthy() {
-      result.push(item);
+    match method {
+      ArrayMacroMethod::Map => {
+        let mut local = HashMap::new();
+        local.insert(param_name.clone(), item);
+        let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
+        result.push(val);
+      }
+      ArrayMacroMethod::FlatMap => {
+        let mut local = HashMap::new();
+        local.insert(param_name.clone(), item);
+        let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
+        match val {
+          Value::Array(items) => result.extend(items),
+          value => result.push(value),
+        }
+      }
+      ArrayMacroMethod::Filter => {
+        let mut local = HashMap::new();
+        local.insert(param_name.clone(), item.clone());
+        let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
+        if val.is_truthy() {
+          result.push(item);
+        }
+      }
     }
   }
 

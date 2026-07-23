@@ -380,14 +380,15 @@ function createArrayCallbackChecker(params: {
   return checkNode;
 }
 
-function getCallbackBodyExpression(
-  callback: ts.ArrowFunction,
+/** If `body` is a block, require a single `return <expr>` statement and extract `<expr>`; otherwise return `body` as-is. */
+function extractSingleReturnExpression(
+  body: ts.Block | ts.Expression,
   sourceFile: ts.SourceFile,
-  checkNode: (node: ts.Node) => void,
   errorMessage: string,
+  errorNode: ts.Node,
 ): ts.Expression {
-  if (ts.isBlock(callback.body)) {
-    const stmts = callback.body.statements;
+  if (ts.isBlock(body)) {
+    const stmts = body.statements;
     if (
       stmts.length !== 1 ||
       !ts.isReturnStatement(stmts[0]) ||
@@ -395,18 +396,28 @@ function getCallbackBodyExpression(
     ) {
       throw new ConfTSError(errorMessage, {
         file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(
-          sourceFile,
-          callback.body.getStart(),
-        ),
+        ...ts.getLineAndCharacterOfPosition(sourceFile, errorNode.getStart()),
       });
     }
-    const expr = (stmts[0] as ts.ReturnStatement).expression!;
-    checkNode(expr);
-    return expr;
+    return (stmts[0] as ts.ReturnStatement).expression!;
   }
-  checkNode(callback.body);
-  return callback.body;
+  return body;
+}
+
+function getCallbackBodyExpression(
+  callback: ts.ArrowFunction,
+  sourceFile: ts.SourceFile,
+  checkNode: (node: ts.Node) => void,
+  errorMessage: string,
+): ts.Expression {
+  const expr = extractSingleReturnExpression(
+    callback.body,
+    sourceFile,
+    errorMessage,
+    callback.body,
+  );
+  checkNode(expr);
+  return expr;
 }
 
 function getArrayCallbackDetails(params: {
@@ -1023,21 +1034,12 @@ function getNestedCallbackBodyExpression(
   sourceFile: ts.SourceFile,
   errorNode: ts.Node,
 ): ts.Expression {
-  if (ts.isBlock(body)) {
-    const stmts = body.statements;
-    if (
-      stmts.length !== 1 ||
-      !ts.isReturnStatement(stmts[0]) ||
-      !stmts[0].expression
-    ) {
-      throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, errorNode.getStart()),
-      });
-    }
-    return (stmts[0] as ts.ReturnStatement).expression!;
-  }
-  return body;
+  return extractSingleReturnExpression(
+    body,
+    sourceFile,
+    NESTED_CALLBACK_ERROR,
+    errorNode,
+  );
 }
 
 function processNestedCallback(
@@ -1746,61 +1748,53 @@ export function evaluateMacro(
 ): any {
   const callee = importedName ?? getCalleeName(expression, sourceFile);
 
-  const handlers = [
-    () =>
-      evaluateExpr(
-        callee,
-        expression,
-        sourceFile,
-        typeChecker,
-        enumMap,
-        macroImportsMap,
-        evaluatedFiles,
-        options,
-      ),
-    () =>
-      evaluateTypeCasting(
-        callee,
-        expression,
-        sourceFile,
-        typeChecker,
-        enumMap,
-        macroImportsMap,
-        evaluatedFiles,
-        context,
-        options,
-      ),
-    () =>
-      evaluateArrayMacro(
-        callee,
-        expression,
-        sourceFile,
-        typeChecker,
-        enumMap,
-        macroImportsMap,
-        evaluatedFiles,
-        context,
-        options,
-      ),
-    () =>
-      evaluateEnv(
-        callee,
-        expression,
-        sourceFile,
-        typeChecker,
-        enumMap,
-        macroImportsMap,
-        evaluatedFiles,
-        context,
-        options,
-      ),
-  ];
+  const result =
+    evaluateExpr(
+      callee,
+      expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      options,
+    ) ??
+    evaluateTypeCasting(
+      callee,
+      expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      context,
+      options,
+    ) ??
+    evaluateArrayMacro(
+      callee,
+      expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      context,
+      options,
+    ) ??
+    evaluateEnv(
+      callee,
+      expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      context,
+      options,
+    );
 
-  for (const handler of handlers) {
-    const result = handler();
-    if (result !== undefined) {
-      return result;
-    }
+  if (result !== undefined) {
+    return result;
   }
 
   throw new ConfTSError(

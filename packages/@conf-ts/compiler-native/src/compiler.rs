@@ -306,10 +306,8 @@ pub fn collect_enums_for_all(
   eval_ctx: &mut EvalContext,
   options: &CompileOptions,
 ) {
-  let file_paths: Vec<String> = loaded.file_contexts.keys().cloned().collect();
-  for file_path in &file_paths {
-    let ctx = loaded.file_contexts.get(file_path).unwrap().clone();
-    collect_enums(ctx.program(), file_path, eval_ctx, &ctx, options);
+  for (file_path, ctx) in &loaded.file_contexts {
+    collect_enums(ctx.program(), file_path, eval_ctx, ctx, options);
   }
 }
 
@@ -359,15 +357,6 @@ pub fn compile(
 ) -> Result<(String, Vec<String>), ConfTSError> {
   let loaded = load_file_program(input_file)?;
   compile_loaded(&loaded, format, options, &[])
-}
-
-/// Compile ordinary TypeScript from a filesystem path.
-pub fn compile_path(
-  input_file: &str,
-  format: &str,
-  options: &CompileOptions,
-) -> Result<(String, Vec<String>), ConfTSError> {
-  compile(input_file, format, options)
 }
 
 /// Compile an injected source payload, optionally backed by a source-project snapshot.

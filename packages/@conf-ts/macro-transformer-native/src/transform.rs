@@ -10,7 +10,7 @@ use std::rc::Rc;
 use compiler_native::browser::{ProjectResolutions, build_file_contexts};
 use compiler_native::compiler::collect_enums;
 use compiler_native::error::ConfTSError;
-use compiler_native::eval::EvalContext;
+use compiler_native::eval::{EvalContext, MACRO_FUNCTIONS};
 use compiler_native::resolver::{TsCompilerOptions, resolve_module_in_memory_with_options};
 use compiler_native::types::{CompileOptions, FileContext, TransformState, Value};
 use oxc_ast::ast::*;
@@ -20,16 +20,6 @@ use oxc_semantic::SymbolId;
 pub use compiler_native::types::QuoteStyle;
 
 const MACRO_MODULE: &str = "@conf-ts/macro";
-const MACRO_FUNCTIONS: &[&str] = &[
-  "String",
-  "Number",
-  "Boolean",
-  "arrayMap",
-  "arrayFilter",
-  "arrayFlatMap",
-  "env",
-  "expr",
-];
 
 pub struct TransformOptions {
   pub env: HashMap<String, String>,
@@ -928,17 +918,12 @@ pub fn transform_project(
   eval_ctx.extension = Some(extension);
 
   let evaluation_options = compile_options(&options);
-  let file_paths: Vec<String> = contexts.keys().cloned().collect();
-  for filename in file_paths {
-    let context = contexts
-      .get(&filename)
-      .expect("file context should exist")
-      .clone();
+  for (filename, context) in &contexts {
     collect_enums(
       context.program(),
-      &filename,
+      filename,
       &mut eval_ctx,
-      &context,
+      context,
       &evaluation_options,
     );
   }

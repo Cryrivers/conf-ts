@@ -1,15 +1,12 @@
 import { dirname, sep } from 'path';
 import ts from 'typescript';
-import { stringify as yamlStringify } from 'yaml';
 
 import { ConfTSError } from './error';
 import { evaluate } from './eval';
 import type { EvaluationState } from './internal-types';
 import {
   CompileOptions,
-  FormattedNumber,
-  jsonStringify,
-  orderedClone,
+  serializeOutput,
   type CompileInput,
   type SourceCompileInput,
 } from './shared';
@@ -355,42 +352,6 @@ export function evaluateDefaultExport(
   return output;
 }
 
-function serialize(
-  output: object,
-  format: 'json' | 'yaml',
-  dependencies: string[],
-  options?: CompileOptions,
-): { output: string; dependencies: string[] } {
-  const customTags = [
-    {
-      identify: (v: any) => v instanceof FormattedNumber,
-      default: true,
-      tag: 'tag:yaml.org,2002:float',
-      resolve: (v: string) => parseFloat(v),
-      stringify: ({ value }: any) => (value as FormattedNumber).text,
-    },
-  ];
-
-  if (format === 'json') {
-    const jsonSource = options?.preserveKeyOrder
-      ? jsonStringify(orderedClone(output), 2)
-      : jsonStringify(output, 2);
-    return { output: jsonSource, dependencies };
-  } else if (format === 'yaml') {
-    const yamlOptions = { customTags, indentSeq: false };
-    const yamlSource = options?.preserveKeyOrder
-      ? yamlStringify(orderedClone(output), yamlOptions)
-      : yamlStringify(output, yamlOptions);
-    return { output: yamlSource, dependencies };
-  } else {
-    throw new ConfTSError(`Unsupported format: ${format}`, {
-      file: 'unknown',
-      line: 1,
-      character: 1,
-    });
-  }
-}
-
 export function compile(
   input: CompileInput,
   format: 'json' | 'yaml',
@@ -413,5 +374,5 @@ export function compile(
   const fileNames = Array.from(
     new Set([...(tsConfigPath ? [tsConfigPath] : []), ...state.evaluatedFiles]),
   );
-  return serialize(output, format, fileNames, options);
+  return serializeOutput(output, format, fileNames, options);
 }

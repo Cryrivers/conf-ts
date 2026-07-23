@@ -32,6 +32,21 @@ function resolveArrayPatternElement(
 
 type EvalResult = { found: true; value: any } | { found: false };
 
+/** Text of a non-computed property/enum-member name (identifier, string, or numeric literal). */
+function staticNameText(
+  name: ts.PropertyName,
+  sourceFile: ts.SourceFile,
+): string {
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  return name.getText(sourceFile);
+}
+
 function getPropertyNameText(
   name: ts.PropertyName,
   sourceFile: ts.SourceFile,
@@ -58,13 +73,7 @@ function getPropertyNameText(
       ),
     );
   }
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) {
-    return name.text;
-  }
-  if (ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return name.getText(sourceFile);
+  return staticNameText(name, sourceFile);
 }
 
 function getBindingPropertyName(
@@ -360,20 +369,6 @@ function resolveBindingElementValue(
   return resolved.found ? resolved.value : undefined;
 }
 
-function getEnumMemberName(
-  name: ts.PropertyName,
-  sourceFile: ts.SourceFile,
-): string {
-  if (
-    ts.isIdentifier(name) ||
-    ts.isStringLiteral(name) ||
-    ts.isNumericLiteral(name)
-  ) {
-    return name.text;
-  }
-  return name.getText(sourceFile);
-}
-
 function evaluateEnumDeclaration(
   declaration: ts.EnumDeclaration,
   typeChecker: ts.TypeChecker,
@@ -390,7 +385,7 @@ function evaluateEnumDeclaration(
   evaluatedFiles.add(declSourceFile.fileName);
 
   for (const member of declaration.members) {
-    const memberName = getEnumMemberName(member.name, declSourceFile);
+    const memberName = staticNameText(member.name, declSourceFile);
     const fullEnumMemberName = `${enumName}.${memberName}`;
     if (Object.prototype.hasOwnProperty.call(fileEnums, fullEnumMemberName)) {
       result[memberName] = fileEnums[fullEnumMemberName];

@@ -231,6 +231,34 @@ const evaluateUnary = (
   }
 };
 
+const BINARY_OPS: Record<
+  BinaryNode['operator'],
+  (left: any, right: any) => unknown
+> = {
+  '+': (left, right) => left + right,
+  '-': (left, right) => left - right,
+  '*': (left, right) => left * right,
+  '**': (left, right) => left ** right,
+  '/': (left, right) => left / right,
+  '%': (left, right) => left % right,
+  '&': (left, right) => left & right,
+  '|': (left, right) => left | right,
+  '^': (left, right) => left ^ right,
+  '<<': (left, right) => left << right,
+  '>>': (left, right) => left >> right,
+  '>>>': (left, right) => left >>> right,
+  '>': (left, right) => left > right,
+  '<': (left, right) => left < right,
+  '>=': (left, right) => left >= right,
+  '<=': (left, right) => left <= right,
+  '==': (left, right) => left == right,
+  '!=': (left, right) => left != right,
+  '===': (left, right) => left === right,
+  '!==': (left, right) => left !== right,
+  instanceof: (left, right) => left instanceof right,
+  in: (left, right) => left in right,
+};
+
 const evaluateBinary = (
   node: BinaryNode,
   env: Env,
@@ -238,52 +266,7 @@ const evaluateBinary = (
 ): unknown => {
   const left = evaluate(node.left, env, options);
   const right = evaluate(node.right, env, options);
-  switch (node.operator) {
-    case '+':
-      return (left as any) + (right as any);
-    case '-':
-      return (left as any) - (right as any);
-    case '*':
-      return (left as any) * (right as any);
-    case '**':
-      return (left as any) ** (right as any);
-    case '/':
-      return (left as any) / (right as any);
-    case '%':
-      return (left as any) % (right as any);
-    case '&':
-      return (left as any) & (right as any);
-    case '|':
-      return (left as any) | (right as any);
-    case '^':
-      return (left as any) ^ (right as any);
-    case '<<':
-      return (left as any) << (right as any);
-    case '>>':
-      return (left as any) >> (right as any);
-    case '>>>':
-      return (left as any) >>> (right as any);
-    case '>':
-      return (left as any) > (right as any);
-    case '<':
-      return (left as any) < (right as any);
-    case '>=':
-      return (left as any) >= (right as any);
-    case '<=':
-      return (left as any) <= (right as any);
-    case '==':
-      return left == right;
-    case '!=':
-      return left != right;
-    case '===':
-      return left === right;
-    case '!==':
-      return left !== right;
-    case 'instanceof':
-      return (left as any) instanceof (right as any);
-    case 'in':
-      return (left as any) in (right as any);
-  }
+  return BINARY_OPS[node.operator](left, right);
 };
 
 const evaluateLogical = (

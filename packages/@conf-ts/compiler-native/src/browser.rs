@@ -77,17 +77,12 @@ pub fn compile_project(
       })
   }));
 
-  let file_paths: Vec<String> = file_contexts.keys().cloned().collect();
-  for file_path in file_paths {
-    let context = file_contexts
-      .get(&file_path)
-      .expect("file context should exist")
-      .clone();
+  for (file_path, context) in &file_contexts {
     collect_enums(
       context.program(),
-      &file_path,
+      file_path,
       &mut eval_ctx,
-      &context,
+      context,
       options,
     );
   }

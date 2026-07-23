@@ -71,7 +71,7 @@ pub fn compile(
 ) -> Result<CompileResult> {
   let options = convert_options(options);
   match input {
-    Either::A(path) => result(crate::compiler::compile_path(&path, &format, &options)),
+    Either::A(path) => result(crate::compiler::compile(&path, &format, &options)),
     Either::B(input) => result(crate::compiler::compile_source(
       &SourceCompileInput {
         filename: input.filename,

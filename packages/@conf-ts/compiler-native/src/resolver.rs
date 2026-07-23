@@ -193,14 +193,15 @@ fn match_path_pattern<'a>(pattern: &str, specifier: &'a str) -> Option<&'a str> 
   None
 }
 
+const SUPPORTED_EXTENSIONS: &[&str] = &[".ts", ".js", ".json.ts", ".json.js"];
+
 fn is_supported_source_path(path: &str) -> bool {
-  let extensions = [".ts", ".js", ".json.ts", ".json.js"];
-  extensions.iter().any(|ext| path.ends_with(ext))
+  SUPPORTED_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
 /// Try to resolve a path by appending common extensions.
 fn resolve_file_path(base: &Path) -> Option<PathBuf> {
-  let extensions = [".ts", ".js", ".json.ts", ".json.js"];
+  let extensions = SUPPORTED_EXTENSIONS;
 
   // Try exact path
   if base.is_file() {
@@ -212,7 +213,7 @@ fn resolve_file_path(base: &Path) -> Option<PathBuf> {
   }
 
   // Try with extensions
-  for ext in &extensions {
+  for ext in extensions {
     let with_ext = base.with_extension(&ext[1..]); // Remove the leading dot
     if with_ext.is_file() {
       return Some(with_ext.canonicalize().unwrap_or(with_ext));
@@ -220,7 +221,7 @@ fn resolve_file_path(base: &Path) -> Option<PathBuf> {
   }
 
   // Try index files
-  for ext in &extensions {
+  for ext in extensions {
     let index = base.join(format!("index{}", ext));
     if index.is_file() {
       return Some(index.canonicalize().unwrap_or(index));
@@ -293,15 +294,14 @@ fn resolve_virtual_file(base: &Path, files: &HashMap<String, String>) -> Option<
     return Some(base_str);
   }
 
-  let extensions = [".ts", ".js", ".json.ts", ".json.js"];
-  for ext in &extensions {
+  for ext in SUPPORTED_EXTENSIONS {
     let with_ext = format!("{}{}", base_str, ext);
     if files.contains_key(&with_ext) {
       return Some(with_ext);
     }
   }
 
-  for ext in &extensions {
+  for ext in SUPPORTED_EXTENSIONS {
     let index = format!("{}/index{}", base_str, ext);
     if files.contains_key(&index) {
       return Some(index);

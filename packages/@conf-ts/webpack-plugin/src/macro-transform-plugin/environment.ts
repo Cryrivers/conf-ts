@@ -3,6 +3,9 @@ import type { Compiler } from 'webpack';
 
 const environmentsByCompiler = new WeakMap<object, Record<string, string>>();
 
+// Deliberately does not import @conf-ts/macro-transformer's equivalent
+// helper: this module must stay free of that (and its TypeScript)
+// dependency so the native loader path doesn't pull in the JS transformer.
 function processEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {

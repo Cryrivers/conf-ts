@@ -4,21 +4,11 @@ import path from 'path';
 import { compile } from '@conf-ts/compiler';
 import {
   createMacroProjectSnapshot,
-  transform,
+  transformProject,
 } from '@conf-ts/macro-transformer';
 import { Command } from 'commander';
 
 const program = new Command();
-
-function snapshotEnvironment(): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) {
-      environment[key] = value;
-    }
-  }
-  return environment;
-}
 
 program
   .name('conf-ts')
@@ -56,7 +46,7 @@ program
         const filename = path.resolve(fileEntry);
         const code = fs.readFileSync(filename, 'utf8');
         const project = createMacroProjectSnapshot([filename]);
-        let transformedProject = {
+        const projectWithInput = {
           ...project,
           files: {
             ...project.files,
@@ -64,42 +54,27 @@ program
           },
         };
         const transformOptions = {
-          env: snapshotEnvironment(),
           preserveKeyOrder: preserveOrder,
           quote,
         };
-        let transformedEntry = code;
-        const files = Object.entries(transformedProject.files).sort(
-          ([left], [right]) =>
-            Number(left === filename) - Number(right === filename),
+        const batch = transformProject(
+          { project: projectWithInput },
+          transformOptions,
         );
-        for (const [projectFilename, projectCode] of files) {
-          if (projectFilename.endsWith('.d.ts')) {
-            continue;
-          }
-          const transformed = transform(
-            {
-              filename: projectFilename,
-              code: projectCode,
-              project: transformedProject,
-            },
-            transformOptions,
-          );
-          transformedProject = {
-            ...transformedProject,
-            files: {
-              ...transformedProject.files,
-              [projectFilename]: transformed.code,
-            },
-          };
-          if (projectFilename === filename) {
-            transformedEntry = transformed.code;
-          }
+        const transformedFiles = { ...projectWithInput.files };
+        for (const [projectFilename, transformed] of Object.entries(
+          batch.transformed,
+        )) {
+          transformedFiles[projectFilename] = transformed.code;
         }
+        const transformedProject = {
+          ...projectWithInput,
+          files: transformedFiles,
+        };
         result = compile(
           {
             filename,
-            code: transformedEntry,
+            code: transformedFiles[filename],
             project: transformedProject,
           },
           format,

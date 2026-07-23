@@ -1,3 +1,7 @@
+import { stringify as yamlStringify } from 'yaml';
+
+import { ConfTSError } from './error';
+
 /**
  * Compile options for both filesystem and in-memory compilation.
  */
@@ -28,7 +32,6 @@ export type CompileInput = string | SourceCompileInput;
  * This is used to ensure that formatting like "1.0" is preserved in the output.
  */
 export class FormattedNumber {
-  public __isFormattedNumber = true;
   constructor(
     public value: number,
     public text: string,
@@ -118,4 +121,41 @@ export function jsonStringify(value: any, space: number | string = 2): string {
   }
 
   return serialize(value, '') ?? 'null';
+}
+
+/** Serialize evaluated config output to JSON or YAML text. */
+export function serializeOutput(
+  output: object,
+  format: 'json' | 'yaml',
+  dependencies: string[],
+  options?: CompileOptions,
+): { output: string; dependencies: string[] } {
+  const customTags = [
+    {
+      identify: (v: any) => v instanceof FormattedNumber,
+      default: true,
+      tag: 'tag:yaml.org,2002:float',
+      resolve: (v: string) => parseFloat(v),
+      stringify: ({ value }: any) => (value as FormattedNumber).text,
+    },
+  ];
+
+  if (format === 'json') {
+    const jsonSource = options?.preserveKeyOrder
+      ? jsonStringify(orderedClone(output), 2)
+      : jsonStringify(output, 2);
+    return { output: jsonSource, dependencies };
+  } else if (format === 'yaml') {
+    const yamlOptions = { customTags, indentSeq: false };
+    const yamlSource = options?.preserveKeyOrder
+      ? yamlStringify(orderedClone(output), yamlOptions)
+      : yamlStringify(output, yamlOptions);
+    return { output: yamlSource, dependencies };
+  } else {
+    throw new ConfTSError(`Unsupported format: ${format}`, {
+      file: 'unknown',
+      line: 1,
+      character: 1,
+    });
+  }
 }
