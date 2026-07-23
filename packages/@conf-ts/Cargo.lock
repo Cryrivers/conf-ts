@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "compiler_native"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "napi",
  "napi-build",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "macro_transformer_native"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "compiler_native",
  "json-strip-comments",

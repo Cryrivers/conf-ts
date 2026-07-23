@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/macro-transformer",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "Pre-evaluates conf-ts macros by rewriting source text, using the TypeScript compiler API.",
   "author": {
     "name": "Zhongliang Wang",
