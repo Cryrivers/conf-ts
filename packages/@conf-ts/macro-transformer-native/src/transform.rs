@@ -16,6 +16,7 @@ use compiler_native::types::{CompileOptions, FileContext, TransformState, Value}
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
 use oxc_semantic::SymbolId;
+use oxc_span::GetSpan;
 
 pub use compiler_native::types::QuoteStyle;
 
@@ -65,6 +66,7 @@ struct MacroBindings {
 struct CoreState {
   bindings: HashMap<String, MacroBindings>,
   fatal_error: RefCell<Option<ConfTSError>>,
+  expr_template_bindings: RefCell<Vec<HashMap<String, Value>>>,
 }
 
 fn core_state(ctx: &EvalContext) -> Rc<CoreState> {
@@ -81,6 +83,25 @@ pub(crate) fn record_fatal_transform_error(ctx: &EvalContext, error: ConfTSError
 
 fn take_fatal_transform_error(ctx: &EvalContext) -> Option<ConfTSError> {
   core_state(ctx).fatal_error.borrow_mut().take()
+}
+
+pub(crate) fn push_expr_template_bindings(ctx: &EvalContext, bindings: HashMap<String, Value>) {
+  core_state(ctx)
+    .expr_template_bindings
+    .borrow_mut()
+    .push(bindings);
+}
+
+pub(crate) fn pop_expr_template_bindings(ctx: &EvalContext) {
+  core_state(ctx).expr_template_bindings.borrow_mut().pop();
+}
+
+pub(crate) fn current_expr_template_bindings(ctx: &EvalContext) -> Option<HashMap<String, Value>> {
+  core_state(ctx)
+    .expr_template_bindings
+    .borrow()
+    .last()
+    .cloned()
 }
 
 fn module_export_name(value: &ModuleExportName<'_>) -> String {
@@ -311,6 +332,7 @@ fn expression_originates_from_expr_inner(
   match unwrap_expr_origin(expression) {
     Expression::CallExpression(call) => {
       canonical_callee(call, file_ctx, ctx).as_deref() == Some("expr")
+        || expr_template_definition(&call.callee, file_ctx, ctx).is_some()
     }
     Expression::Identifier(identifier) => {
       let name = identifier.name.as_str();
@@ -355,6 +377,297 @@ pub(crate) fn expression_originates_from_expr(
   ctx: &EvalContext,
 ) -> bool {
   expression_originates_from_expr_inner(expression, file_ctx, ctx, &mut HashSet::new())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExprTemplateDefinition {
+  pub file_path: String,
+  pub call_start: u32,
+  pub dependencies: Vec<String>,
+}
+
+fn resolved_file_context(
+  source: &str,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+) -> Option<FileContext> {
+  let path = ctx
+    .resolver
+    .as_ref()
+    .and_then(|resolver| resolver(source, &file_ctx.file_path))?;
+  ctx.file_contexts.get(&path).cloned()
+}
+
+fn exported_expr_template_definition(
+  export_name: &str,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+  visited: &mut HashSet<(String, String)>,
+  dependencies: &mut Vec<String>,
+) -> Option<ExprTemplateDefinition> {
+  let visit_key = (
+    file_ctx.file_path.clone(),
+    format!("export:{}", export_name),
+  );
+  if !visited.insert(visit_key) {
+    return None;
+  }
+  if !dependencies.contains(&file_ctx.file_path) {
+    dependencies.push(file_ctx.file_path.clone());
+  }
+
+  for statement in &file_ctx.program().body {
+    match statement {
+      Statement::ExportNamedDeclaration(export) => {
+        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+          && declaration.kind == VariableDeclarationKind::Const
+        {
+          for declarator in &declaration.declarations {
+            let BindingPattern::BindingIdentifier(identifier) = &declarator.id else {
+              continue;
+            };
+            if identifier.name.as_str() == export_name
+              && let Some(initializer) = &declarator.init
+              && let Some(definition) =
+                expr_template_definition_inner(initializer, file_ctx, ctx, visited, dependencies)
+            {
+              return Some(definition);
+            }
+          }
+        }
+
+        for specifier in &export.specifiers {
+          if module_export_name(&specifier.exported) != export_name {
+            continue;
+          }
+          let local_name = module_export_name(&specifier.local);
+          if let Some(source) = &export.source {
+            let imported_ctx = resolved_file_context(source.value.as_str(), file_ctx, ctx)?;
+            if let Some(definition) = exported_expr_template_definition(
+              &local_name,
+              &imported_ctx,
+              ctx,
+              visited,
+              dependencies,
+            ) {
+              return Some(definition);
+            }
+          } else if let Some(initializer) =
+            const_initializer_by_name(file_ctx.program(), &local_name, None)
+            && let Some(definition) =
+              expr_template_definition_inner(initializer, file_ctx, ctx, visited, dependencies)
+          {
+            return Some(definition);
+          }
+        }
+      }
+      Statement::ExportDefaultDeclaration(export) if export_name == "default" => {
+        if let Some(expression) = export.declaration.as_expression()
+          && let Some(definition) =
+            expr_template_definition_inner(expression, file_ctx, ctx, visited, dependencies)
+        {
+          return Some(definition);
+        }
+      }
+      Statement::ExportAllDeclaration(export) if export_name != "default" => {
+        if let Some(imported_ctx) =
+          resolved_file_context(export.source.value.as_str(), file_ctx, ctx)
+          && let Some(definition) = exported_expr_template_definition(
+            export_name,
+            &imported_ctx,
+            ctx,
+            visited,
+            dependencies,
+          )
+        {
+          return Some(definition);
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn namespace_expr_template_definition(
+  namespace: &IdentifierReference<'_>,
+  export_name: &str,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+  visited: &mut HashSet<(String, String)>,
+  dependencies: &mut Vec<String>,
+) -> Option<ExprTemplateDefinition> {
+  let import = file_ctx.imports.get(namespace.name.as_str())?;
+  let imported_ctx = resolved_file_context(&import.source, file_ctx, ctx)?;
+  let namespace_ctx = match import.original_name.as_deref() {
+    Some("*") => imported_ctx,
+    Some(export_name) => {
+      exported_namespace_context(export_name, &imported_ctx, ctx, visited, dependencies)?
+    }
+    None => return None,
+  };
+  exported_expr_template_definition(export_name, &namespace_ctx, ctx, visited, dependencies)
+}
+
+fn exported_namespace_context(
+  export_name: &str,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+  visited: &mut HashSet<(String, String)>,
+  dependencies: &mut Vec<String>,
+) -> Option<FileContext> {
+  let key = (
+    file_ctx.file_path.clone(),
+    format!("namespace:{}", export_name),
+  );
+  if !visited.insert(key) {
+    return None;
+  }
+  if !dependencies.contains(&file_ctx.file_path) {
+    dependencies.push(file_ctx.file_path.clone());
+  }
+
+  for statement in &file_ctx.program().body {
+    match statement {
+      Statement::ExportAllDeclaration(export) => {
+        if export
+          .exported
+          .as_ref()
+          .is_some_and(|name| module_export_name(name) == export_name)
+        {
+          return resolved_file_context(export.source.value.as_str(), file_ctx, ctx);
+        }
+        if export.exported.is_none()
+          && let Some(imported_ctx) =
+            resolved_file_context(export.source.value.as_str(), file_ctx, ctx)
+          && let Some(namespace_ctx) =
+            exported_namespace_context(export_name, &imported_ctx, ctx, visited, dependencies)
+        {
+          return Some(namespace_ctx);
+        }
+      }
+      Statement::ExportNamedDeclaration(export) => {
+        for specifier in &export.specifiers {
+          if module_export_name(&specifier.exported) != export_name {
+            continue;
+          }
+          let local_name = module_export_name(&specifier.local);
+          if let Some(source) = &export.source {
+            let imported_ctx = resolved_file_context(source.value.as_str(), file_ctx, ctx)?;
+            if let Some(namespace_ctx) =
+              exported_namespace_context(&local_name, &imported_ctx, ctx, visited, dependencies)
+            {
+              return Some(namespace_ctx);
+            }
+          } else if let Some(import) = file_ctx.imports.get(&local_name) {
+            let imported_ctx = resolved_file_context(&import.source, file_ctx, ctx)?;
+            if import.original_name.as_deref() == Some("*") {
+              return Some(imported_ctx);
+            }
+            if let Some(original) = import.original_name.as_deref()
+              && let Some(namespace_ctx) =
+                exported_namespace_context(original, &imported_ctx, ctx, visited, dependencies)
+            {
+              return Some(namespace_ctx);
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn expr_template_definition_inner(
+  expression: &Expression<'_>,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+  visited: &mut HashSet<(String, String)>,
+  dependencies: &mut Vec<String>,
+) -> Option<ExprTemplateDefinition> {
+  match unwrap_expr_origin(expression) {
+    Expression::CallExpression(call)
+      if canonical_callee(call, file_ctx, ctx).as_deref() == Some("exprTemplate") =>
+    {
+      if !dependencies.contains(&file_ctx.file_path) {
+        dependencies.push(file_ctx.file_path.clone());
+      }
+      Some(ExprTemplateDefinition {
+        file_path: file_ctx.file_path.clone(),
+        call_start: call.span.start,
+        dependencies: dependencies.clone(),
+      })
+    }
+    Expression::Identifier(identifier) => {
+      let name = identifier.name.as_str();
+      let key = (file_ctx.file_path.clone(), format!("local:{}", name));
+      if !visited.insert(key) {
+        return None;
+      }
+      if !dependencies.contains(&file_ctx.file_path) {
+        dependencies.push(file_ctx.file_path.clone());
+      }
+      if let Some(initializer) = const_initializer_by_name(
+        file_ctx.program(),
+        name,
+        reference_symbol(identifier, file_ctx),
+      ) {
+        return expr_template_definition_inner(initializer, file_ctx, ctx, visited, dependencies);
+      }
+      let import = file_ctx.imports.get(name)?;
+      let imported_ctx = resolved_file_context(&import.source, file_ctx, ctx)?;
+      let original = import.original_name.as_deref().unwrap_or(name);
+      if original == "*" {
+        return None;
+      }
+      exported_expr_template_definition(original, &imported_ctx, ctx, visited, dependencies)
+    }
+    Expression::StaticMemberExpression(member) => {
+      let Expression::Identifier(namespace) = &member.object else {
+        return None;
+      };
+      namespace_expr_template_definition(
+        namespace,
+        member.property.name.as_str(),
+        file_ctx,
+        ctx,
+        visited,
+        dependencies,
+      )
+    }
+    Expression::ComputedMemberExpression(member) => {
+      let Expression::Identifier(namespace) = &member.object else {
+        return None;
+      };
+      let Expression::StringLiteral(property) = &member.expression else {
+        return None;
+      };
+      namespace_expr_template_definition(
+        namespace,
+        property.value.as_str(),
+        file_ctx,
+        ctx,
+        visited,
+        dependencies,
+      )
+    }
+    _ => None,
+  }
+}
+
+pub(crate) fn expr_template_definition(
+  expression: &Expression<'_>,
+  file_ctx: &FileContext,
+  ctx: &EvalContext,
+) -> Option<ExprTemplateDefinition> {
+  expr_template_definition_inner(
+    expression,
+    file_ctx,
+    ctx,
+    &mut HashSet::new(),
+    &mut Vec::new(),
+  )
 }
 
 fn compile_options(options: &TransformOptions) -> CompileOptions {
@@ -444,6 +757,140 @@ struct EvaluateMacroCalls<'a, 'b> {
   fatal_error: Option<ConfTSError>,
 }
 
+struct ExprTemplateInvocationUsage<'a, 'b> {
+  file_ctx: &'a FileContext,
+  eval_ctx: &'b EvalContext,
+  found: bool,
+}
+
+impl<'a> Visit<'a> for ExprTemplateInvocationUsage<'_, '_> {
+  fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+    if self.found {
+      return;
+    }
+    if canonical_callee(call, self.file_ctx, self.eval_ctx).is_none()
+      && expr_template_definition(&call.callee, self.file_ctx, self.eval_ctx).is_some()
+    {
+      self.found = true;
+      return;
+    }
+    walk::walk_call_expression(self, call);
+  }
+}
+
+fn has_expr_template_invocation(file_ctx: &FileContext, eval_ctx: &EvalContext) -> bool {
+  let mut usage = ExprTemplateInvocationUsage {
+    file_ctx,
+    eval_ctx,
+    found: false,
+  };
+  usage.visit_program(file_ctx.program());
+  usage.found
+}
+
+struct ExprTemplateEscapeUsage<'a, 'b> {
+  file_ctx: &'a FileContext,
+  eval_ctx: &'b EvalContext,
+  template_allowed: bool,
+  error: Option<ConfTSError>,
+}
+
+impl ExprTemplateEscapeUsage<'_, '_> {
+  fn expression_is_template(&self, expression: &Expression<'_>) -> bool {
+    expr_template_definition(expression, self.file_ctx, self.eval_ctx).is_some()
+  }
+
+  fn visit_with_template_allowed<'a>(&mut self, expression: &Expression<'a>, allowed: bool) {
+    let previous = self.template_allowed;
+    self.template_allowed = allowed;
+    self.visit_expression(expression);
+    self.template_allowed = previous;
+  }
+}
+
+impl<'a> Visit<'a> for ExprTemplateEscapeUsage<'_, '_> {
+  fn visit_expression(&mut self, expression: &Expression<'a>) {
+    if self.error.is_some() {
+      return;
+    }
+    if self.expression_is_template(expression) {
+      if !self.template_allowed {
+        let (line, character) = self
+          .file_ctx
+          .line_index
+          .get_location(expression.span().start);
+        self.error = Some(ConfTSError::new(
+          "exprTemplate values are compile-time-only and may only be called, assigned to a const alias, or forwarded through import/export",
+          &self.file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+      return;
+    }
+    walk::walk_expression(self, expression);
+  }
+
+  fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+    if let Some(initializer) = &declarator.init {
+      let allowed = self.expression_is_template(initializer);
+      self.visit_with_template_allowed(initializer, allowed);
+    }
+  }
+
+  fn visit_variable_declaration(&mut self, declaration: &VariableDeclaration<'a>) {
+    for declarator in &declaration.declarations {
+      if declaration.kind != VariableDeclarationKind::Const
+        && declarator
+          .init
+          .as_ref()
+          .is_some_and(|initializer| self.expression_is_template(initializer))
+      {
+        let (line, character) = self.file_ctx.line_index.get_location(declarator.span.start);
+        self.error = Some(ConfTSError::new(
+          "exprTemplate aliases must use const declarations",
+          &self.file_ctx.file_path,
+          line,
+          character,
+        ));
+        return;
+      }
+      self.visit_variable_declarator(declarator);
+    }
+  }
+
+  fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+    let callee_is_template = self.expression_is_template(&call.callee);
+    self.visit_with_template_allowed(&call.callee, callee_is_template);
+    for argument in &call.arguments {
+      self.visit_argument(argument);
+    }
+  }
+
+  fn visit_export_default_declaration(&mut self, export: &ExportDefaultDeclaration<'a>) {
+    if let Some(expression) = export.declaration.as_expression() {
+      let allowed = self.expression_is_template(expression);
+      self.visit_with_template_allowed(expression, allowed);
+    } else {
+      walk::walk_export_default_declaration(self, export);
+    }
+  }
+}
+
+fn validate_expr_template_escapes(
+  file_ctx: &FileContext,
+  eval_ctx: &EvalContext,
+) -> Result<(), ConfTSError> {
+  let mut usage = ExprTemplateEscapeUsage {
+    file_ctx,
+    eval_ctx,
+    template_allowed: false,
+    error: None,
+  };
+  usage.visit_program(file_ctx.program());
+  usage.error.map_or(Ok(()), Err)
+}
+
 fn warn_skipped_macro(call: &CallExpression, file_ctx: &FileContext, error: &ConfTSError) {
   eprintln!(
     "[@conf-ts/macro-transformer] Skipped a macro call that could not be statically transformed; it will likely fail at a later compile step instead:\n    {}\n    in: {}",
@@ -457,7 +904,32 @@ impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
     if self.fatal_error.is_some() {
       return;
     }
-    if canonical_callee(call, self.file_ctx, self.eval_ctx).is_some() {
+    let canonical = canonical_callee(call, self.file_ctx, self.eval_ctx);
+    if canonical.as_deref() == Some("exprTemplate") {
+      match macro_eval::validate_expr_template_definition(call, self.file_ctx) {
+        Ok(()) => {
+          self
+            .eval_ctx
+            .transform_state
+            .as_ref()
+            .expect("macro transform replacement state is installed")
+            .borrow_mut()
+            .replacements
+            .entry(self.file_ctx.file_path.clone())
+            .or_default()
+            .push((
+              call.span.start,
+              call.span.end,
+              macro_eval::EXPR_TEMPLATE_PLACEHOLDER.to_string(),
+            ));
+        }
+        Err(error) => self.fatal_error = Some(error),
+      }
+      return;
+    }
+    if canonical.is_some()
+      || expr_template_definition(&call.callee, self.file_ctx, self.eval_ctx).is_some()
+    {
       if let Err(error) = macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options) {
         if let Some(fatal) = take_fatal_transform_error(self.eval_ctx) {
           self.fatal_error = Some(fatal);
@@ -773,6 +1245,7 @@ fn transform_context(
     *state.borrow_mut() = TransformState::default();
   }
   *core_state(eval_ctx).fatal_error.borrow_mut() = None;
+  validate_expr_template_escapes(entry, eval_ctx)?;
 
   let mut calls = EvaluateMacroCalls {
     file_ctx: entry,
@@ -848,13 +1321,11 @@ pub fn transform_project(
       ));
     }
   }
-  targets.retain(|filename| {
-    snapshot
-      .files
-      .get(filename)
-      .is_some_and(|source| source.contains(MACRO_MODULE) || source.contains('\\'))
-  });
-  if targets.is_empty() {
+  if !snapshot
+    .files
+    .values()
+    .any(|source| source.contains(MACRO_MODULE) || source.contains('\\'))
+  {
     return Ok(TransformProjectOutput {
       transformed: HashMap::new(),
       dependencies: Vec::new(),
@@ -867,18 +1338,6 @@ pub fn transform_project(
     .iter()
     .map(|(filename, context)| (filename.clone(), macro_bindings(context.program())))
     .collect();
-  targets.retain(|filename| {
-    bindings
-      .get(filename)
-      .is_some_and(|value| !value.named.is_empty() || !value.namespaces.is_empty())
-  });
-  if targets.is_empty() {
-    return Ok(TransformProjectOutput {
-      transformed: HashMap::new(),
-      dependencies: Vec::new(),
-    });
-  }
-
   let mut eval_ctx = EvalContext::new();
   eval_ctx.file_contexts = contexts.clone();
   let files = snapshot.files.clone();
@@ -914,6 +1373,7 @@ pub fn transform_project(
   let extension: Rc<dyn Any> = Rc::new(CoreState {
     bindings,
     fatal_error: RefCell::new(None),
+    expr_template_bindings: RefCell::new(Vec::new()),
   });
   eval_ctx.extension = Some(extension);
 
@@ -926,6 +1386,23 @@ pub fn transform_project(
       context,
       &evaluation_options,
     );
+  }
+
+  targets.retain(|filename| {
+    let has_bindings = core_state(&eval_ctx)
+      .bindings
+      .get(filename)
+      .is_some_and(|value| !value.named.is_empty() || !value.namespaces.is_empty());
+    has_bindings
+      || contexts
+        .get(filename)
+        .is_some_and(|context| has_expr_template_invocation(context, &eval_ctx))
+  });
+  if targets.is_empty() {
+    return Ok(TransformProjectOutput {
+      transformed: HashMap::new(),
+      dependencies: Vec::new(),
+    });
   }
 
   let mut transformed = HashMap::new();

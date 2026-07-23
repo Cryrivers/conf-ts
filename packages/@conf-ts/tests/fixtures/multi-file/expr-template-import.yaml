@@ -1,0 +1,4 @@
+defaultImport: value + 2
+namespaceReexport: value * 3
+exportedNamespace: value * 4
+starReexport: value * 5

@@ -155,6 +155,48 @@ export default {
     },
   },
   {
+    id: 'expr-template',
+    title: 'Expressions: Reusable Templates',
+    description:
+      '`exprTemplate` defines a reusable expression template. Its first callback parameter is always the runtime context; later parameters are compile-time constants supplied when you instantiate the template. Each call produces a specialized, type-safe `Expr`.',
+    goal: 'Call `minimumTotal` with the static value `500` to create the `vipRule` expression.',
+    initialCode: `import {
+  exprTemplate,
+  type Expr,
+} from '@conf-ts/macro';
+
+type OrderContext = {
+  orderTotal: number;
+};
+
+type OrderRules = {
+  standardRule: Expr<OrderContext, boolean>;
+  vipRule: Expr<OrderContext, boolean>;
+};
+
+// ctx is the runtime context. minimum is supplied at compile time.
+const minimumTotal = exprTemplate<
+  OrderContext,
+  boolean,
+  [minimum: number]
+>((ctx, minimum) => ctx.orderTotal >= minimum);
+
+export default {
+  // Compiles to "orderTotal >= 100"
+  standardRule: minimumTotal(100),
+  // TODO: Create the rule with a minimum total of 500
+  vipRule: 'TODO',
+} satisfies OrderRules;
+`,
+    check: (output: any) => {
+      return (
+        output &&
+        output.standardRule === 'orderTotal >= 100' &&
+        output.vipRule === 'orderTotal >= 500'
+      );
+    },
+  },
+  {
     id: 'complex-enums',
     title: 'Complex Types: Enums & Interfaces',
     description:

@@ -80,17 +80,17 @@ The compiled output is printed to stdout.
 
 ## Packages in this monorepo
 
-| Package                              | Purpose                                                              |
-| ------------------------------------- | --------------------------------------------------------------------- |
-| `@conf-ts/cli`                        | CLI to compile `.ts`/`.conf.ts` to JSON/YAML                          |
-| `@conf-ts/compiler`                   | Core compiler APIs (`compile`, `compileInMemory`)                     |
-| `@conf-ts/compiler-native`            | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
-| `@conf-ts/expr-core`                  | Shared expression lexer, parser, AST types, and parse errors          |
-| `@conf-ts/expression`                 | JavaScript-like runtime expression evaluator                          |
-| `@conf-ts/macro`                      | Macro functions consumed by the transform                             |
-| `@conf-ts/macro-transformer`         | TypeScript source transformer for macros                              |
-| `@conf-ts/macro-transformer-native` | Oxc-backed native source transformer                                  |
-| `@conf-ts/webpack-plugin`            | Webpack plugin that emits generated JSON/YAML files                   |
+| Package                             | Purpose                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| `@conf-ts/cli`                      | CLI to compile `.ts`/`.conf.ts` to JSON/YAML                              |
+| `@conf-ts/compiler`                 | Core compiler APIs (`compile`, `compileInMemory`)                         |
+| `@conf-ts/compiler-native`          | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
+| `@conf-ts/expr-core`                | Shared expression lexer, parser, AST types, and parse errors              |
+| `@conf-ts/expression`               | JavaScript-like runtime expression evaluator                              |
+| `@conf-ts/macro`                    | Macro functions consumed by the transform                                 |
+| `@conf-ts/macro-transformer`        | TypeScript source transformer for macros                                  |
+| `@conf-ts/macro-transformer-native` | Oxc-backed native source transformer                                      |
+| `@conf-ts/webpack-plugin`           | Webpack plugin that emits generated JSON/YAML files                       |
 
 ## Macro transform
 
@@ -250,6 +250,48 @@ Composition supports local `const` aliases and directly named/default imported E
 
 </details>
 
+#### Reusable `Expr` templates
+
+`exprTemplate()` defines a reusable expression template with statically
+analyzable parameters. The callback's first parameter is always the runtime
+context; every parameter after it is supplied when the template is instantiated
+and is folded into the emitted `Expr`:
+
+```ts
+import { exprTemplate, type LooseExprTemplate } from '@conf-ts/macro';
+
+type Context = { subtotal: number; customer?: { discount?: number } };
+
+const withTax = exprTemplate<Context, number, [number]>(
+  (ctx, taxRate) => ctx.subtotal * (1 + taxRate),
+);
+
+const singaporeTotal = withTax(0.09);
+// "subtotal * (1 + 0.09)"
+
+const discounted: LooseExprTemplate<Context, boolean, [number]> =
+  exprTemplate((ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum);
+```
+
+Template arguments may be literals, enums, imported/local `const` values, or
+other values supported by the constant evaluator: `undefined`, `null`, finite
+numbers, strings, booleans, arrays, and plain objects. Static array spreads
+are supported. A dynamic argument, unsupported value, missing required
+argument, or excess argument without a rest parameter is a compile error.
+
+The context parameter must be a plain identifier. Later parameters support
+optional/default values, a trailing rest parameter, and one level of
+object/array destructuring (including defaults, holes, renaming, and pattern
+rest); nested patterns and computed binding keys aren't supported. Default
+values are evaluated in declaration order and may refer to earlier template
+parameters or outer constants.
+
+Templates can be forwarded through `const` aliases, named/default/namespace
+imports, and named/default/star re-export chains. A specialized result is an
+ordinary `Expr` and can participate in `subExpr(ctx)` composition. The template
+itself cannot escape into runtime data or be invoked dynamically; it may only
+be called or forwarded through those compile-time bindings.
+
 #### Nested callbacks inside `expr()`
 
 The expression body can call methods that take their own callback — `ctx.queue.filter(i => i < 5)`, `ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold))`, `ctx.scores.reduce((sum, value) => sum + value, 0)`, and so on. A nested callback can be an arrow function or a `function` expression, with either an expression body or a block body containing a single `return` statement; both forms are down-leveled to the same expression-bodied arrow text that `@conf-ts/expression` evaluates at runtime. Nested callback parameters may be plain identifiers, one level of object/array destructuring (with defaults, renamed properties, and holes), and a single trailing rest parameter. Callbacks can nest arbitrarily deep and freely reference the outer `expr()` context and bindings from any enclosing callback.
@@ -261,7 +303,8 @@ type Context = { matrix: number[][]; threshold: number };
 
 export default {
   countPositiveRows: expr<Context, number>(
-    ctx => ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold)).length,
+    ctx =>
+      ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold)).length,
   ),
 };
 ```
@@ -321,20 +364,20 @@ The default export accepts either a serialized expression string or an `Expr` ca
 
 ### Runtime expression syntax
 
-| Category    | Supported syntax                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------- |
-| Literals    | Decimal numbers (including exponent notation), strings, booleans, `null`, `undefined`                       |
-| Collections | Array literals (including spread elements, e.g. `[...a, b]`); object literals with identifier/string/computed (`{ [key]: value }`) keys, shorthand properties (`{ a, b }`), trailing commas, and object spread |
-| Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`) |
-| Calls       | Functions and methods supplied by the environment; method calls preserve `this`                             |
+| Category    | Supported syntax                                                                                                                                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Literals    | Decimal numbers (including exponent notation), strings, booleans, `null`, `undefined`                                                                                                                                 |
+| Collections | Array literals (including spread elements, e.g. `[...a, b]`); object literals with identifier/string/computed (`{ [key]: value }`) keys, shorthand properties (`{ a, b }`), trailing commas, and object spread        |
+| Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`)                                                                                                           |
+| Calls       | Functions and methods supplied by the environment; method calls preserve `this`                                                                                                                                       |
 | Functions   | Arrow function expressions (`x => x * 2`, `(a, b) => a + b`) as callback arguments — expression bodies only, with identifier/destructured/rest/defaulted parameters, nesting, and closures over the surrounding scope |
-| Templates   | Template literals, nested interpolation, and tagged templates                                               |
-| Arithmetic  | `+`, `-`, `*`, `/`, `%`, `**`                                                                               |
-| Comparison  | `<`, `<=`, `>`, `>=`, `==`, `!=`, `===`, `!==`, `in`, `instanceof`                                          |
-| Bitwise     | `&`, `\|`, `^`, `~`, `<<`, `>>`, `>>>`                                                                      |
-| Logical     | `!`, `&&`, `\|\|`, `??` with short-circuit evaluation                                                       |
-| Unary       | Unary `+`/`-`, `typeof`, `void`, `delete`                                                                   |
-| Control     | Parentheses and conditional expressions (`condition ? yes : no`)                                            |
+| Templates   | Template literals, nested interpolation, and tagged templates                                                                                                                                                         |
+| Arithmetic  | `+`, `-`, `*`, `/`, `%`, `**`                                                                                                                                                                                         |
+| Comparison  | `<`, `<=`, `>`, `>=`, `==`, `!=`, `===`, `!==`, `in`, `instanceof`                                                                                                                                                    |
+| Bitwise     | `&`, `\|`, `^`, `~`, `<<`, `>>`, `>>>`                                                                                                                                                                                |
+| Logical     | `!`, `&&`, `\|\|`, `??` with short-circuit evaluation                                                                                                                                                                 |
+| Unary       | Unary `+`/`-`, `typeof`, `void`, `delete`                                                                                                                                                                             |
+| Control     | Parentheses and conditional expressions (`condition ? yes : no`)                                                                                                                                                      |
 
 The parser applies JavaScript-style precedence to the supported operators, including right-associative exponentiation. Not supported: assignments, `++`/`--`, block-bodied statements (arrow functions are limited to expression bodies), `new`, classes, regular expressions, or comments. See the [package README](packages/@conf-ts/expression/README.md) for the full syntax table plus a detailed comparison against other expression-parser libraries.
 

@@ -201,16 +201,79 @@ export function Editor({
             `
             declare module '@conf-ts/macro' {
               const EXPR_CALLBACK: unique symbol;
+              const EXPR_TEMPLATE: unique symbol;
+              type IsPlainObject<T> = T extends readonly unknown[]
+                ? false
+                : T extends (...args: any[]) => any
+                  ? false
+                  : T extends object
+                    ? true
+                    : false;
+              type IncludesUndefined<T> = undefined extends T ? true : false;
+              type LooseContext<
+                T,
+                Loosened extends boolean = false,
+              > = T extends readonly (infer Element)[]
+                ? LooseContext<Element, Loosened>[]
+                : IsPlainObject<T> extends true
+                  ? {
+                      -readonly [K in keyof T]-?: LooseContext<
+                        NonNullable<T[K]>,
+                        Loosened extends true
+                          ? true
+                          : IncludesUndefined<T[K]>
+                      >;
+                    }
+                  : Loosened extends true
+                    ? T | undefined
+                    : T;
               export type Expr<Context, ReturnType> = ((
                 ctx: Context
               ) => ReturnType) &
                 string & {
                   readonly [EXPR_CALLBACK]: true;
                 };
+              export type LooseExpr<Context, ReturnType> = Expr<
+                LooseContext<Context>,
+                ReturnType
+              >;
+              export type ExprTemplateCallback<
+                Context,
+                ReturnType,
+                Parameters extends readonly unknown[],
+              > = (ctx: Context, ...args: Parameters) => ReturnType;
+              export type ExprTemplate<
+                Context,
+                ReturnType,
+                Parameters extends readonly unknown[],
+              > = ((...args: Parameters) => Expr<Context, ReturnType>) & {
+                readonly [EXPR_TEMPLATE]: true;
+              };
+              export type LooseExprTemplate<
+                Context,
+                ReturnType,
+                Parameters extends readonly unknown[],
+              > = ((...args: Parameters) => LooseExpr<
+                Context,
+                ReturnType
+              >) & {
+                readonly [EXPR_TEMPLATE]: true;
+              };
               export function expr<
                 Context = unknown,
                 ReturnType = unknown,
               >(callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType>;
+              export function exprTemplate<
+                Context = unknown,
+                ReturnType = unknown,
+                Parameters extends readonly unknown[] = readonly unknown[],
+              >(
+                callback: ExprTemplateCallback<
+                  Context,
+                  ReturnType,
+                  Parameters
+                >,
+              ): ExprTemplate<Context, ReturnType, Parameters>;
               export function String(value: any): string;
               export function Number(value: any): number;
               export function Boolean(value: any): boolean;

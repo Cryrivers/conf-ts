@@ -27,6 +27,7 @@ pub const MACRO_FUNCTIONS: &[&str] = &[
   "arrayFlatMap",
   "env",
   "expr",
+  "exprTemplate",
 ];
 
 /// Get source location from a byte offset.

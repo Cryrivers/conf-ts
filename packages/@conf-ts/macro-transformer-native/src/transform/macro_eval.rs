@@ -14,6 +14,15 @@ pub fn evaluate_macro(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
+  match evaluate_expr_template_invocation(call, file_ctx, ctx, local_context, options) {
+    Ok(Some(value)) => return Ok(value),
+    Ok(None) => {}
+    Err(error) => {
+      super::record_fatal_transform_error(ctx, error.clone());
+      return Err(error);
+    }
+  }
+
   let callee = super::canonical_callee(call, file_ctx, ctx)
     .unwrap_or_else(|| compiler_native::eval::call_expr_callee_name(call));
 
@@ -754,19 +763,40 @@ fn value_to_expr_literal(
     Value::String(s) => Ok(encode_string_literal(s.as_str(), quote)),
     Value::Bool(b) => Ok(b.to_string()),
     Value::Null => Ok("null".to_string()),
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, offset);
-      Err(ConfTSError::new(
-        format!(
-          "Cannot inline value of type {} into expr",
-          value.typeof_string()
-        ),
-        &file_ctx.file_path,
-        line,
-        character,
-      ))
-    }
+    Value::Undefined => Ok("undefined".to_string()),
+    Value::Array(values) => Ok(format!(
+      "[{}]",
+      values
+        .iter()
+        .map(|value| value_to_expr_literal(value, file_ctx, offset, quote))
+        .collect::<Result<Vec<_>, _>>()?
+        .join(", ")
+    )),
+    Value::Object(values) => Ok(format!(
+      "{{ {} }}",
+      values
+        .iter()
+        .map(|(key, value)| {
+          Ok(format!(
+            "{}: {}",
+            encode_string_literal(key, quote),
+            value_to_expr_literal(value, file_ctx, offset, quote)?
+          ))
+        })
+        .collect::<Result<Vec<_>, ConfTSError>>()?
+        .join(", ")
+    )),
   }
+}
+
+fn evaluate_expr_constant(
+  expr: &Expression,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  let local = super::current_expr_template_bindings(ctx);
+  evaluate(expr, file_ctx, ctx, local.as_ref(), options)
 }
 
 fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
@@ -1313,7 +1343,7 @@ fn collect_const_replacements(
           options,
         );
       }
-      let value = evaluate(expr, file_ctx, ctx, None, options)?;
+      let value = evaluate_expr_constant(expr, file_ctx, ctx, options)?;
       let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
       let start = expr.span().start as usize - body_start as usize;
       let end = expr.span().end as usize - body_start as usize;
@@ -1326,7 +1356,7 @@ fn collect_const_replacements(
       if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == param_name)
         && !matches!(&member.expression, Expression::StringLiteral(_)) =>
     {
-      let key_value = evaluate(&member.expression, file_ctx, ctx, None, options)?;
+      let key_value = evaluate_expr_constant(&member.expression, file_ctx, ctx, options)?;
       match &key_value {
         Value::String(s) if is_valid_identifier(s) => {
           let start = expr.span().start as usize - body_start as usize;
@@ -1347,11 +1377,55 @@ fn collect_const_replacements(
       }
     }
 
+    Expression::ComputedMemberExpression(member) => {
+      let root = get_member_root(&member.object);
+      if matches!(root, Expression::Identifier(id) if id.name.as_str() == param_name) {
+        collect_const_replacements(
+          &member.object,
+          param_name,
+          bound_names,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        )?;
+        return collect_const_replacements(
+          &member.expression,
+          param_name,
+          bound_names,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        );
+      }
+      if references_unfoldable_name(&member.object, param_name, bound_names) {
+        return collect_call_callee_replacements(
+          expr,
+          param_name,
+          bound_names,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        );
+      }
+      let value = evaluate_expr_constant(expr, file_ctx, ctx, options)?;
+      let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
+      let start = expr.span().start as usize - body_start as usize;
+      let end = expr.span().end as usize - body_start as usize;
+      replacements.push((start, end, literal));
+      Ok(())
+    }
+
     Expression::Identifier(ident)
       if ident.name.as_str() != param_name
         && !bound_names.iter().any(|name| name == ident.name.as_str()) =>
     {
-      let value = evaluate(expr, file_ctx, ctx, None, options)?;
+      let value = evaluate_expr_constant(expr, file_ctx, ctx, options)?;
       let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
       let start = expr.span().start as usize - body_start as usize;
       let end = expr.span().end as usize - body_start as usize;
@@ -1443,7 +1517,7 @@ fn collect_const_replacements(
           return Err(error);
         }
 
-        let value = evaluate(&call.callee, file_ctx, ctx, None, options)?;
+        let value = evaluate_expr_constant(&call.callee, file_ctx, ctx, options)?;
         let Value::String(source) = value else {
           let callee_name = compiler_native::eval::call_expr_callee_name(call);
           let (line, character) = get_location(&file_ctx.line_index, call.span.start);
@@ -1493,7 +1567,7 @@ fn collect_const_replacements(
           }
           return Ok(());
         }
-        let value = evaluate(expr, file_ctx, ctx, None, options)?;
+        let value = evaluate_expr_constant(expr, file_ctx, ctx, options)?;
         let literal = value_to_expr_literal(&value, file_ctx, expr.span().start, options.quote)?;
         let start = expr.span().start as usize - body_start as usize;
         let end = expr.span().end as usize - body_start as usize;
@@ -1762,7 +1836,7 @@ fn walk_const_children(
               let is_unfoldable = ident.name.as_str() == param_name
                 || bound_names.iter().any(|name| name == ident.name.as_str());
               if !is_unfoldable {
-                let value = evaluate(&prop.value, file_ctx, ctx, None, options)?;
+                let value = evaluate_expr_constant(&prop.value, file_ctx, ctx, options)?;
                 let literal =
                   value_to_expr_literal(&value, file_ctx, prop.value.span().start, options.quote)?;
                 let key_name = match &prop.key {
@@ -1771,7 +1845,12 @@ fn walk_const_children(
                 };
                 let start = prop.span.start as usize - body_start as usize;
                 let end = prop.span.end as usize - body_start as usize;
-                replacements.push((start, end, format!("{key_name}: {literal}")));
+                let separator = if literal.starts_with('{') || literal.starts_with('[') {
+                  ":"
+                } else {
+                  ": "
+                };
+                replacements.push((start, end, format!("{key_name}{separator}{literal}")));
               }
             }
           }
@@ -2445,6 +2524,547 @@ fn collect_string_requotes(
   }
 }
 
+pub(crate) const EXPR_TEMPLATE_PLACEHOLDER: &str = "(() => { throw new Error(\"exprTemplate is compile-time-only and must be invoked with statically analyzable arguments\"); })";
+
+const EXPR_TEMPLATE_CALLBACK_ERROR: &str = "exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier and whose body is a single expression";
+const EXPR_TEMPLATE_PARAMETER_ERROR: &str = "exprTemplate parameters after the context must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter";
+
+fn unwrap_expr_template_expression<'e, 'a>(expression: &'e Expression<'a>) -> &'e Expression<'a> {
+  match expression {
+    Expression::ParenthesizedExpression(value) => {
+      unwrap_expr_template_expression(&value.expression)
+    }
+    Expression::TSAsExpression(value) => unwrap_expr_template_expression(&value.expression),
+    Expression::TSSatisfiesExpression(value) => unwrap_expr_template_expression(&value.expression),
+    Expression::TSNonNullExpression(value) => unwrap_expr_template_expression(&value.expression),
+    Expression::TSTypeAssertion(value) => unwrap_expr_template_expression(&value.expression),
+    _ => expression,
+  }
+}
+
+fn expr_template_error(
+  file_ctx: &FileContext,
+  offset: u32,
+  message: impl Into<String>,
+) -> ConfTSError {
+  let (line, character) = get_location(&file_ctx.line_index, offset);
+  ConfTSError::new(message.into(), &file_ctx.file_path, line, character)
+}
+
+fn expr_template_callback<'e, 'a>(
+  call: &'e CallExpression<'a>,
+  file_ctx: &FileContext,
+) -> Result<&'e ArrowFunctionExpression<'a>, ConfTSError> {
+  if call.arguments.len() != 1 {
+    return Err(expr_template_error(
+      file_ctx,
+      call.span.start,
+      EXPR_TEMPLATE_CALLBACK_ERROR,
+    ));
+  }
+  let callback = call.arguments[0].as_expression().ok_or_else(|| {
+    expr_template_error(
+      file_ctx,
+      call.arguments[0].span().start,
+      EXPR_TEMPLATE_CALLBACK_ERROR,
+    )
+  })?;
+  let Expression::ArrowFunctionExpression(arrow) = unwrap_expr_template_expression(callback) else {
+    return Err(expr_template_error(
+      file_ctx,
+      callback.span().start,
+      EXPR_TEMPLATE_CALLBACK_ERROR,
+    ));
+  };
+  if arrow.r#async
+    || !arrow.expression
+    || arrow.params.items.is_empty()
+    || arrow.params.items[0].initializer.is_some()
+    || arrow.params.items[0].optional
+    || !matches!(
+      arrow.params.items[0].pattern,
+      BindingPattern::BindingIdentifier(_)
+    )
+  {
+    return Err(expr_template_error(
+      file_ctx,
+      arrow.span.start,
+      EXPR_TEMPLATE_CALLBACK_ERROR,
+    ));
+  }
+  Ok(arrow.as_ref())
+}
+
+pub(crate) fn validate_expr_template_definition(
+  call: &CallExpression,
+  file_ctx: &FileContext,
+) -> Result<(), ConfTSError> {
+  expr_template_callback(call, file_ctx).map(|_| ())
+}
+
+fn find_expr_template_call_in_expression<'e, 'a>(
+  expression: &'e Expression<'a>,
+  call_start: u32,
+) -> Option<&'e CallExpression<'a>> {
+  match unwrap_expr_template_expression(expression) {
+    Expression::CallExpression(call) => {
+      if call.span.start == call_start {
+        return Some(call.as_ref());
+      }
+      find_expr_template_call_in_expression(&call.callee, call_start)
+    }
+    _ => None,
+  }
+}
+
+fn find_expr_template_call<'e, 'a>(
+  file_ctx: &'e FileContext,
+  call_start: u32,
+) -> Option<&'e CallExpression<'a>>
+where
+  'e: 'a,
+{
+  fn from_declaration<'e, 'a>(
+    declaration: &'e VariableDeclaration<'a>,
+    call_start: u32,
+  ) -> Option<&'e CallExpression<'a>> {
+    declaration.declarations.iter().find_map(|declarator| {
+      declarator
+        .init
+        .as_ref()
+        .and_then(|expression| find_expr_template_call_in_expression(expression, call_start))
+    })
+  }
+
+  for statement in &file_ctx.program().body {
+    match statement {
+      Statement::VariableDeclaration(declaration) => {
+        if let Some(call) = from_declaration(declaration, call_start) {
+          return Some(call);
+        }
+      }
+      Statement::ExportNamedDeclaration(export) => {
+        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+          && let Some(call) = from_declaration(declaration, call_start)
+        {
+          return Some(call);
+        }
+      }
+      Statement::ExportDefaultDeclaration(export) => {
+        if let Some(expression) = export.declaration.as_expression()
+          && let Some(call) = find_expr_template_call_in_expression(expression, call_start)
+        {
+          return Some(call);
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn static_binding_key(property: &BindingProperty) -> Option<String> {
+  if property.computed {
+    return None;
+  }
+  match &property.key {
+    PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.as_str().to_string()),
+    PropertyKey::StringLiteral(string) => Some(string.value.as_str().to_string()),
+    PropertyKey::NumericLiteral(number) => Some(number.value.to_string()),
+    _ => None,
+  }
+}
+
+fn object_entries(value: &Value) -> Vec<(String, Value)> {
+  match value {
+    Value::Object(entries) => entries.clone(),
+    Value::Array(values) => values
+      .iter()
+      .enumerate()
+      .map(|(index, value)| (index.to_string(), value.clone()))
+      .collect(),
+    Value::String(value) => value
+      .chars()
+      .enumerate()
+      .map(|(index, value)| (index.to_string(), Value::String(value.to_string())))
+      .collect(),
+    _ => Vec::new(),
+  }
+}
+
+fn binding_property_value(value: &Value, key: &str) -> Value {
+  match value {
+    Value::Object(entries) => entries
+      .iter()
+      .find(|(entry_key, _)| entry_key == key)
+      .map(|(_, value)| value.clone())
+      .unwrap_or(Value::Undefined),
+    Value::Array(values) => {
+      if key == "length" {
+        Value::number(values.len() as f64)
+      } else {
+        key
+          .parse::<usize>()
+          .ok()
+          .and_then(|index| values.get(index).cloned())
+          .unwrap_or(Value::Undefined)
+      }
+    }
+    Value::String(value) => {
+      if key == "length" {
+        Value::number(value.chars().count() as f64)
+      } else {
+        key
+          .parse::<usize>()
+          .ok()
+          .and_then(|index| value.chars().nth(index))
+          .map(|character| Value::String(character.to_string()))
+          .unwrap_or(Value::Undefined)
+      }
+    }
+    _ => Value::Undefined,
+  }
+}
+
+fn bind_expr_template_pattern(
+  pattern: &BindingPattern,
+  mut value: Value,
+  allow_pattern: bool,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  bindings: &mut HashMap<String, Value>,
+  options: &CompileOptions,
+) -> Result<(), ConfTSError> {
+  if let BindingPattern::AssignmentPattern(assignment) = pattern {
+    if matches!(value, Value::Undefined) {
+      value = evaluate(&assignment.right, file_ctx, ctx, Some(bindings), options)?;
+    }
+    return bind_expr_template_pattern(
+      &assignment.left,
+      value,
+      false,
+      file_ctx,
+      ctx,
+      bindings,
+      options,
+    );
+  }
+
+  match pattern {
+    BindingPattern::BindingIdentifier(identifier) => {
+      bindings.insert(identifier.name.as_str().to_string(), value);
+      Ok(())
+    }
+    BindingPattern::ObjectPattern(object) if allow_pattern => {
+      if matches!(value, Value::Null | Value::Undefined) {
+        return Err(expr_template_error(
+          file_ctx,
+          object.span.start,
+          "exprTemplate cannot destructure null or undefined",
+        ));
+      }
+      let mut used = Vec::new();
+      for property in &object.properties {
+        let Some(key) = static_binding_key(property) else {
+          return Err(expr_template_error(
+            file_ctx,
+            property.span.start,
+            EXPR_TEMPLATE_PARAMETER_ERROR,
+          ));
+        };
+        let property_value = binding_property_value(&value, &key);
+        used.push(key);
+        bind_expr_template_pattern(
+          &property.value,
+          property_value,
+          false,
+          file_ctx,
+          ctx,
+          bindings,
+          options,
+        )?;
+      }
+      if let Some(rest) = &object.rest {
+        let BindingPattern::BindingIdentifier(identifier) = &rest.argument else {
+          return Err(expr_template_error(
+            file_ctx,
+            rest.span.start,
+            EXPR_TEMPLATE_PARAMETER_ERROR,
+          ));
+        };
+        let remaining = object_entries(&value)
+          .into_iter()
+          .filter(|(key, _)| !used.contains(key))
+          .collect();
+        bindings.insert(
+          identifier.name.as_str().to_string(),
+          Value::Object(remaining),
+        );
+      }
+      Ok(())
+    }
+    BindingPattern::ArrayPattern(array) if allow_pattern => {
+      let values = match value {
+        Value::Array(values) => values,
+        Value::String(value) => value
+          .chars()
+          .map(|character| Value::String(character.to_string()))
+          .collect(),
+        _ => {
+          return Err(expr_template_error(
+            file_ctx,
+            array.span.start,
+            "exprTemplate array destructuring requires a statically analyzable array or string",
+          ));
+        }
+      };
+      for (index, element) in array.elements.iter().enumerate() {
+        if let Some(element) = element {
+          bind_expr_template_pattern(
+            element,
+            values.get(index).cloned().unwrap_or(Value::Undefined),
+            false,
+            file_ctx,
+            ctx,
+            bindings,
+            options,
+          )?;
+        }
+      }
+      if let Some(rest) = &array.rest {
+        let BindingPattern::BindingIdentifier(identifier) = &rest.argument else {
+          return Err(expr_template_error(
+            file_ctx,
+            rest.span.start,
+            EXPR_TEMPLATE_PARAMETER_ERROR,
+          ));
+        };
+        bindings.insert(
+          identifier.name.as_str().to_string(),
+          Value::Array(values.into_iter().skip(array.elements.len()).collect()),
+        );
+      }
+      Ok(())
+    }
+    _ => Err(expr_template_error(
+      file_ctx,
+      pattern.span().start,
+      EXPR_TEMPLATE_PARAMETER_ERROR,
+    )),
+  }
+}
+
+fn evaluate_expr_template_invocation(
+  call: &CallExpression,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  let Some(definition) = super::expr_template_definition(&call.callee, file_ctx, ctx) else {
+    return Ok(None);
+  };
+  for dependency in definition.dependencies {
+    ctx.evaluated_files.insert(dependency);
+  }
+
+  let definition_ctx = ctx
+    .file_contexts
+    .get(&definition.file_path)
+    .cloned()
+    .ok_or_else(|| {
+      expr_template_error(
+        file_ctx,
+        call.span.start,
+        "exprTemplate definition file is unavailable",
+      )
+    })?;
+  let definition_call = find_expr_template_call(&definition_ctx, definition.call_start)
+    .ok_or_else(|| {
+      expr_template_error(
+        &definition_ctx,
+        definition.call_start,
+        "exprTemplate definition could not be resolved",
+      )
+    })?;
+  let arrow = expr_template_callback(definition_call, &definition_ctx)?;
+
+  let mut values = Vec::new();
+  for argument in &call.arguments {
+    match argument {
+      Argument::SpreadElement(spread) => {
+        let value = evaluate(&spread.argument, file_ctx, ctx, local_context, options)?;
+        let Value::Array(spread_values) = value else {
+          return Err(expr_template_error(
+            file_ctx,
+            spread.span.start,
+            "exprTemplate spread arguments must resolve to an array",
+          ));
+        };
+        values.extend(spread_values);
+      }
+      _ => {
+        let expression = argument.as_expression().ok_or_else(|| {
+          expr_template_error(
+            file_ctx,
+            argument.span().start,
+            "exprTemplate arguments must be statically analyzable",
+          )
+        })?;
+        values.push(evaluate(expression, file_ctx, ctx, local_context, options)?);
+      }
+    }
+  }
+
+  let parameters = &arrow.params.items[1..];
+  let minimum = parameters
+    .iter()
+    .enumerate()
+    .filter(|(_, parameter)| !parameter.optional && parameter.initializer.is_none())
+    .map(|(index, _)| index + 1)
+    .max()
+    .unwrap_or(0);
+  if values.len() < minimum {
+    return Err(expr_template_error(
+      file_ctx,
+      call.span.start,
+      format!(
+        "exprTemplate expected at least {} static argument(s), but received {}",
+        minimum,
+        values.len()
+      ),
+    ));
+  }
+  if arrow.params.rest.is_none() && values.len() > parameters.len() {
+    return Err(expr_template_error(
+      file_ctx,
+      call.span.start,
+      format!(
+        "exprTemplate expected at most {} static argument(s), but received {}",
+        parameters.len(),
+        values.len()
+      ),
+    ));
+  }
+
+  let mut bindings = HashMap::new();
+  for (index, parameter) in parameters.iter().enumerate() {
+    let mut value = values.get(index).cloned().unwrap_or(Value::Undefined);
+    if matches!(value, Value::Undefined)
+      && let Some(initializer) = &parameter.initializer
+    {
+      value = evaluate(initializer, &definition_ctx, ctx, Some(&bindings), options)?;
+    }
+    bind_expr_template_pattern(
+      &parameter.pattern,
+      value,
+      true,
+      &definition_ctx,
+      ctx,
+      &mut bindings,
+      options,
+    )?;
+  }
+  if let Some(rest) = &arrow.params.rest {
+    let BindingPattern::BindingIdentifier(identifier) = &rest.rest.argument else {
+      return Err(expr_template_error(
+        &definition_ctx,
+        rest.span.start,
+        EXPR_TEMPLATE_PARAMETER_ERROR,
+      ));
+    };
+    bindings.insert(
+      identifier.name.as_str().to_string(),
+      Value::Array(values.into_iter().skip(parameters.len()).collect()),
+    );
+  }
+
+  let context_name = match &arrow.params.items[0].pattern {
+    BindingPattern::BindingIdentifier(identifier) => identifier.name.as_str(),
+    _ => unreachable!(),
+  };
+  let body_expr = match arrow.body.statements.first() {
+    Some(Statement::ExpressionStatement(statement)) => &statement.expression,
+    _ => {
+      return Err(expr_template_error(
+        &definition_ctx,
+        arrow.body.span.start,
+        EXPR_TEMPLATE_CALLBACK_ERROR,
+      ));
+    }
+  };
+
+  super::push_expr_template_bindings(ctx, bindings);
+  let result = compile_expr_arrow(
+    arrow,
+    context_name,
+    body_expr,
+    &definition_ctx,
+    ctx,
+    options,
+  );
+  super::pop_expr_template_bindings(ctx);
+  result.map(Some)
+}
+
+fn compile_expr_arrow(
+  arrow: &ArrowFunctionExpression,
+  param_name: &str,
+  body_expr: &Expression,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  validate_expr_syntax(body_expr, file_ctx)?;
+
+  let source = file_ctx.parsed.source();
+  let body_start = body_expr.span().start;
+  let body_text = &source[body_start as usize..body_expr.span().end as usize];
+
+  let mut replacements: Vec<ExprReplacement> = Vec::new();
+  collect_const_replacements(
+    body_expr,
+    param_name,
+    &[],
+    body_start,
+    &mut replacements,
+    file_ctx,
+    ctx,
+    options,
+  )?;
+  collect_context_replacements(
+    body_expr,
+    param_name,
+    body_start,
+    &mut replacements,
+    file_ctx,
+  )?;
+  collect_type_syntax_erasures(body_expr, body_start, &mut replacements, file_ctx);
+  collect_comment_erasures(
+    file_ctx,
+    body_start,
+    body_expr.span().end,
+    &mut replacements,
+  );
+  let prior_replacements = replacements.clone();
+  collect_string_requotes(
+    body_expr,
+    body_start,
+    &prior_replacements,
+    &mut replacements,
+    options.quote,
+  );
+
+  replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0));
+  let mut result = body_text.to_string();
+  for (start, end, replacement) in &replacements {
+    result.replace_range(*start..*end, replacement);
+  }
+
+  let _ = arrow;
+  Ok(Value::String(compact_expression_whitespace(&result)))
+}
+
 fn evaluate_expr(
   callee: &str,
   call: &CallExpression,
@@ -2539,53 +3159,7 @@ fn evaluate_expr(
     }
   };
 
-  validate_expr_syntax(body_expr, file_ctx)?;
-
-  let source = file_ctx.parsed.source();
-  let body_start = body_expr.span().start;
-  let body_text = &source[body_start as usize..body_expr.span().end as usize];
-
-  let mut replacements: Vec<ExprReplacement> = Vec::new();
-  collect_const_replacements(
-    body_expr,
-    &param_name,
-    &[],
-    body_start,
-    &mut replacements,
-    file_ctx,
-    ctx,
-    options,
-  )?;
-  collect_context_replacements(
-    body_expr,
-    &param_name,
-    body_start,
-    &mut replacements,
-    file_ctx,
-  )?;
-  collect_type_syntax_erasures(body_expr, body_start, &mut replacements, file_ctx);
-  collect_comment_erasures(
-    file_ctx,
-    body_start,
-    body_expr.span().end,
-    &mut replacements,
-  );
-  let prior_replacements = replacements.clone();
-  collect_string_requotes(
-    body_expr,
-    body_start,
-    &prior_replacements,
-    &mut replacements,
-    options.quote,
-  );
-
-  replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0));
-  let mut result = body_text.to_string();
-  for (start, end, replacement) in &replacements {
-    result.replace_range(*start..*end, replacement);
-  }
-
-  Ok(Some(Value::String(compact_expression_whitespace(&result))))
+  compile_expr_arrow(arrow, &param_name, body_expr, file_ctx, ctx, options).map(Some)
 }
 
 fn is_valid_identifier(s: &str) -> bool {

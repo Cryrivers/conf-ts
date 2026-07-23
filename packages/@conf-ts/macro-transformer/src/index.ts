@@ -9,7 +9,14 @@ import {
 import MagicString from 'magic-string';
 import ts from 'typescript';
 
-import { evaluateMacro, isFatalMacroTransformError } from './macro';
+import {
+  evaluateMacro,
+  EXPR_TEMPLATE_PLACEHOLDER,
+  isExprTemplateInvocation,
+  isFatalMacroTransformError,
+  validateExprTemplateDefinition,
+  validateExprTemplateUsages,
+} from './macro';
 import { MACRO_FUNCTION_NAME_SET } from './macro-names';
 import type {
   MacroProjectSnapshot,
@@ -210,16 +217,25 @@ function importedMacroName(
       : undefined;
   }
 
-  if (
-    ts.isPropertyAccessExpression(expression.expression) &&
-    ts.isIdentifier(expression.expression.expression)
-  ) {
-    const namespaceIdentifier = expression.expression.expression;
+  const namespaceAccess = expression.expression;
+  const namespaceIdentifier =
+    (ts.isPropertyAccessExpression(namespaceAccess) ||
+      ts.isElementAccessExpression(namespaceAccess)) &&
+    ts.isIdentifier(namespaceAccess.expression)
+      ? namespaceAccess.expression
+      : undefined;
+  const propertyName = ts.isPropertyAccessExpression(namespaceAccess)
+    ? namespaceAccess.name.text
+    : ts.isElementAccessExpression(namespaceAccess) &&
+        ts.isStringLiteral(namespaceAccess.argumentExpression)
+      ? namespaceAccess.argumentExpression.text
+      : undefined;
+  if (namespaceIdentifier && propertyName) {
     const binding = bindings.namespaces.get(namespaceIdentifier.text);
     return binding &&
       symbolDeclares(checker, namespaceIdentifier, binding.declaration) &&
-      MACRO_FUNCTION_NAME_SET.has(expression.expression.name.text)
-      ? expression.expression.name.text
+      MACRO_FUNCTION_NAME_SET.has(propertyName)
+      ? propertyName
       : undefined;
   }
 
@@ -241,12 +257,20 @@ function namespaceIsMacroOnly(
       symbolDeclares(checker, node, binding.declaration)
     ) {
       const propertyAccess = node.parent;
+      const isNamespaceProperty =
+        !!propertyAccess &&
+        ((ts.isPropertyAccessExpression(propertyAccess) &&
+          propertyAccess.expression === node &&
+          MACRO_FUNCTION_NAME_SET.has(propertyAccess.name.text)) ||
+          (ts.isElementAccessExpression(propertyAccess) &&
+            propertyAccess.expression === node &&
+            ts.isStringLiteral(propertyAccess.argumentExpression) &&
+            MACRO_FUNCTION_NAME_SET.has(
+              propertyAccess.argumentExpression.text,
+            )));
       const call = propertyAccess?.parent;
       if (
-        !propertyAccess ||
-        !ts.isPropertyAccessExpression(propertyAccess) ||
-        propertyAccess.expression !== node ||
-        !MACRO_FUNCTION_NAME_SET.has(propertyAccess.name.text) ||
+        !isNamespaceProperty ||
         !call ||
         !ts.isCallExpression(call) ||
         call.expression !== propertyAccess
@@ -418,6 +442,23 @@ function hasMacroBindings(bindings: MacroBindings | undefined): boolean {
   return Boolean(bindings?.named.size || bindings?.namespaces.size);
 }
 
+function hasExprTemplateInvocation(
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker,
+): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node) && isExprTemplateInvocation(node, checker)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sourceFile, visit);
+  return found;
+}
+
 function warnSkippedMacro(
   node: ts.CallExpression,
   sourceFile: ts.SourceFile,
@@ -449,6 +490,7 @@ function transformAnalyzedSource(
   };
   const replacements: Replacement[] = [];
   let skippedMacro = false;
+  validateExprTemplateUsages(sourceFile, state.typeChecker);
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const macroName = importedMacroName(
@@ -457,23 +499,32 @@ function transformAnalyzedSource(
         state.typeChecker,
         bindingsByFile,
       );
-      if (macroName) {
+      const exprTemplateInvocation =
+        !macroName && isExprTemplateInvocation(node, state.typeChecker);
+      if (macroName || exprTemplateInvocation) {
         try {
-          const value = evaluateMacro(
-            node,
-            sourceFile,
-            state.typeChecker,
-            state.enumMap,
-            state.importBindingsMap,
-            state.evaluatedFiles,
-            undefined,
-            evaluationOptions,
-            macroName,
-          );
+          let replacementSource: string;
+          if (macroName === 'exprTemplate') {
+            validateExprTemplateDefinition(node, state.typeChecker);
+            replacementSource = EXPR_TEMPLATE_PLACEHOLDER;
+          } else {
+            const value = evaluateMacro(
+              node,
+              sourceFile,
+              state.typeChecker,
+              state.enumMap,
+              state.importBindingsMap,
+              state.evaluatedFiles,
+              undefined,
+              evaluationOptions,
+              macroName,
+            );
+            replacementSource = valueToSource(value);
+          }
           replacements.push({
             start: node.getStart(sourceFile),
             end: node.getEnd(),
-            source: valueToSource(value),
+            source: replacementSource,
           });
         } catch (error) {
           if (isFatalMacroTransformError(error)) throw error;
@@ -745,15 +796,17 @@ export function transformProject(
       throw new Error(`Source file is missing from macro project: ${fileName}`);
     }
   }
-  const candidates = targetFiles.filter(fileName => {
-    const source = input.project.files[fileName];
-    return source.includes(MACRO_PACKAGE) || source.includes('\\');
-  });
-  if (candidates.length === 0) {
+  const projectHasMacros = Object.values(input.project.files).some(
+    source => source.includes(MACRO_PACKAGE) || source.includes('\\'),
+  );
+  if (!projectHasMacros) {
     return { transformed: {}, dependencies: [] };
   }
 
-  const seedFile = candidates[0];
+  const seedFile = targetFiles[0] ?? input.project.entryFiles?.[0];
+  if (!seedFile) {
+    return { transformed: {}, dependencies: [] };
+  }
   const program = createSourceProgram({
     filename: seedFile,
     code: input.project.files[seedFile],
@@ -762,12 +815,17 @@ export function transformProject(
   const analysis = createProjectAnalysis(program, options);
   const transformed: Record<string, MacroTransformResult> = {};
   const dependencies = new Set<string>();
-  for (const fileName of candidates) {
+  for (const fileName of targetFiles) {
     const sourceFile = program.getSourceFile(fileName);
     if (!sourceFile) {
       throw new Error(`Source file is missing from macro project: ${fileName}`);
     }
-    if (!hasMacroBindings(analysis.bindingsByFile.get(fileName))) continue;
+    if (
+      !hasMacroBindings(analysis.bindingsByFile.get(fileName)) &&
+      !hasExprTemplateInvocation(sourceFile, analysis.state.typeChecker)
+    ) {
+      continue;
+    }
     const result = transformAnalyzedSource(
       sourceFile,
       input.project.files[fileName],

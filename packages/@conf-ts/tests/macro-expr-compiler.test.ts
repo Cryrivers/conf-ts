@@ -18,6 +18,55 @@ const unsupportedExprError = {
 };
 
 describe('Expr Macro', () => {
+  it('should instantiate exprTemplate with static arguments', () => {
+    assertMacroOutput('expr-template');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-template.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    expect(expression(output.scalar)({ a: 3, enabled: true })).toBe(5);
+    expect(expression(output.objectProperty)({ a: 3, enabled: true })).toBe(8);
+    expect(expression(output.arrayLiteral)({ a: 2, enabled: true })).toBe(true);
+    expect(expression(output.destructuring)({ a: 1, enabled: true })).toEqual({
+      value: 28,
+      label: 'ready',
+      rest: { extra: 9 },
+    });
+    expect(expression(output.composition)({ a: 11, enabled: true })).toBe(true);
+    expect(expression(output.composition)({ a: 9, enabled: true })).toBe(false);
+  });
+
+  it('should reject an invalid exprTemplate context parameter', () => {
+    assertMacroError(
+      'expr-template-invalid-context',
+      'exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier',
+    );
+  });
+
+  it('should reject dynamic exprTemplate arguments', () => {
+    assertMacroError('expr-template-invalid-dynamic', {
+      typescript: 'exprTemplate arguments must be statically analyzable',
+      native: 'Unsupported variable type for identifier: value',
+    });
+  });
+
+  it('should reject exprTemplate arity mismatches', () => {
+    assertMacroError(
+      'expr-template-invalid-arity',
+      'exprTemplate expected at most 1 static argument(s), but received 2',
+    );
+  });
+
+  it('should reject exprTemplate values escaping into runtime', () => {
+    assertMacroError(
+      'expr-template-invalid-escape',
+      'exprTemplate values are compile-time-only',
+    );
+  });
+
   it('should convert context property access into expression strings', () => {
     assertMacroOutput('expr');
   });

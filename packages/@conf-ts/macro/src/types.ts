@@ -1,4 +1,5 @@
 declare const EXPR_CALLBACK: unique symbol;
+declare const EXPR_TEMPLATE: unique symbol;
 
 type IsPlainObject<T> = T extends readonly unknown[]
   ? false
@@ -54,3 +55,25 @@ export type LooseExpr<Context, ReturnType> = Expr<
   LooseContext<Context>,
   ReturnType
 >;
+
+export type ExprTemplateCallback<
+  Context,
+  ReturnType,
+  Parameters extends readonly unknown[],
+> = (ctx: Context, ...args: Parameters) => ReturnType;
+
+export type ExprTemplate<
+  Context,
+  ReturnType,
+  Parameters extends readonly unknown[],
+> = ((...args: Parameters) => Expr<Context, ReturnType>) & {
+  readonly [EXPR_TEMPLATE]: true;
+};
+
+export type LooseExprTemplate<
+  Context,
+  ReturnType,
+  Parameters extends readonly unknown[],
+> = ((...args: Parameters) => LooseExpr<Context, ReturnType>) & {
+  readonly [EXPR_TEMPLATE]: true;
+};

@@ -1,10 +1,16 @@
-import { Expr } from './types';
+import { Expr, ExprTemplate, ExprTemplateCallback } from './types';
 
 console.warn(
   '@conf-ts/macro has been imported. This package is intended for compile-time macro expansion and should not be directly imported into runtime code.',
 );
 
-export type { Expr, LooseExpr } from './types';
+export type {
+  Expr,
+  ExprTemplate,
+  ExprTemplateCallback,
+  LooseExpr,
+  LooseExprTemplate,
+} from './types';
 
 function macroNotTransformed(name: string): never {
   throw new Error(
@@ -16,6 +22,16 @@ export function expr<Context = unknown, ReturnType = unknown>(
   _callback: (ctx: Context) => ReturnType,
 ): Expr<Context, ReturnType> {
   return macroNotTransformed('expr');
+}
+
+export function exprTemplate<
+  Context = unknown,
+  ReturnType = unknown,
+  Parameters extends readonly unknown[] = readonly unknown[],
+>(
+  _callback: ExprTemplateCallback<Context, ReturnType, Parameters>,
+): ExprTemplate<Context, ReturnType, Parameters> {
+  return macroNotTransformed('exprTemplate');
 }
 
 export function String(_value: any): string {

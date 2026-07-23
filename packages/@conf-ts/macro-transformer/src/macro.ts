@@ -133,6 +133,10 @@ type ExprReplacementContext = {
   macroImportsMap: { [filePath: string]: Set<string> };
   evaluatedFiles: Set<string>;
   options?: MacroOptions;
+  // Compile-time bindings supplied by an exprTemplate invocation. These
+  // are resolved before ordinary const/import lookup, matching lexical
+  // callback parameters while keeping the first callback parameter runtime.
+  constantContext?: { [name: string]: any };
   // Parameter names bound by a nested arrow/function callback (e.g. the `i`
   // in `ctx.queue.filter(i => i < 5)`) that this subtree is nested inside.
   // These are local values scoped to that callback, not compile-time
@@ -551,6 +555,7 @@ function valueToExprLiteral(
   sourceFile: ts.SourceFile,
   node: ts.Node,
   quote: QuoteStyle = 'double',
+  seen: Set<any> = new Set(),
 ): string {
   if (typeof value === 'number' || value instanceof FormattedNumber) {
     const number = Number(value);
@@ -570,6 +575,46 @@ function valueToExprLiteral(
   }
   if (value === null) {
     return 'null';
+  }
+  if (value === undefined) {
+    return 'undefined';
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      throw new ConfTSError('Cannot inline cyclic array into expr', {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
+      });
+    }
+    seen.add(value);
+    const result = `[${value
+      .map(item => valueToExprLiteral(item, sourceFile, node, quote, seen))
+      .join(', ')}]`;
+    seen.delete(value);
+    return result;
+  }
+  if (typeof value === 'object') {
+    if (seen.has(value)) {
+      throw new ConfTSError('Cannot inline cyclic object into expr', {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
+      });
+    }
+    seen.add(value);
+    const result = `{ ${Object.keys(value)
+      .map(
+        key =>
+          `${encodeStringLiteral(key, quote)}: ${valueToExprLiteral(
+            value[key],
+            sourceFile,
+            node,
+            quote,
+            seen,
+          )}`,
+      )
+      .join(', ')} }`;
+    seen.delete(value);
+    return result;
   }
   throw new ConfTSError(
     `Cannot inline value of type ${typeof value} into expr`,
@@ -604,9 +649,10 @@ function containingImportDeclaration(
   return undefined;
 }
 
-function isImportedExprCall(
+function isImportedMacroCall(
   node: ts.CallExpression,
   typeChecker: ts.TypeChecker,
+  macroName: string,
 ): boolean {
   if (ts.isIdentifier(node.expression)) {
     const symbol = typeChecker.getSymbolAtLocation(node.expression);
@@ -617,7 +663,7 @@ function isImportedExprCall(
           declaration.propertyName?.text ?? declaration.name.text;
         const importDeclaration = containingImportDeclaration(declaration);
         return (
-          importedName === 'expr' &&
+          importedName === macroName &&
           !!importDeclaration &&
           ts.isStringLiteral(importDeclaration.moduleSpecifier) &&
           importDeclaration.moduleSpecifier.text === '@conf-ts/macro'
@@ -628,7 +674,27 @@ function isImportedExprCall(
 
   if (
     ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === 'expr' &&
+    node.expression.name.text === macroName &&
+    ts.isIdentifier(node.expression.expression)
+  ) {
+    const symbol = typeChecker.getSymbolAtLocation(node.expression.expression);
+    return (
+      symbol?.declarations?.some(declaration => {
+        if (!ts.isNamespaceImport(declaration)) return false;
+        const importDeclaration = containingImportDeclaration(declaration);
+        return (
+          !!importDeclaration &&
+          ts.isStringLiteral(importDeclaration.moduleSpecifier) &&
+          importDeclaration.moduleSpecifier.text === '@conf-ts/macro'
+        );
+      }) ?? false
+    );
+  }
+
+  if (
+    ts.isElementAccessExpression(node.expression) &&
+    ts.isStringLiteral(node.expression.argumentExpression) &&
+    node.expression.argumentExpression.text === macroName &&
     ts.isIdentifier(node.expression.expression)
   ) {
     const symbol = typeChecker.getSymbolAtLocation(node.expression.expression);
@@ -648,6 +714,253 @@ function isImportedExprCall(
   return false;
 }
 
+function isImportedExprCall(
+  node: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): boolean {
+  return isImportedMacroCall(node, typeChecker, 'expr');
+}
+
+type ExprTemplateDefinition = {
+  call: ts.CallExpression;
+  callback: ts.ArrowFunction;
+  sourceFile: ts.SourceFile;
+};
+
+const EXPR_TEMPLATE_CALLBACK_ERROR =
+  'exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier and whose body is a single expression';
+
+function exprTemplateError(
+  message: string,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): FatalMacroTransformError {
+  return new FatalMacroTransformError(message, {
+    file: sourceFile.fileName,
+    ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)),
+  });
+}
+
+function getExprTemplateCallback(
+  call: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): ts.ArrowFunction | undefined {
+  if (!isImportedMacroCall(call, typeChecker, 'exprTemplate')) {
+    return undefined;
+  }
+  const sourceFile = call.getSourceFile();
+  if (call.arguments.length !== 1) {
+    throw exprTemplateError(EXPR_TEMPLATE_CALLBACK_ERROR, sourceFile, call);
+  }
+  const callback = unwrapExprSyntax(call.arguments[0]);
+  if (
+    !ts.isArrowFunction(callback) ||
+    isAsyncArrowFunction(callback) ||
+    ts.isBlock(callback.body) ||
+    callback.parameters.length === 0
+  ) {
+    throw exprTemplateError(
+      EXPR_TEMPLATE_CALLBACK_ERROR,
+      sourceFile,
+      call.arguments[0],
+    );
+  }
+  const contextParam = callback.parameters[0];
+  if (
+    !ts.isIdentifier(contextParam.name) ||
+    !!contextParam.dotDotDotToken ||
+    !!contextParam.initializer ||
+    !!contextParam.questionToken
+  ) {
+    throw exprTemplateError(
+      EXPR_TEMPLATE_CALLBACK_ERROR,
+      sourceFile,
+      contextParam,
+    );
+  }
+  return callback;
+}
+
+function symbolForTemplateExpression(
+  expression: ts.Expression,
+  typeChecker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const direct = typeChecker.getSymbolAtLocation(expression);
+  if (direct) return direct;
+  if (ts.isPropertyAccessExpression(expression)) {
+    return typeChecker.getSymbolAtLocation(expression.name);
+  }
+  if (
+    ts.isElementAccessExpression(expression) &&
+    (ts.isStringLiteral(expression.argumentExpression) ||
+      ts.isNoSubstitutionTemplateLiteral(expression.argumentExpression))
+  ) {
+    return typeChecker
+      .getTypeAtLocation(expression.expression)
+      .getProperty(expression.argumentExpression.text);
+  }
+  return undefined;
+}
+
+function resolveExprTemplateDefinition(
+  node: ts.Expression,
+  typeChecker: ts.TypeChecker,
+  evaluatedFiles?: Set<string>,
+  visited: Set<ts.Symbol> = new Set(),
+): ExprTemplateDefinition | undefined {
+  const expression = unwrapExprSyntax(node);
+  if (ts.isCallExpression(expression)) {
+    const callback = getExprTemplateCallback(expression, typeChecker);
+    if (!callback) return undefined;
+    const sourceFile = expression.getSourceFile();
+    evaluatedFiles?.add(sourceFile.fileName);
+    return { call: expression, callback, sourceFile };
+  }
+  if (
+    !ts.isIdentifier(expression) &&
+    !ts.isPropertyAccessExpression(expression) &&
+    !ts.isElementAccessExpression(expression)
+  ) {
+    return undefined;
+  }
+
+  const symbol = symbolForTemplateExpression(expression, typeChecker);
+  if (!symbol) return undefined;
+  let resolved = symbol;
+  while (resolved.flags & ts.SymbolFlags.Alias) {
+    if (visited.has(resolved)) return undefined;
+    visited.add(resolved);
+    for (const declaration of resolved.declarations ?? []) {
+      evaluatedFiles?.add(declaration.getSourceFile().fileName);
+    }
+    const aliased = typeChecker.getAliasedSymbol(resolved);
+    if (aliased === resolved) break;
+    resolved = aliased;
+  }
+  if (visited.has(resolved)) return undefined;
+  visited.add(resolved);
+
+  const declarations = [
+    ...(resolved.valueDeclaration ? [resolved.valueDeclaration] : []),
+    ...(resolved.declarations ?? []),
+  ];
+  for (const declaration of declarations) {
+    evaluatedFiles?.add(declaration.getSourceFile().fileName);
+    if (
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer &&
+      ts.isVariableDeclarationList(declaration.parent) &&
+      !!(declaration.parent.flags & ts.NodeFlags.Const)
+    ) {
+      const definition = resolveExprTemplateDefinition(
+        declaration.initializer,
+        typeChecker,
+        evaluatedFiles,
+        visited,
+      );
+      if (definition) return definition;
+    }
+    if (ts.isExportAssignment(declaration)) {
+      const definition = resolveExprTemplateDefinition(
+        declaration.expression,
+        typeChecker,
+        evaluatedFiles,
+        visited,
+      );
+      if (definition) return definition;
+    }
+  }
+  return undefined;
+}
+
+export function isExprTemplateInvocation(
+  node: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): boolean {
+  return (
+    !isImportedMacroCall(node, typeChecker, 'exprTemplate') &&
+    !!resolveExprTemplateDefinition(node.expression, typeChecker)
+  );
+}
+
+export function validateExprTemplateDefinition(
+  node: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): void {
+  getExprTemplateCallback(node, typeChecker);
+}
+
+export const EXPR_TEMPLATE_PLACEHOLDER =
+  '(() => { throw new Error("exprTemplate is compile-time-only and must be invoked with statically analyzable arguments"); })';
+
+export function validateExprTemplateUsages(
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+): void {
+  const isTemplate = (node: ts.Expression): boolean =>
+    !!resolveExprTemplateDefinition(node, typeChecker);
+
+  const visit = (node: ts.Node, templateAllowed = false): void => {
+    if (
+      ts.isTypeNode(node) ||
+      ts.isImportDeclaration(node) ||
+      ts.isExportDeclaration(node)
+    ) {
+      return;
+    }
+    if (
+      (ts.isIdentifier(node) ||
+        ts.isPropertyAccessExpression(node) ||
+        ts.isElementAccessExpression(node) ||
+        ts.isCallExpression(node) ||
+        ts.isAsExpression(node) ||
+        ts.isSatisfiesExpression(node) ||
+        ts.isNonNullExpression(node) ||
+        ts.isTypeAssertionExpression(node) ||
+        ts.isParenthesizedExpression(node)) &&
+      isTemplate(node as ts.Expression)
+    ) {
+      if (!templateAllowed) {
+        throw exprTemplateError(
+          'exprTemplate values are compile-time-only and may only be called, assigned to a const alias, or forwarded through import/export',
+          sourceFile,
+          node,
+        );
+      }
+      return;
+    }
+
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const initializerIsTemplate = isTemplate(node.initializer);
+      if (
+        initializerIsTemplate &&
+        (!ts.isVariableDeclarationList(node.parent) ||
+          !(node.parent.flags & ts.NodeFlags.Const))
+      ) {
+        throw exprTemplateError(
+          'exprTemplate aliases must use const declarations',
+          sourceFile,
+          node,
+        );
+      }
+      visit(node.initializer, initializerIsTemplate);
+      return;
+    }
+    if (ts.isCallExpression(node)) {
+      visit(node.expression, isTemplate(node.expression));
+      node.arguments.forEach(argument => visit(argument));
+      return;
+    }
+    if (ts.isExportAssignment(node)) {
+      visit(node.expression, isTemplate(node.expression));
+      return;
+    }
+    ts.forEachChild(node, child => visit(child));
+  };
+
+  ts.forEachChild(sourceFile, node => visit(node));
+}
+
 function expressionOriginatesFromExpr(
   node: ts.Expression,
   typeChecker: ts.TypeChecker,
@@ -655,11 +968,20 @@ function expressionOriginatesFromExpr(
 ): boolean {
   const expression = unwrapExprSyntax(node);
   if (ts.isCallExpression(expression)) {
-    return isImportedExprCall(expression, typeChecker);
+    return (
+      isImportedExprCall(expression, typeChecker) ||
+      isExprTemplateInvocation(expression, typeChecker)
+    );
   }
-  if (!ts.isIdentifier(expression)) return false;
+  if (
+    !ts.isIdentifier(expression) &&
+    !ts.isPropertyAccessExpression(expression) &&
+    !ts.isElementAccessExpression(expression)
+  ) {
+    return false;
+  }
 
-  const symbol = typeChecker.getSymbolAtLocation(expression);
+  const symbol = symbolForTemplateExpression(expression, typeChecker);
   if (!symbol) return false;
   const resolvedSymbol =
     symbol.flags & ts.SymbolFlags.Alias
@@ -697,12 +1019,10 @@ function nestedExprReplacement(
   node: ts.CallExpression,
   context: ExprReplacementContext,
 ): string | undefined {
-  if (
-    !ts.isIdentifier(node.expression) ||
-    !expressionOriginatesFromExpr(node.expression, context.typeChecker)
-  ) {
+  if (!expressionOriginatesFromExpr(node.expression, context.typeChecker)) {
     return undefined;
   }
+  const calleeText = node.expression.getText(context.sourceFile);
 
   const argument = node.arguments[0];
   const argumentSymbol =
@@ -720,7 +1040,7 @@ function nestedExprReplacement(
     (!argumentSymbol || !parameterSymbol || argumentSymbol === parameterSymbol);
   if (!isCurrentContext) {
     throw new FatalMacroTransformError(
-      `Nested Expr '${node.expression.text}' must be called with exactly one argument: the current expr context parameter '${context.paramName}'.`,
+      `Nested Expr '${calleeText}' must be called with exactly one argument: the current expr context parameter '${context.paramName}'.`,
       {
         file: context.sourceFile.fileName,
         ...ts.getLineAndCharacterOfPosition(
@@ -739,12 +1059,12 @@ function nestedExprReplacement(
     context.macroImportsMap,
     true,
     context.evaluatedFiles,
-    undefined,
+    context.constantContext,
     context.options,
   );
   if (typeof value !== 'string') {
     throw new ConfTSError(
-      `Nested Expr '${node.expression.text}' did not evaluate to an expression string`,
+      `Nested Expr '${calleeText}' did not evaluate to an expression string`,
       {
         file: context.sourceFile.fileName,
         ...ts.getLineAndCharacterOfPosition(
@@ -803,7 +1123,7 @@ function evaluateNodeLiteral(
     macroImportsMap,
     true,
     evaluatedFiles,
-    undefined,
+    context.constantContext,
     options,
   );
   return valueToExprLiteral(value, sourceFile, node, options?.quote);
@@ -1436,6 +1756,78 @@ function collectCommentErasures(
   visit(node);
 }
 
+function compileExprBody(params: {
+  paramName: string;
+  paramIdentifier: ts.Identifier;
+  bodyExpression: ts.Expression;
+  sourceFile: ts.SourceFile;
+  typeChecker: ts.TypeChecker;
+  enumMap: { [filePath: string]: { [key: string]: any } };
+  macroImportsMap: { [filePath: string]: Set<string> };
+  evaluatedFiles: Set<string>;
+  options?: MacroOptions;
+  constantContext?: { [name: string]: any };
+}): string {
+  const {
+    paramName,
+    paramIdentifier,
+    bodyExpression,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+    constantContext,
+  } = params;
+  let bodyText = bodyExpression.getText(sourceFile);
+  const bodyStart = bodyExpression.getStart(sourceFile);
+
+  const replacements: ExprReplacement[] = [];
+  collectConstReplacements(bodyExpression, {
+    paramName,
+    paramIdentifier,
+    bodyStart,
+    replacements,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+    constantContext,
+  });
+  collectTypeSyntaxErasures(
+    bodyExpression,
+    bodyStart,
+    replacements,
+    sourceFile,
+  );
+  collectCommentErasures(bodyExpression, bodyStart, replacements, sourceFile);
+
+  replacements.sort((a, b) => b[0] - a[0]);
+  for (const [start, end, literal] of replacements) {
+    bodyText = bodyText.slice(0, start) + literal + bodyText.slice(end);
+  }
+
+  try {
+    return rewriteContextExpression(bodyText, paramName, {
+      quote: options?.quote,
+    });
+  } catch (error) {
+    throw new ConfTSError(
+      error instanceof Error ? error.message : String(error),
+      {
+        file: sourceFile.fileName,
+        ...ts.getLineAndCharacterOfPosition(
+          sourceFile,
+          bodyExpression.getStart(),
+        ),
+      },
+    );
+  }
+}
+
 function evaluateExpr(
   callee: string,
   expression: ts.CallExpression,
@@ -1470,15 +1862,10 @@ function evaluateExpr(
     sourceFile,
   );
 
-  let bodyText = bodyExpression.getText(sourceFile);
-  const bodyStart = bodyExpression.getStart(sourceFile);
-
-  const replacements: ExprReplacement[] = [];
-  collectConstReplacements(bodyExpression, {
+  return compileExprBody({
     paramName,
     paramIdentifier,
-    bodyStart,
-    replacements,
+    bodyExpression,
     sourceFile,
     typeChecker,
     enumMap,
@@ -1486,35 +1873,358 @@ function evaluateExpr(
     evaluatedFiles,
     options,
   });
-  collectTypeSyntaxErasures(
-    bodyExpression,
-    bodyStart,
-    replacements,
+}
+
+const EXPR_TEMPLATE_PARAMETER_ERROR =
+  'exprTemplate parameters after the context must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter';
+
+function evaluateExprTemplateDefault(
+  expression: ts.Expression,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  bindings: { [name: string]: any },
+  options?: MacroOptions,
+): any {
+  return evaluate(
+    expression,
     sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    true,
+    evaluatedFiles,
+    bindings,
+    options,
   );
-  collectCommentErasures(bodyExpression, bodyStart, replacements, sourceFile);
+}
 
-  replacements.sort((a, b) => b[0] - a[0]);
-  for (const [start, end, literal] of replacements) {
-    bodyText = bodyText.slice(0, start) + literal + bodyText.slice(end);
+function bindExprTemplateIdentifier(
+  element: ts.BindingElement,
+  value: any,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  bindings: { [name: string]: any },
+  options?: MacroOptions,
+): void {
+  if (!ts.isIdentifier(element.name)) {
+    throw exprTemplateError(EXPR_TEMPLATE_PARAMETER_ERROR, sourceFile, element);
   }
-
-  try {
-    return rewriteContextExpression(bodyText, paramName, {
-      quote: options?.quote,
-    });
-  } catch (error) {
-    throw new ConfTSError(
-      error instanceof Error ? error.message : String(error),
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(
-          sourceFile,
-          bodyExpression.getStart(),
-        ),
-      },
+  let boundValue = value;
+  if (boundValue === undefined && element.initializer) {
+    boundValue = evaluateExprTemplateDefault(
+      element.initializer,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      bindings,
+      options,
     );
   }
+  bindings[element.name.text] = boundValue;
+}
+
+function propertyKeyForBindingElement(
+  element: ts.BindingElement,
+  sourceFile: ts.SourceFile,
+): string {
+  if (!element.propertyName) {
+    if (!ts.isIdentifier(element.name)) {
+      throw exprTemplateError(
+        EXPR_TEMPLATE_PARAMETER_ERROR,
+        sourceFile,
+        element,
+      );
+    }
+    return element.name.text;
+  }
+  if (
+    ts.isIdentifier(element.propertyName) ||
+    ts.isStringLiteral(element.propertyName) ||
+    ts.isNumericLiteral(element.propertyName)
+  ) {
+    return element.propertyName.text;
+  }
+  throw exprTemplateError(EXPR_TEMPLATE_PARAMETER_ERROR, sourceFile, element);
+}
+
+function bindExprTemplateParameter(
+  parameter: ts.ParameterDeclaration,
+  inputValue: any,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  bindings: { [name: string]: any },
+  options?: MacroOptions,
+): void {
+  let value = inputValue;
+  if (value === undefined && parameter.initializer) {
+    value = evaluateExprTemplateDefault(
+      parameter.initializer,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      bindings,
+      options,
+    );
+  }
+  if (ts.isIdentifier(parameter.name)) {
+    bindings[parameter.name.text] = value;
+    return;
+  }
+
+  if (value === null || value === undefined) {
+    throw exprTemplateError(
+      'exprTemplate cannot destructure null or undefined',
+      sourceFile,
+      parameter,
+    );
+  }
+
+  if (ts.isObjectBindingPattern(parameter.name)) {
+    const pattern = parameter.name;
+    const objectValue = Object(value) as Record<string, any>;
+    const usedKeys = new Set<string>();
+    pattern.elements.forEach((element, index) => {
+      if (element.dotDotDotToken) {
+        if (
+          index !== pattern.elements.length - 1 ||
+          !ts.isIdentifier(element.name) ||
+          !!element.initializer
+        ) {
+          throw exprTemplateError(
+            EXPR_TEMPLATE_PARAMETER_ERROR,
+            sourceFile,
+            element,
+          );
+        }
+        bindings[element.name.text] = Object.fromEntries(
+          Object.keys(objectValue)
+            .filter(key => !usedKeys.has(key))
+            .map(key => [key, objectValue[key]]),
+        );
+        return;
+      }
+      const key = propertyKeyForBindingElement(element, sourceFile);
+      usedKeys.add(key);
+      bindExprTemplateIdentifier(
+        element,
+        objectValue[key],
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        evaluatedFiles,
+        bindings,
+        options,
+      );
+    });
+    return;
+  }
+
+  if (ts.isArrayBindingPattern(parameter.name)) {
+    const pattern = parameter.name;
+    const arrayValue =
+      typeof value === 'string'
+        ? Array.from(value)
+        : Array.isArray(value)
+          ? value
+          : undefined;
+    if (!arrayValue) {
+      throw exprTemplateError(
+        'exprTemplate array destructuring requires a statically analyzable array or string',
+        sourceFile,
+        parameter,
+      );
+    }
+    pattern.elements.forEach((element, index) => {
+      if (ts.isOmittedExpression(element)) return;
+      if (element.dotDotDotToken) {
+        if (
+          index !== pattern.elements.length - 1 ||
+          !ts.isIdentifier(element.name) ||
+          !!element.initializer
+        ) {
+          throw exprTemplateError(
+            EXPR_TEMPLATE_PARAMETER_ERROR,
+            sourceFile,
+            element,
+          );
+        }
+        bindings[element.name.text] = arrayValue.slice(index);
+        return;
+      }
+      bindExprTemplateIdentifier(
+        element,
+        arrayValue[index],
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        evaluatedFiles,
+        bindings,
+        options,
+      );
+    });
+    return;
+  }
+
+  throw exprTemplateError(EXPR_TEMPLATE_PARAMETER_ERROR, sourceFile, parameter);
+}
+
+function evaluateExprTemplateInvocation(
+  expression: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  macroImportsMap: { [filePath: string]: Set<string> },
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: MacroOptions,
+): string | undefined {
+  const definition = resolveExprTemplateDefinition(
+    expression.expression,
+    typeChecker,
+    evaluatedFiles,
+  );
+  if (!definition) return undefined;
+
+  const values: any[] = [];
+  try {
+    for (const argument of expression.arguments) {
+      if (ts.isSpreadElement(argument)) {
+        const spread = evaluate(
+          argument.expression,
+          sourceFile,
+          typeChecker,
+          enumMap,
+          macroImportsMap,
+          true,
+          evaluatedFiles,
+          context,
+          options,
+        );
+        if (!Array.isArray(spread)) {
+          throw exprTemplateError(
+            'exprTemplate spread arguments must resolve to an array',
+            sourceFile,
+            argument,
+          );
+        }
+        values.push(...spread);
+      } else {
+        values.push(
+          evaluate(
+            argument,
+            sourceFile,
+            typeChecker,
+            enumMap,
+            macroImportsMap,
+            true,
+            evaluatedFiles,
+            context,
+            options,
+          ),
+        );
+      }
+    }
+  } catch (error) {
+    if (isFatalMacroTransformError(error)) throw error;
+    throw exprTemplateError(
+      `exprTemplate arguments must be statically analyzable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      sourceFile,
+      expression,
+    );
+  }
+
+  const parameters = definition.callback.parameters.slice(1);
+  const restIndex = parameters.findIndex(
+    parameter => !!parameter.dotDotDotToken,
+  );
+  if (restIndex !== -1 && restIndex !== parameters.length - 1) {
+    throw exprTemplateError(
+      EXPR_TEMPLATE_PARAMETER_ERROR,
+      definition.sourceFile,
+      parameters[restIndex],
+    );
+  }
+  const minimum = parameters.reduce(
+    (count, parameter, index) =>
+      !parameter.dotDotDotToken &&
+      !parameter.questionToken &&
+      !parameter.initializer
+        ? index + 1
+        : count,
+    0,
+  );
+  if (values.length < minimum) {
+    throw exprTemplateError(
+      `exprTemplate expected at least ${minimum} static argument(s), but received ${values.length}`,
+      sourceFile,
+      expression,
+    );
+  }
+  if (restIndex === -1 && values.length > parameters.length) {
+    throw exprTemplateError(
+      `exprTemplate expected at most ${parameters.length} static argument(s), but received ${values.length}`,
+      sourceFile,
+      expression,
+    );
+  }
+
+  const bindings: { [name: string]: any } = Object.create(null);
+  parameters.forEach((parameter, index) => {
+    if (parameter.dotDotDotToken) {
+      if (!ts.isIdentifier(parameter.name) || parameter.initializer) {
+        throw exprTemplateError(
+          EXPR_TEMPLATE_PARAMETER_ERROR,
+          definition.sourceFile,
+          parameter,
+        );
+      }
+      bindings[parameter.name.text] = values.slice(index);
+      return;
+    }
+    bindExprTemplateParameter(
+      parameter,
+      values[index],
+      definition.sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      bindings,
+      options,
+    );
+  });
+
+  const contextParameter = definition.callback.parameters[0];
+  const contextIdentifier = contextParameter.name as ts.Identifier;
+  return compileExprBody({
+    paramName: contextIdentifier.text,
+    paramIdentifier: contextIdentifier,
+    bodyExpression: definition.callback.body as ts.Expression,
+    sourceFile: definition.sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+    constantContext: bindings,
+  });
 }
 /**
  * Evaluate env macro. Supports nested macros in the argument by evaluating in macro mode
@@ -1747,6 +2457,20 @@ export function evaluateMacro(
   importedName?: string,
 ): any {
   const callee = importedName ?? getCalleeName(expression, sourceFile);
+
+  const exprTemplateResult = evaluateExprTemplateInvocation(
+    expression,
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    context,
+    options,
+  );
+  if (exprTemplateResult !== undefined) {
+    return exprTemplateResult;
+  }
 
   const result =
     evaluateExpr(
