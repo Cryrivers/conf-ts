@@ -24,6 +24,12 @@ export default {
   ),
   in: expr<Context, boolean>(ctx => ctx.key in ctx.object),
   bitwiseNot: expr<Context, number>(ctx => ~ctx.left),
+  nullishThenOr: expr<Context, number>(
+    ctx => (ctx.left ?? ctx.right) || ctx.base,
+  ),
+  unaryExponent: expr<Context, number>(
+    ctx => (-ctx.left) ** ctx.right,
+  ),
   void: expr<Context, undefined>(ctx => void ctx.value),
   delete: expr<Context, boolean>(ctx => delete ctx.object.removable),
   typeof: expr<Context, string>(ctx => typeof ctx.value),

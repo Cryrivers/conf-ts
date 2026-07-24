@@ -9,6 +9,8 @@
   "instanceOf": "value instanceof Constructor",
   "in": "key in object",
   "bitwiseNot": "~left",
+  "nullishThenOr": "(left ?? right) || base",
+  "unaryExponent": "(-left) ** right",
   "void": "void value",
   "delete": "delete object.removable",
   "typeof": "typeof value"

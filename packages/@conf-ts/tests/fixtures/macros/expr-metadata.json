@@ -1,9 +1,13 @@
 {
   "blockComment": "value + 1",
   "lineComment": "value + 1",
-  "typeAssertions": "(((value)))",
+  "commentWrappedValue": "value",
+  "commentWrappedOperand": "value + value * 2",
+  "commentWrappedRequired": "value * (value + 1)",
+  "typeAssertions": "value",
   "genericCall": "formatter.format(value)",
-  "instantiatedCall": "(formatter.format)(value)",
+  "instantiatedCall": "formatter.format(value)",
+  "preservedPrecedence": "(value + 1) * 2",
   "genericTag": "formatter.tag `value=${value}`",
   "templateLiteral": "`raw /* preserved text */:${value + 1}`"
 }

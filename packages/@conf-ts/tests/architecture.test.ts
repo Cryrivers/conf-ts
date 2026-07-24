@@ -321,9 +321,7 @@ describe('source-oriented architecture', () => {
     const nativeResult = nativeMacroTransform(input);
 
     expect(nativeResult.code).toBe(typescriptResult.code);
-    expect(typescriptResult.code).toContain(
-      'export default "a && (b) && (c)";',
-    );
+    expect(typescriptResult.code).toContain('export default "a && b && c";');
     expect([...typescriptResult.dependencies].sort()).toEqual(
       [...nativeResult.dependencies].sort(),
     );
@@ -347,7 +345,7 @@ describe('source-oriented architecture', () => {
 
     expect(nativeResult.code).toBe(typescriptResult.code);
     expect(typescriptResult.code).toContain(
-      `export default "(name === 'ready') && a";`,
+      `export default "name === 'ready' && a";`,
     );
   });
 

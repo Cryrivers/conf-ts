@@ -15,7 +15,7 @@ export default {
   // parameter and the context, so it passes through almost unchanged.
   arrowExpressionBody: expr<Context, boolean>(
     ctx =>
-      [1, 2].includes(ctx.quota) && ctx.queue.filter(i => i < 5).length > 5,
+      [1, 2].includes(ctx.quota) && ctx.queue.filter((i) => i < 5).length > 5,
   ),
 
   // `function` expression callback, down-leveled into arrow syntax.

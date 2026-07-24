@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use compiler_native::error::ConfTSError;
 use compiler_native::eval::{EvalContext, evaluate, get_location};
 use compiler_native::types::{CompileOptions, FileContext, QuoteStyle, Value};
+use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
+use oxc_ast_visit::{Visit, walk};
+use oxc_parser::{ParseOptions, Parser};
+use oxc_span::{ContentEq, GetSpan, SourceType};
 
 /// Evaluate a macro call expression.
 pub fn evaluate_macro(
@@ -718,6 +721,124 @@ fn compact_expression_whitespace(source: &str) -> String {
   let mut output = String::with_capacity(source.len());
   compact_code(&chars, &mut index, &mut output, false);
   output
+}
+
+// Normalize only after every context/constant/type replacement has been
+// applied, because those rewrites can change which grouping is necessary.
+// Each candidate is parsed again and accepted only when its parenthesis-free
+// AST is content-equivalent. Keep this in sync with expression-rewrite.ts.
+const EXPRESSION_WRAPPER_PREFIX: &str = "const __confTsExpression = ";
+
+#[derive(Default)]
+struct ParenthesizedSpanCollector {
+  spans: Vec<(usize, usize)>,
+}
+
+impl<'a> Visit<'a> for ParenthesizedSpanCollector {
+  fn visit_parenthesized_expression(&mut self, expression: &ParenthesizedExpression<'a>) {
+    self
+      .spans
+      .push((expression.span.start as usize, expression.span.end as usize));
+    walk::walk_parenthesized_expression(self, expression);
+  }
+
+  fn visit_arrow_function_expression(&mut self, arrow: &ArrowFunctionExpression<'a>) {
+    if arrow.params.items.len() == 1
+      && arrow.params.rest.is_none()
+      && arrow.params.items[0].initializer.is_none()
+      && arrow.params.items[0].type_annotation.is_none()
+      && matches!(
+        arrow.params.items[0].pattern,
+        BindingPattern::BindingIdentifier(_)
+      )
+    {
+      self
+        .spans
+        .push((arrow.span.start as usize, arrow.params.span.end as usize));
+    }
+    walk::walk_arrow_function_expression(self, arrow);
+  }
+}
+
+fn wrapped_expression_source(source: &str) -> String {
+  format!("{}{};", EXPRESSION_WRAPPER_PREFIX, source)
+}
+
+fn collect_parenthesized_spans(source: &str) -> Vec<(usize, usize)> {
+  let wrapped = wrapped_expression_source(source);
+  let allocator = Allocator::default();
+  let parsed = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
+  if parsed.panicked || !parsed.diagnostics.is_empty() {
+    return Vec::new();
+  }
+
+  let mut collector = ParenthesizedSpanCollector::default();
+  collector.visit_program(&parsed.program);
+  let offset = EXPRESSION_WRAPPER_PREFIX.len();
+  collector
+    .spans
+    .into_iter()
+    .filter_map(|(start, end)| {
+      (start >= offset && end <= offset + source.len()).then_some((start - offset, end - offset))
+    })
+    .collect()
+}
+
+fn expression_sources_are_equivalent(left: &str, right: &str) -> bool {
+  let left = wrapped_expression_source(left);
+  let right = wrapped_expression_source(right);
+  let allocator = Allocator::default();
+  let options = ParseOptions {
+    preserve_parens: false,
+    ..ParseOptions::default()
+  };
+  let left_parsed = Parser::new(&allocator, &left, SourceType::ts())
+    .with_options(options)
+    .parse();
+  if left_parsed.panicked || !left_parsed.diagnostics.is_empty() {
+    return false;
+  }
+  let right_parsed = Parser::new(&allocator, &right, SourceType::ts())
+    .with_options(options)
+    .parse();
+  !right_parsed.panicked
+    && right_parsed.diagnostics.is_empty()
+    && left_parsed.program.content_eq(&right_parsed.program)
+}
+
+fn remove_redundant_parentheses(source: &str) -> String {
+  let mut output = source.to_string();
+
+  loop {
+    let mut spans = collect_parenthesized_spans(&output);
+    spans.sort_by_key(|(start, end)| end - start);
+    let mut simplified = false;
+
+    for (start, end) in spans {
+      if start >= end
+        || end > output.len()
+        || output.as_bytes().get(start) != Some(&b'(')
+        || output.as_bytes().get(end - 1) != Some(&b')')
+      {
+        continue;
+      }
+      let candidate = format!(
+        "{}{}{}",
+        &output[..start],
+        &output[start + 1..end - 1],
+        &output[end..]
+      );
+      if expression_sources_are_equivalent(&output, &candidate) {
+        output = candidate;
+        simplified = true;
+        break;
+      }
+    }
+
+    if !simplified {
+      return output;
+    }
+  }
 }
 
 // Keep this in sync with @conf-ts/macro-transformer/src/expression-rewrite.ts encodeStringLiteral.
@@ -3062,7 +3183,8 @@ fn compile_expr_arrow(
   }
 
   let _ = arrow;
-  Ok(Value::String(compact_expression_whitespace(&result)))
+  let compact = compact_expression_whitespace(&result);
+  Ok(Value::String(remove_redundant_parentheses(&compact)))
 }
 
 fn evaluate_expr(

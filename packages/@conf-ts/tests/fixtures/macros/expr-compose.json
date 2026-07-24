@@ -1,6 +1,6 @@
 {
   "single": "a && (b || c)",
   "alias": "(b || c) && a",
-  "multiLevel": "((score > 10 ? a : c) && (b || c)) || a",
+  "multiLevel": "(score > 10 ? a : c) && (b || c) || a",
   "stringLiteral": "name === \"ready\" && (b || c)"
 }

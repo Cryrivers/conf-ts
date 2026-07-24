@@ -1,4 +1,5 @@
 import { parse, tokenize, type Token } from '@conf-ts/expr-core';
+import ts from 'typescript';
 
 import type { QuoteStyle } from './types';
 
@@ -113,6 +114,236 @@ function renderTokenValue(token: OutputToken, quote: QuoteStyle): string {
 
 function trimRight(value: string): string {
   return value.replace(/\s+$/u, '');
+}
+
+// Normalize only after every context/constant/type replacement has been
+// applied, because those rewrites can change which grouping is necessary.
+// Each candidate is parsed again and accepted only when its parenthesis-free
+// semantic tree is identical. Keep this in sync with the native implementation
+// in macro_eval.rs.
+const EXPRESSION_WRAPPER_PREFIX = 'const __confTsExpression = ';
+
+function parseExpressionForParentheses(source: string): {
+  expression: ts.Expression;
+  sourceFile: ts.SourceFile;
+} | null {
+  const sourceFile = ts.createSourceFile(
+    'expression.ts',
+    `${EXPRESSION_WRAPPER_PREFIX}${source};`,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const parseDiagnostics = (
+    sourceFile as ts.SourceFile & {
+      parseDiagnostics?: readonly ts.Diagnostic[];
+    }
+  ).parseDiagnostics;
+  if (parseDiagnostics?.length) {
+    return null;
+  }
+  const statement = sourceFile.statements[0];
+  if (!statement || !ts.isVariableStatement(statement)) {
+    return null;
+  }
+  const declaration = statement.declarationList.declarations[0];
+  if (!declaration?.initializer) {
+    return null;
+  }
+  return { expression: declaration.initializer, sourceFile };
+}
+
+function mixesNullishAndLogicalWithoutParentheses(node: ts.Node): boolean {
+  if (ts.isBinaryExpression(node)) {
+    const operator = node.operatorToken.kind;
+    const isNullish = operator === ts.SyntaxKind.QuestionQuestionToken;
+    const isLogical =
+      operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+      operator === ts.SyntaxKind.BarBarToken;
+    const childHasOperator = (
+      child: ts.Expression,
+      predicate: (kind: ts.SyntaxKind) => boolean,
+    ): boolean => {
+      return (
+        !ts.isParenthesizedExpression(child) &&
+        ts.isBinaryExpression(child) &&
+        predicate(child.operatorToken.kind)
+      );
+    };
+    if (
+      (isNullish &&
+        (childHasOperator(
+          node.left,
+          kind =>
+            kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+            kind === ts.SyntaxKind.BarBarToken,
+        ) ||
+          childHasOperator(
+            node.right,
+            kind =>
+              kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+              kind === ts.SyntaxKind.BarBarToken,
+          ))) ||
+      (isLogical &&
+        (childHasOperator(
+          node.left,
+          kind => kind === ts.SyntaxKind.QuestionQuestionToken,
+        ) ||
+          childHasOperator(
+            node.right,
+            kind => kind === ts.SyntaxKind.QuestionQuestionToken,
+          )))
+    ) {
+      return true;
+    }
+  }
+  return (
+    ts.forEachChild(node, child =>
+      mixesNullishAndLogicalWithoutParentheses(child) ? true : undefined,
+    ) === true
+  );
+}
+
+function semanticNodesEqual(
+  left: ts.Node,
+  leftSourceFile: ts.SourceFile,
+  right: ts.Node,
+  rightSourceFile: ts.SourceFile,
+): boolean {
+  if (ts.isParenthesizedExpression(left)) {
+    return semanticNodesEqual(
+      left.expression,
+      leftSourceFile,
+      right,
+      rightSourceFile,
+    );
+  }
+  if (ts.isParenthesizedExpression(right)) {
+    return semanticNodesEqual(
+      left,
+      leftSourceFile,
+      right.expression,
+      rightSourceFile,
+    );
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+
+  const semanticChildren = (node: ts.Node, sourceFile: ts.SourceFile) =>
+    node
+      .getChildren(sourceFile)
+      .filter(
+        child =>
+          !ts.isArrowFunction(node) ||
+          (child.kind !== ts.SyntaxKind.OpenParenToken &&
+            child.kind !== ts.SyntaxKind.CloseParenToken),
+      );
+  const leftChildren = semanticChildren(left, leftSourceFile);
+  const rightChildren = semanticChildren(right, rightSourceFile);
+  if (leftChildren.length !== rightChildren.length) {
+    return false;
+  }
+  if (leftChildren.length === 0) {
+    return left.getText(leftSourceFile) === right.getText(rightSourceFile);
+  }
+  return leftChildren.every((leftChild, index) =>
+    semanticNodesEqual(
+      leftChild,
+      leftSourceFile,
+      rightChildren[index],
+      rightSourceFile,
+    ),
+  );
+}
+
+function collectParenthesizedSpans(
+  expression: ts.Expression,
+  sourceFile: ts.SourceFile,
+): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const offset = EXPRESSION_WRAPPER_PREFIX.length;
+  const visit = (node: ts.Node): void => {
+    if (ts.isParenthesizedExpression(node)) {
+      spans.push([node.getStart(sourceFile) - offset, node.getEnd() - offset]);
+    } else if (
+      ts.isArrowFunction(node) &&
+      node.parameters.length === 1 &&
+      ts.isIdentifier(node.parameters[0].name) &&
+      !node.parameters[0].dotDotDotToken &&
+      !node.parameters[0].initializer &&
+      !node.parameters[0].type
+    ) {
+      const children = node.getChildren(sourceFile);
+      const open = children.find(
+        child => child.kind === ts.SyntaxKind.OpenParenToken,
+      );
+      const close = children.find(
+        child => child.kind === ts.SyntaxKind.CloseParenToken,
+      );
+      if (open && close) {
+        spans.push([
+          open.getStart(sourceFile) - offset,
+          close.getEnd() - offset,
+        ]);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(expression);
+  return spans;
+}
+
+function removeRedundantParentheses(source: string): string {
+  let output = source;
+
+  while (true) {
+    const parsed = parseExpressionForParentheses(output);
+    if (!parsed) return output;
+    const spans = collectParenthesizedSpans(
+      parsed.expression,
+      parsed.sourceFile,
+    ).sort(([startA, endA], [startB, endB]) => {
+      return endA - startA - (endB - startB);
+    });
+
+    let simplified = false;
+    for (const [start, end] of spans) {
+      if (
+        start < 0 ||
+        end > output.length ||
+        output[start] !== '(' ||
+        output[end - 1] !== ')'
+      ) {
+        continue;
+      }
+      const candidate =
+        output.slice(0, start) +
+        output.slice(start + 1, end - 1) +
+        output.slice(end);
+      try {
+        validatedTokens(candidate);
+      } catch {
+        continue;
+      }
+      const candidateParsed = parseExpressionForParentheses(candidate);
+      if (
+        candidateParsed &&
+        !mixesNullishAndLogicalWithoutParentheses(candidateParsed.expression) &&
+        semanticNodesEqual(
+          parsed.expression,
+          parsed.sourceFile,
+          candidateParsed.expression,
+          candidateParsed.sourceFile,
+        )
+      ) {
+        output = candidate;
+        simplified = true;
+        break;
+      }
+    }
+    if (!simplified) return output;
+  }
 }
 
 function isUnarySymbolOperator(
@@ -233,7 +464,9 @@ export function rewriteContextExpression(
 ): string {
   const quote = options?.quote ?? 'double';
   const tokens = rewriteContext(validatedTokens(source), contextName, options);
-  const expressionSource = renderTokens(tokens, quote);
+  const expressionSource = removeRedundantParentheses(
+    renderTokens(tokens, quote),
+  );
   validatedTokens(expressionSource);
   return expressionSource;
 }

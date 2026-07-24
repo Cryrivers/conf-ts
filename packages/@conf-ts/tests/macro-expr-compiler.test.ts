@@ -129,9 +129,34 @@ describe('Expr Macro', () => {
     );
     expect(
       rewriteContextExpression('(!ctx.a || ~ctx.b) ? -ctx.c : +ctx.d', 'ctx'),
-    ).toBe('(!a || ~b) ? -c : +d');
+    ).toBe('!a || ~b ? -c : +d');
     expect(rewriteContextExpression('- -ctx.a + + +ctx.b', 'ctx')).toBe(
       '- -a + + +b',
+    );
+  });
+
+  it('should remove only semantically redundant grouping parentheses', () => {
+    expect(rewriteContextExpression('(((ctx.a)))', 'ctx')).toBe('a');
+    expect(rewriteContextExpression('(ctx.a * ctx.b) + ctx.c', 'ctx')).toBe(
+      'a * b + c',
+    );
+    expect(rewriteContextExpression('ctx.a + (ctx.b * ctx.c)', 'ctx')).toBe(
+      'a + b * c',
+    );
+    expect(rewriteContextExpression('(ctx.a + ctx.b) * ctx.c', 'ctx')).toBe(
+      '(a + b) * c',
+    );
+    expect(rewriteContextExpression('ctx.a - (ctx.b - ctx.c)', 'ctx')).toBe(
+      'a - (b - c)',
+    );
+    expect(rewriteContextExpression('(ctx.a || ctx.b) && ctx.c', 'ctx')).toBe(
+      '(a || b) && c',
+    );
+    expect(rewriteContextExpression('(ctx.a ?? ctx.b) || ctx.c', 'ctx')).toBe(
+      '(a ?? b) || c',
+    );
+    expect(rewriteContextExpression('(-ctx.a) ** ctx.b', 'ctx')).toBe(
+      '(-a) ** b',
     );
   });
 
