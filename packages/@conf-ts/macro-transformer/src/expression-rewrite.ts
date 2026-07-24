@@ -69,13 +69,17 @@ export function encodeStringLiteral(
 
 function rewriteContext(
   tokens: Token[],
-  contextName: string,
+  contextName: string | undefined,
   options?: RewriteContextOptions,
 ): OutputToken[] {
   const output: OutputToken[] = [];
   for (let i = 0; i < tokens.length && tokens[i].kind !== 'eof';) {
     const token = tokens[i];
-    if (token.kind === 'identifier' && token.value === contextName) {
+    if (
+      contextName !== undefined &&
+      token.kind === 'identifier' &&
+      token.value === contextName
+    ) {
       const [property, nextIndex] = contextProperty(tokens, i);
       output.push({ kind: 'identifier', value: property });
       i = nextIndex;
@@ -459,7 +463,7 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
 
 export function rewriteContextExpression(
   source: string,
-  contextName: string,
+  contextName: string | undefined,
   options?: RewriteContextOptions,
 ): string {
   const quote = options?.quote ?? 'double';

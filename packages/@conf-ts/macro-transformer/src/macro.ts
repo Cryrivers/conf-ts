@@ -145,8 +145,10 @@ export function isFatalMacroTransformError(
 type ExprReplacement = [start: number, end: number, value: string];
 
 type ExprReplacementContext = {
-  paramName: string;
-  paramIdentifier: ts.Identifier;
+  // Absent when the expr callback takes no context parameter, e.g.
+  // `expr(() => true)`.
+  paramName: string | undefined;
+  paramIdentifier: ts.Identifier | undefined;
   bodyStart: number;
   replacements: ExprReplacement[];
   sourceFile: ts.SourceFile;
@@ -168,7 +170,7 @@ type ExprReplacementContext = {
 };
 
 const EXPR_CALLBACK_ERROR =
-  'expr callback must be an arrow function with a single identifier parameter and expression body';
+  'expr callback must be an arrow function with zero or one identifier parameter and expression body';
 
 function getCalleeName(
   expression: ts.CallExpression,
@@ -507,8 +509,8 @@ function getExprCallbackDetails(
   callbackExpression: ts.Expression,
   sourceFile: ts.SourceFile,
 ): {
-  paramName: string;
-  paramIdentifier: ts.Identifier;
+  paramName: string | undefined;
+  paramIdentifier: ts.Identifier | undefined;
   bodyExpression: ts.Expression;
 } {
   if (
@@ -521,14 +523,29 @@ function getExprCallbackDetails(
     );
   }
 
-  if (callbackExpression.parameters.length !== 1) {
+  if (callbackExpression.parameters.length > 1) {
     throw new ConfTSError(
       EXPR_CALLBACK_ERROR,
       sourceLocation(sourceFile, callbackExpression),
     );
   }
 
+  if (ts.isBlock(callbackExpression.body)) {
+    throw new ConfTSError(
+      EXPR_CALLBACK_ERROR,
+      sourceLocation(sourceFile, callbackExpression.body),
+    );
+  }
+
   const param = callbackExpression.parameters[0];
+  if (!param) {
+    return {
+      paramName: undefined,
+      paramIdentifier: undefined,
+      bodyExpression: callbackExpression.body,
+    };
+  }
+
   if (
     !ts.isIdentifier(param.name) ||
     !!param.dotDotDotToken ||
@@ -537,13 +554,6 @@ function getExprCallbackDetails(
     throw new ConfTSError(
       EXPR_CALLBACK_ERROR,
       sourceLocation(sourceFile, param),
-    );
-  }
-
-  if (ts.isBlock(callbackExpression.body)) {
-    throw new ConfTSError(
-      EXPR_CALLBACK_ERROR,
-      sourceLocation(sourceFile, callbackExpression.body),
     );
   }
 
@@ -1025,23 +1035,34 @@ function nestedExprReplacement(
   }
   const calleeText = node.expression.getText(context.sourceFile);
 
-  const argument = node.arguments[0];
-  const argumentSymbol =
-    argument && ts.isIdentifier(argument)
-      ? context.typeChecker.getSymbolAtLocation(argument)
-      : undefined;
-  const parameterSymbol = context.typeChecker.getSymbolAtLocation(
-    context.paramIdentifier,
-  );
-  const isCurrentContext =
-    node.arguments.length === 1 &&
-    !!argument &&
-    ts.isIdentifier(argument) &&
-    argument.text === context.paramName &&
-    (!argumentSymbol || !parameterSymbol || argumentSymbol === parameterSymbol);
+  let isCurrentContext: boolean;
+  if (context.paramName === undefined) {
+    // No context parameter to forward, so the only valid inlineable shape
+    // is another context-less expr value called with no arguments.
+    isCurrentContext = node.arguments.length === 0;
+  } else {
+    const argument = node.arguments[0];
+    const argumentSymbol =
+      argument && ts.isIdentifier(argument)
+        ? context.typeChecker.getSymbolAtLocation(argument)
+        : undefined;
+    const parameterSymbol =
+      context.paramIdentifier &&
+      context.typeChecker.getSymbolAtLocation(context.paramIdentifier);
+    isCurrentContext =
+      node.arguments.length === 1 &&
+      !!argument &&
+      ts.isIdentifier(argument) &&
+      argument.text === context.paramName &&
+      (!argumentSymbol ||
+        !parameterSymbol ||
+        argumentSymbol === parameterSymbol);
+  }
   if (!isCurrentContext) {
     throw new FatalMacroTransformError(
-      `Nested Expr '${calleeText}' must be called with exactly one argument: the current expr context parameter '${context.paramName}'.`,
+      context.paramName === undefined
+        ? `Nested Expr '${calleeText}' must be called with no arguments because the enclosing expr callback doesn't take a context parameter.`
+        : `Nested Expr '${calleeText}' must be called with exactly one argument: the current expr context parameter '${context.paramName}'.`,
       sourceLocation(context.sourceFile, node),
     );
   }
@@ -1066,7 +1087,13 @@ function nestedExprReplacement(
   return `(${value})`;
 }
 
-function isContextAccess(node: ts.Expression, paramName: string): boolean {
+function isContextAccess(
+  node: ts.Expression,
+  paramName: string | undefined,
+): boolean {
+  if (paramName === undefined) {
+    return false;
+  }
   const expression = unwrapExprSyntax(node);
   if (ts.isIdentifier(expression)) {
     return expression.text === paramName;
@@ -1174,10 +1201,10 @@ type NestedCallbackParamInfo = {
 
 function assertNotShadowingContext(
   identifier: ts.Identifier,
-  contextParamName: string,
+  contextParamName: string | undefined,
   sourceFile: ts.SourceFile,
 ): void {
-  if (identifier.text === contextParamName) {
+  if (contextParamName !== undefined && identifier.text === contextParamName) {
     throw new ConfTSError(
       `expr callback: a nested function's parameter cannot shadow the context parameter '${contextParamName}'`,
       sourceLocation(sourceFile, identifier),
@@ -1195,7 +1222,7 @@ function assertNotShadowingContext(
 // by the object- and array-pattern branches below.
 function collectPatternElementInfo(
   element: ts.BindingElement,
-  contextParamName: string,
+  contextParamName: string | undefined,
   sourceFile: ts.SourceFile,
   info: NestedCallbackParamInfo,
 ): void {
@@ -1213,7 +1240,7 @@ function collectPatternElementInfo(
 
 function collectBindingNameInfo(
   name: ts.BindingName,
-  contextParamName: string,
+  contextParamName: string | undefined,
   sourceFile: ts.SourceFile,
   allowPattern: boolean,
   info: NestedCallbackParamInfo,
@@ -1268,7 +1295,7 @@ function collectBindingNameInfo(
 // parameter surfaces as an ordinary "can't resolve" compile error.
 function collectNestedCallbackParams(
   fn: ts.ArrowFunction | ts.FunctionExpression,
-  contextParamName: string,
+  contextParamName: string | undefined,
   sourceFile: ts.SourceFile,
 ): NestedCallbackParamInfo {
   const info: NestedCallbackParamInfo = { names: [], defaultExpressions: [] };
@@ -1743,8 +1770,8 @@ function collectCommentErasures(
 }
 
 function compileExprBody(params: {
-  paramName: string;
-  paramIdentifier: ts.Identifier;
+  paramName: string | undefined;
+  paramIdentifier: ts.Identifier | undefined;
   bodyExpression: ts.Expression;
   sourceFile: ts.SourceFile;
   typeChecker: ts.TypeChecker;

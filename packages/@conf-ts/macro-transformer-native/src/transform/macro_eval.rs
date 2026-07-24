@@ -580,8 +580,7 @@ fn get_arrow_body_expr<'a>(
   }
 }
 
-const EXPR_CALLBACK_ERROR: &str =
-  "expr callback must be an arrow function with a single identifier parameter and expression body";
+const EXPR_CALLBACK_ERROR: &str = "expr callback must be an arrow function with zero or one identifier parameter and expression body";
 
 type ExprReplacement = (usize, usize, String);
 
@@ -1616,24 +1615,35 @@ fn collect_const_replacements(
 
     Expression::CallExpression(call) => {
       if super::expression_originates_from_expr(&call.callee, file_ctx, ctx) {
-        let valid_argument = call.arguments.len() == 1
-          && matches!(
-            call.arguments[0].as_expression(),
-            Some(Expression::Identifier(identifier))
-              if identifier.name.as_str() == param_name
-          );
+        let has_context = !param_name.is_empty();
+        let valid_argument = if has_context {
+          call.arguments.len() == 1
+            && matches!(
+              call.arguments[0].as_expression(),
+              Some(Expression::Identifier(identifier))
+                if identifier.name.as_str() == param_name
+            )
+        } else {
+          // No context parameter to forward, so the only valid inlineable
+          // shape is another context-less expr value called with no
+          // arguments.
+          call.arguments.is_empty()
+        };
         if !valid_argument {
           let callee_name = compiler_native::eval::call_expr_callee_name(call);
           let (line, character) = get_location(&file_ctx.line_index, call.span.start);
-          let error = ConfTSError::new(
+          let message = if has_context {
             format!(
               "Nested Expr '{}' must be called with exactly one argument: the current expr context parameter '{}'.",
               callee_name, param_name
-            ),
-            &file_ctx.file_path,
-            line,
-            character,
-          );
+            )
+          } else {
+            format!(
+              "Nested Expr '{}' must be called with no arguments because the enclosing expr callback doesn't take a context parameter.",
+              callee_name
+            )
+          };
+          let error = ConfTSError::new(message, &file_ctx.file_path, line, character);
           super::record_fatal_transform_error(ctx, error.clone());
           return Err(error);
         }
@@ -3235,7 +3245,7 @@ fn evaluate_expr(
     }
   };
 
-  if arrow.params.items.len() != 1 || arrow.params.rest.is_some() {
+  if arrow.params.items.len() > 1 || arrow.params.rest.is_some() {
     let (line, character) = get_location(&file_ctx.line_index, callback.span().start);
     return Err(ConfTSError::new(
       EXPR_CALLBACK_ERROR,
@@ -3244,19 +3254,6 @@ fn evaluate_expr(
       character,
     ));
   }
-
-  let param_name = match &arrow.params.items[0].pattern {
-    BindingPattern::BindingIdentifier(ident) => ident.name.as_str().to_string(),
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, arrow.params.span.start);
-      return Err(ConfTSError::new(
-        EXPR_CALLBACK_ERROR,
-        &file_ctx.file_path,
-        line,
-        character,
-      ));
-    }
-  };
 
   if !arrow.expression {
     let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
@@ -3267,6 +3264,26 @@ fn evaluate_expr(
       character,
     ));
   }
+
+  // Absent (empty string) when the expr callback takes no context
+  // parameter, e.g. `expr(() => true)`. An empty string can never match a
+  // real JS/TS identifier, so it safely acts as a "no context" sentinel
+  // everywhere else param_name is compared against identifier text.
+  let param_name = match arrow.params.items.first() {
+    None => String::new(),
+    Some(item) => match &item.pattern {
+      BindingPattern::BindingIdentifier(ident) => ident.name.as_str().to_string(),
+      _ => {
+        let (line, character) = get_location(&file_ctx.line_index, arrow.params.span.start);
+        return Err(ConfTSError::new(
+          EXPR_CALLBACK_ERROR,
+          &file_ctx.file_path,
+          line,
+          character,
+        ));
+      }
+    },
+  };
 
   let body_expr = match arrow.body.statements.first() {
     Some(Statement::ExpressionStatement(expr_stmt)) => &expr_stmt.expression,

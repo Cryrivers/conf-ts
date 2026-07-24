@@ -447,6 +447,41 @@ describe('Expr Macro', () => {
     ).toBe(true);
   });
 
+  it('should support expr callbacks that take no context parameter', () => {
+    assertMacroOutput('expr-no-context');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-no-context.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    expect(expression(output.literal)(undefined)).toBe(true);
+    expect(expression(output.computed)(undefined)).toBe(3);
+  });
+
+  it('should compose a context-less Expr value into another context-less expr callback', () => {
+    assertMacroOutput('expr-no-context-compose');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(
+        __dirname,
+        'fixtures/macros/expr-no-context-compose.conf.ts',
+      ),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    expect(expression(output.combined)(undefined)).toBe(true);
+  });
+
+  it('should reject a nested Expr composed into a context-less expr callback with an argument', () => {
+    assertMacroError(
+      'expr-invalid-no-context-argument',
+      "Nested Expr 'always' must be called with no arguments because the enclosing expr callback doesn't take a context parameter.",
+    );
+  });
+
   it('should fold a call whose argument only coincidentally shares text with the context parameter', () => {
     const result = compileJsWithMacro(
       path.resolve(__dirname, 'fixtures/macros/expr-macro.conf.ts'),
