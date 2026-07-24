@@ -1,4 +1,9 @@
-import { expr, exprTemplate } from '@conf-ts/macro';
+import {
+  expr,
+  exprTemplate,
+  String,
+  String as macroString,
+} from '@conf-ts/macro';
 import * as macros from '@conf-ts/macro';
 
 type Context = {
@@ -48,6 +53,24 @@ const destructured = exprTemplate<
 const above = exprTemplate<Context, boolean, [number]>(
   (ctx, minimum) => ctx.a > minimum,
 );
+const directStaticString = exprTemplate<Context, string, [number]>(
+  (ctx, value) => String(value),
+);
+const aliasStaticString = exprTemplate<Context, string, [number]>(
+  (ctx, value) => macroString(value),
+);
+const namespaceStaticString = exprTemplate<Context, string, [number]>(
+  (ctx, value) => macros.String(value),
+);
+const directRuntimeString = exprTemplate<Context, string, []>(ctx =>
+  String(ctx.a),
+);
+const aliasRuntimeString = exprTemplate<Context, string, []>(ctx =>
+  macroString(ctx.a),
+);
+const namespaceRuntimeString = exprTemplate<Context, string, []>(ctx =>
+  macros.String(ctx.a),
+);
 const aboveTen = above(10);
 const spreadArgs = [2, 5, 3] as const;
 
@@ -62,4 +85,10 @@ export default {
     ...spreadArgs,
   ),
   composition: expr<Context, boolean>(ctx => aboveTen(ctx) && ctx.enabled),
+  directStaticString: directStaticString(42),
+  aliasStaticString: aliasStaticString(42),
+  namespaceStaticString: namespaceStaticString(42),
+  directRuntimeString: directRuntimeString(),
+  aliasRuntimeString: aliasRuntimeString(),
+  namespaceRuntimeString: namespaceRuntimeString(),
 };

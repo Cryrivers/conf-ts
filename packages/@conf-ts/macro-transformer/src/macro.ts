@@ -17,17 +17,16 @@ const EXPR_INLINEABLE_MACROS = new Set<string>(
   MACRO_FUNCTION_NAMES.filter(name => name !== 'expr'),
 );
 
-function isInlineableMacroCall(
+function inlineableMacroName(
   node: ts.CallExpression,
   context: ExprReplacementContext,
-): boolean {
-  const callee = node.expression;
-  if (!ts.isIdentifier(callee) || !EXPR_INLINEABLE_MACROS.has(callee.text)) {
-    return false;
+): string | undefined {
+  for (const macroName of EXPR_INLINEABLE_MACROS) {
+    if (isImportedMacroCall(node, context.typeChecker, macroName)) {
+      return macroName;
+    }
   }
-  const allowedMacroImports =
-    context.macroImportsMap[context.sourceFile.fileName] || new Set();
-  return allowedMacroImports.has(callee.text);
+  return undefined;
 }
 
 // Type-casting macros have a direct runtime equivalent in the expr DSL, so
@@ -1504,14 +1503,17 @@ function collectConstReplacements(
     }
   }
 
-  if (ts.isCallExpression(node) && isInlineableMacroCall(node, context)) {
-    const calleeName = (node.expression as ts.Identifier).text;
+  const inlineableMacro = ts.isCallExpression(node)
+    ? inlineableMacroName(node, context)
+    : undefined;
+  if (ts.isCallExpression(node) && inlineableMacro) {
     if (
-      EXPR_RUNTIME_FALLBACK_MACROS.has(calleeName) &&
+      EXPR_RUNTIME_FALLBACK_MACROS.has(inlineableMacro) &&
       node.arguments.length === 1 &&
       referencesUnfoldableName(node, context)
     ) {
       node.arguments.forEach(arg => collectConstReplacements(arg, context));
+      addNodeReplacement(node.expression, inlineableMacro, context);
       return;
     }
     addNodeReplacement(node, evaluateNodeLiteral(node, context), context);

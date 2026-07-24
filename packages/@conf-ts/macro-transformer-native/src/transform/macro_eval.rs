@@ -1565,6 +1565,12 @@ fn collect_const_replacements(
               )?;
             }
           }
+          let callee_span = call.callee.span();
+          replacements.push((
+            callee_span.start as usize - body_start as usize,
+            callee_span.end as usize - body_start as usize,
+            callee_name,
+          ));
           return Ok(());
         }
         let value = evaluate_expr_constant(expr, file_ctx, ctx, options)?;

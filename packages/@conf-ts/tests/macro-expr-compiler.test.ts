@@ -18,7 +18,7 @@ const unsupportedExprError = {
 };
 
 describe('Expr Macro', () => {
-  it('should instantiate exprTemplate with static arguments', () => {
+  it('should instantiate exprTemplate with static and runtime macro expressions', () => {
     assertMacroOutput('expr-template');
 
     const { output: result } = compileJsWithMacro(
@@ -37,6 +37,24 @@ describe('Expr Macro', () => {
     });
     expect(expression(output.composition)({ a: 11, enabled: true })).toBe(true);
     expect(expression(output.composition)({ a: 9, enabled: true })).toBe(false);
+    expect(expression(output.directStaticString)({ a: 7, enabled: true })).toBe(
+      '42',
+    );
+    expect(expression(output.aliasStaticString)({ a: 7, enabled: true })).toBe(
+      '42',
+    );
+    expect(
+      expression(output.namespaceStaticString)({ a: 7, enabled: true }),
+    ).toBe('42');
+    expect(
+      expression(output.directRuntimeString)({ a: 7, enabled: true }),
+    ).toBe('7');
+    expect(expression(output.aliasRuntimeString)({ a: 7, enabled: true })).toBe(
+      '7',
+    );
+    expect(
+      expression(output.namespaceRuntimeString)({ a: 7, enabled: true }),
+    ).toBe('7');
   });
 
   it('should reject an invalid exprTemplate context parameter', () => {
