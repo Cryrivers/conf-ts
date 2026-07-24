@@ -7,13 +7,13 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 
-use crate::error::ConfTSError;
+use crate::error::{ConfTSError, SourceLocation};
 use crate::types::{
   CompileOptions, FileContext, LineIndex, TransformState, Value, normalize_number_raw,
 };
@@ -110,8 +110,141 @@ fn enum_object_from_decl(
   Value::Object(map)
 }
 
+#[derive(Clone)]
+struct EvaluationFrame {
+  file_path: String,
+  offset: u32,
+}
+
+fn source_location(file_ctx: &FileContext, offset: u32) -> SourceLocation {
+  let (line, character) = get_location(&file_ctx.line_index, offset);
+  SourceLocation::new(&file_ctx.file_path, line, character).with_source(file_ctx.parsed.source())
+}
+
+fn add_reference_path(
+  error: &mut ConfTSError,
+  caller: &EvaluationFrame,
+  target_file: &str,
+  ctx: &EvalContext,
+) {
+  if caller.file_path == target_file {
+    return;
+  }
+  let Some(caller_ctx) = ctx.file_contexts.get(&caller.file_path) else {
+    return;
+  };
+  let caller_location = source_location(caller_ctx, caller.offset);
+  let mut queue = VecDeque::from([caller.file_path.clone()]);
+  let mut visited = HashSet::from([caller.file_path.clone()]);
+  let mut predecessors: HashMap<String, (String, SourceLocation)> = HashMap::new();
+
+  while let Some(current_file) = queue.pop_front() {
+    if current_file == target_file {
+      break;
+    }
+    let Some(current_ctx) = ctx.file_contexts.get(&current_file) else {
+      continue;
+    };
+    for import in current_ctx.imports.values() {
+      let Some(resolved) = ctx
+        .resolver
+        .as_ref()
+        .and_then(|resolver| resolver(&import.source, &current_file))
+      else {
+        continue;
+      };
+      if !ctx.file_contexts.contains_key(&resolved) || !visited.insert(resolved.clone()) {
+        continue;
+      }
+      predecessors.insert(
+        resolved.clone(),
+        (
+          current_file.clone(),
+          source_location(current_ctx, import.span_start),
+        ),
+      );
+      queue.push_back(resolved);
+    }
+  }
+
+  let mut locations = Vec::new();
+  let mut current = target_file.to_string();
+  while current != caller.file_path {
+    let Some((from, location)) = predecessors.get(&current) else {
+      error.add_reference(caller_location);
+      return;
+    };
+    locations.push(location.clone());
+    current = from.clone();
+  }
+  if let Some(outermost) = locations.last_mut() {
+    *outermost = caller_location;
+  } else {
+    locations.push(caller_location);
+  }
+  for location in locations {
+    error.add_reference(location);
+  }
+}
+
+/// Add a cross-file import/re-export path to an error raised by an extension evaluator.
+pub fn add_error_reference_path(
+  error: &mut ConfTSError,
+  source: &FileContext,
+  offset: u32,
+  target_file: &str,
+  ctx: &EvalContext,
+) {
+  add_reference_path(
+    error,
+    &EvaluationFrame {
+      file_path: source.file_path.clone(),
+      offset,
+    },
+    target_file,
+    ctx,
+  );
+}
+
 /// Evaluate an expression node to a Value.
 pub fn evaluate(
+  expr: &Expression,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Value, ConfTSError> {
+  let caller = ctx.evaluation_stack.last().cloned();
+  ctx.evaluation_stack.push(EvaluationFrame {
+    file_path: file_ctx.file_path.clone(),
+    offset: expr.span().start,
+  });
+  let mut result = evaluate_inner(expr, file_ctx, ctx, local_context, options);
+  ctx.evaluation_stack.pop();
+  if let Err(error) = &mut result {
+    error.add_source(&file_ctx.file_path, file_ctx.parsed.source());
+    if error.location.file != file_ctx.file_path
+      && ctx.file_contexts.contains_key(&error.location.file)
+    {
+      add_reference_path(
+        error,
+        &EvaluationFrame {
+          file_path: file_ctx.file_path.clone(),
+          offset: expr.span().start,
+        },
+        &error.location.file.clone(),
+        ctx,
+      );
+    } else if let Some(caller) = caller
+      && caller.file_path != file_ctx.file_path
+    {
+      add_reference_path(error, &caller, &file_ctx.file_path, ctx);
+    }
+  }
+  result
+}
+
+fn evaluate_inner(
   expr: &Expression,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
@@ -904,7 +1037,6 @@ pub fn resolve_identifier(
     return Ok(val);
   }
 
-  let mut import_debug = "none".to_string();
   if let Some(import_info) = file_ctx.imports.get(name) {
     let original_name = import_info.original_name.as_deref().unwrap_or(name);
     let resolved_path = if let Some(ref resolver) = ctx.resolver {
@@ -912,11 +1044,8 @@ pub fn resolve_identifier(
     } else {
       None
     };
-    let mut import_context_loaded = false;
-
-    if let Some(resolved_path) = resolved_path.clone() {
+    if let Some(resolved_path) = resolved_path {
       if let Some(imported_ctx) = ctx.file_contexts.get(&resolved_path).cloned() {
-        import_context_loaded = true;
         if original_name == "*" {
           return Ok(Value::Object(exported_values(&imported_ctx, ctx, options)?));
         } else if let Some(val) = resolve_in_file(original_name, &imported_ctx, ctx, None, options)?
@@ -925,22 +1054,7 @@ pub fn resolve_identifier(
         }
       }
     }
-
-    import_debug = format!(
-      "source={}, original={}, resolved={}, context_loaded={}",
-      import_info.source,
-      original_name,
-      resolved_path.unwrap_or_else(|| "<unresolved>".to_string()),
-      import_context_loaded
-    );
   }
-
-  let enum_in_file = ctx
-    .enum_map
-    .get(&file_ctx.file_path)
-    .map(|map| map.len())
-    .unwrap_or(0);
-  let enum_total: usize = ctx.enum_map.values().map(|map| map.len()).sum();
 
   for (file_path, file_enums) in &ctx.enum_map {
     for (enum_key, val) in file_enums {
@@ -951,22 +1065,10 @@ pub fn resolve_identifier(
     }
   }
 
-  let local_keys = local_context
-    .map(|ctx| {
-      let mut keys: Vec<String> = ctx.keys().cloned().collect();
-      keys.sort();
-      if keys.is_empty() {
-        "none".to_string()
-      } else {
-        keys.join(", ")
-      }
-    })
-    .unwrap_or_else(|| "none".to_string());
-
   Err(ConfTSError::new(
     format!(
-      "Unsupported variable type for identifier: {}. Debug: local_context_keys={}, import={}, enum_candidates={}/{}",
-      name, local_keys, import_debug, enum_in_file, enum_total
+      "Cannot resolve identifier \"{}\" at build time. Unsupported variable type for identifier: {}.",
+      name, name
     ),
     &file_ctx.file_path,
     line,
@@ -1492,6 +1594,7 @@ pub fn collect_macro_imports(program: &Program, _file_path: &str) -> HashSet<Str
 pub struct ImportInfo {
   pub source: String,
   pub original_name: Option<String>,
+  pub span_start: u32,
 }
 
 /// Collect all imports from a program.
@@ -1513,6 +1616,7 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
                   ImportInfo {
                     source: source.clone(),
                     original_name,
+                    span_start: import_decl.source.span.start,
                   },
                 );
               }
@@ -1522,6 +1626,7 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
                   ImportInfo {
                     source: source.clone(),
                     original_name: Some("default".to_string()),
+                    span_start: import_decl.source.span.start,
                   },
                 );
               }
@@ -1531,6 +1636,7 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
                   ImportInfo {
                     source: source.clone(),
                     original_name: Some("*".to_string()),
+                    span_start: import_decl.source.span.start,
                   },
                 );
               }
@@ -1545,6 +1651,7 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
             ImportInfo {
               source: src.value.as_str().to_string(),
               original_name: None,
+              span_start: src.span.start,
             },
           );
           export_source_index += 1;
@@ -1556,6 +1663,7 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
           ImportInfo {
             source: export_all.source.value.as_str().to_string(),
             original_name: None,
+            span_start: export_all.source.span.start,
           },
         );
         export_source_index += 1;
@@ -1573,6 +1681,7 @@ pub struct EvalContext {
   pub evaluated_files: HashSet<String>,
   pub file_contexts: HashMap<String, FileContext>,
   pub resolver: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
+  evaluation_stack: Vec<EvaluationFrame>,
   /// Set only by a macro pre-evaluation pass (see @conf-ts/macro-transformer-native)
   /// to intercept call-expression evaluation instead of the default
   /// "only allowed in macro mode" error. compiler-native's own compile
@@ -1665,6 +1774,7 @@ impl EvalContext {
       evaluated_files: HashSet::new(),
       file_contexts: HashMap::new(),
       resolver: None,
+      evaluation_stack: Vec::new(),
       macro_evaluator: None,
       transform_state: None,
       extension: None,

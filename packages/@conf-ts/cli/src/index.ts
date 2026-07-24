@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
-import { compile } from '@conf-ts/compiler';
+import { compile, ConfTSError } from '@conf-ts/compiler';
 import {
   createMacroProjectSnapshot,
   transformProject,
@@ -85,7 +85,11 @@ program
       }
       console.log(result);
     } catch (error: any) {
-      console.error(`Error: ${error.message}`);
+      console.error(
+        error instanceof ConfTSError
+          ? error.toString()
+          : `Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exit(1);
     }
   });

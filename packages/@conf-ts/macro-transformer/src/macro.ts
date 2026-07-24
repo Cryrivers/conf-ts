@@ -1,4 +1,9 @@
-import { ConfTSError, FormattedNumber } from '@conf-ts/compiler';
+import {
+  ConfTSError,
+  FormattedNumber,
+  getSourceLocation,
+  type SourceLocation,
+} from '@conf-ts/compiler';
 import { evaluate } from '@conf-ts/compiler/internal';
 import ts from 'typescript';
 
@@ -16,6 +21,23 @@ import type { MacroEvaluationOptions, QuoteStyle } from './types';
 const EXPR_INLINEABLE_MACROS = new Set<string>(
   MACRO_FUNCTION_NAMES.filter(name => name !== 'expr'),
 );
+
+function sourceLocation(
+  sourceFile: ts.SourceFile,
+  nodeOrPosition: ts.Node | number,
+): SourceLocation {
+  const offset =
+    typeof nodeOrPosition === 'number'
+      ? nodeOrPosition
+      : nodeOrPosition.getStart(sourceFile);
+  const position = ts.getLineAndCharacterOfPosition(sourceFile, offset);
+  return getSourceLocation(
+    sourceFile.fileName,
+    sourceFile.text,
+    position.line,
+    position.character,
+  );
+}
 
 function isInlineableMacroCall(
   node: ts.CallExpression,
@@ -164,10 +186,7 @@ function assertMacroImported(
 ) {
   const allowedMacroImports = macroImportsMap[sourceFile.fileName] || new Set();
   if (!allowedMacroImports.has(callee)) {
-    throw new ConfTSError(errorMessage, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-    });
+    throw new ConfTSError(errorMessage, sourceLocation(sourceFile, expression));
   }
 }
 
@@ -372,10 +391,10 @@ function createArrayCallbackChecker(params: {
   function checkNode(node: ts.Node): void {
     if (ts.isIdentifier(node)) {
       if (!isAllowedIdentifier(node)) {
-        throw new ConfTSError(params.errorMessage, {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
-        });
+        throw new ConfTSError(
+          params.errorMessage,
+          sourceLocation(sourceFile, node),
+        );
       }
     }
     ts.forEachChild(node, checkNode);
@@ -398,10 +417,10 @@ function extractSingleReturnExpression(
       !ts.isReturnStatement(stmts[0]) ||
       !stmts[0].expression
     ) {
-      throw new ConfTSError(errorMessage, {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, errorNode.getStart()),
-      });
+      throw new ConfTSError(
+        errorMessage,
+        sourceLocation(sourceFile, errorNode),
+      );
     }
     return (stmts[0] as ts.ReturnStatement).expression!;
   }
@@ -447,22 +466,16 @@ function getArrayCallbackDetails(params: {
     identifierErrorMessage,
   } = params;
   if (!ts.isArrowFunction(callbackExpression)) {
-    throw new ConfTSError(arrowErrorMessage, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(
-        sourceFile,
-        callbackExpression.getStart(),
-      ),
-    });
+    throw new ConfTSError(
+      arrowErrorMessage,
+      sourceLocation(sourceFile, callbackExpression),
+    );
   }
   if (callbackExpression.parameters.length !== 1) {
-    throw new ConfTSError(paramErrorMessage, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(
-        sourceFile,
-        callbackExpression.getStart(),
-      ),
-    });
+    throw new ConfTSError(
+      paramErrorMessage,
+      sourceLocation(sourceFile, callbackExpression),
+    );
   }
   const paramName = callbackExpression.parameters[0].name.getText(sourceFile);
   const checkNode = createArrayCallbackChecker({
@@ -502,23 +515,17 @@ function getExprCallbackDetails(
     !ts.isArrowFunction(callbackExpression) ||
     isAsyncArrowFunction(callbackExpression)
   ) {
-    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(
-        sourceFile,
-        callbackExpression.getStart(),
-      ),
-    });
+    throw new ConfTSError(
+      EXPR_CALLBACK_ERROR,
+      sourceLocation(sourceFile, callbackExpression),
+    );
   }
 
   if (callbackExpression.parameters.length !== 1) {
-    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(
-        sourceFile,
-        callbackExpression.getStart(),
-      ),
-    });
+    throw new ConfTSError(
+      EXPR_CALLBACK_ERROR,
+      sourceLocation(sourceFile, callbackExpression),
+    );
   }
 
   const param = callbackExpression.parameters[0];
@@ -527,20 +534,17 @@ function getExprCallbackDetails(
     !!param.dotDotDotToken ||
     !!param.initializer
   ) {
-    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, param.getStart()),
-    });
+    throw new ConfTSError(
+      EXPR_CALLBACK_ERROR,
+      sourceLocation(sourceFile, param),
+    );
   }
 
   if (ts.isBlock(callbackExpression.body)) {
-    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(
-        sourceFile,
-        callbackExpression.body.getStart(),
-      ),
-    });
+    throw new ConfTSError(
+      EXPR_CALLBACK_ERROR,
+      sourceLocation(sourceFile, callbackExpression.body),
+    );
   }
 
   return {
@@ -560,10 +564,10 @@ function valueToExprLiteral(
   if (typeof value === 'number' || value instanceof FormattedNumber) {
     const number = Number(value);
     if (!Number.isFinite(number)) {
-      throw new ConfTSError('Cannot inline non-finite number into expr', {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
-      });
+      throw new ConfTSError(
+        'Cannot inline non-finite number into expr',
+        sourceLocation(sourceFile, node),
+      );
     }
     return Object.is(number, -0) ? '-0' : String(number);
   }
@@ -581,10 +585,10 @@ function valueToExprLiteral(
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
-      throw new ConfTSError('Cannot inline cyclic array into expr', {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
-      });
+      throw new ConfTSError(
+        'Cannot inline cyclic array into expr',
+        sourceLocation(sourceFile, node),
+      );
     }
     seen.add(value);
     const result = `[${value
@@ -595,10 +599,10 @@ function valueToExprLiteral(
   }
   if (typeof value === 'object') {
     if (seen.has(value)) {
-      throw new ConfTSError('Cannot inline cyclic object into expr', {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
-      });
+      throw new ConfTSError(
+        'Cannot inline cyclic object into expr',
+        sourceLocation(sourceFile, node),
+      );
     }
     seen.add(value);
     const result = `{ ${Object.keys(value)
@@ -618,10 +622,7 @@ function valueToExprLiteral(
   }
   throw new ConfTSError(
     `Cannot inline value of type ${typeof value} into expr`,
-    {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart()),
-    },
+    sourceLocation(sourceFile, node),
   );
 }
 
@@ -735,10 +736,10 @@ function exprTemplateError(
   sourceFile: ts.SourceFile,
   node: ts.Node,
 ): FatalMacroTransformError {
-  return new FatalMacroTransformError(message, {
-    file: sourceFile.fileName,
-    ...ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)),
-  });
+  return new FatalMacroTransformError(
+    message,
+    sourceLocation(sourceFile, node),
+  );
 }
 
 function getExprTemplateCallback(
@@ -1041,13 +1042,7 @@ function nestedExprReplacement(
   if (!isCurrentContext) {
     throw new FatalMacroTransformError(
       `Nested Expr '${calleeText}' must be called with exactly one argument: the current expr context parameter '${context.paramName}'.`,
-      {
-        file: context.sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(
-          context.sourceFile,
-          node.getStart(),
-        ),
-      },
+      sourceLocation(context.sourceFile, node),
     );
   }
 
@@ -1065,13 +1060,7 @@ function nestedExprReplacement(
   if (typeof value !== 'string') {
     throw new ConfTSError(
       `Nested Expr '${calleeText}' did not evaluate to an expression string`,
-      {
-        file: context.sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(
-          context.sourceFile,
-          node.getStart(),
-        ),
-      },
+      sourceLocation(context.sourceFile, node),
     );
   }
   return `(${value})`;
@@ -1167,10 +1156,10 @@ function assertNestedCallbackShape(
     ) ?? false;
   const isGenerator = ts.isFunctionExpression(fn) && !!fn.asteriskToken;
   if (isAsync || isGenerator || !!fn.typeParameters?.length || !!fn.type) {
-    throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, fn.getStart()),
-    });
+    throw new ConfTSError(
+      NESTED_CALLBACK_ERROR,
+      sourceLocation(sourceFile, fn),
+    );
   }
 }
 
@@ -1191,10 +1180,7 @@ function assertNotShadowingContext(
   if (identifier.text === contextParamName) {
     throw new ConfTSError(
       `expr callback: a nested function's parameter cannot shadow the context parameter '${contextParamName}'`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, identifier.getStart()),
-      },
+      sourceLocation(sourceFile, identifier),
     );
   }
 }
@@ -1238,10 +1224,10 @@ function collectBindingNameInfo(
     return;
   }
   if (!allowPattern) {
-    throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, name.getStart()),
-    });
+    throw new ConfTSError(
+      NESTED_CALLBACK_ERROR,
+      sourceLocation(sourceFile, name),
+    );
   }
   if (ts.isObjectBindingPattern(name)) {
     for (const element of name.elements) {
@@ -1250,10 +1236,10 @@ function collectBindingNameInfo(
         (element.propertyName &&
           ts.isComputedPropertyName(element.propertyName))
       ) {
-        throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(sourceFile, element.getStart()),
-        });
+        throw new ConfTSError(
+          NESTED_CALLBACK_ERROR,
+          sourceLocation(sourceFile, element),
+        );
       }
       collectPatternElementInfo(element, contextParamName, sourceFile, info);
     }
@@ -1265,10 +1251,10 @@ function collectBindingNameInfo(
         continue; // hole, e.g. the middle slot in `[a, , b]`
       }
       if (element.dotDotDotToken) {
-        throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(sourceFile, element.getStart()),
-        });
+        throw new ConfTSError(
+          NESTED_CALLBACK_ERROR,
+          sourceLocation(sourceFile, element),
+        );
       }
       collectPatternElementInfo(element, contextParamName, sourceFile, info);
     }
@@ -1288,10 +1274,10 @@ function collectNestedCallbackParams(
   const info: NestedCallbackParamInfo = { names: [], defaultExpressions: [] };
   fn.parameters.forEach((param, index) => {
     if (param.type) {
-      throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, param.getStart()),
-      });
+      throw new ConfTSError(
+        NESTED_CALLBACK_ERROR,
+        sourceLocation(sourceFile, param),
+      );
     }
     if (param.dotDotDotToken) {
       if (
@@ -1299,10 +1285,10 @@ function collectNestedCallbackParams(
         !ts.isIdentifier(param.name) ||
         !!param.initializer
       ) {
-        throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(sourceFile, param.getStart()),
-        });
+        throw new ConfTSError(
+          NESTED_CALLBACK_ERROR,
+          sourceLocation(sourceFile, param),
+        );
       }
       assertNotShadowingContext(param.name, contextParamName, sourceFile);
       info.names.push(param.name.text);
@@ -1341,10 +1327,10 @@ function findParamListParens(
   const searchFrom = lastParam ? lastParam.getEnd() : openPos + 1;
   const closePos = openPos === -1 ? -1 : text.indexOf(')', searchFrom);
   if (openPos === -1 || closePos === -1) {
-    throw new ConfTSError(NESTED_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, fnStart),
-    });
+    throw new ConfTSError(
+      NESTED_CALLBACK_ERROR,
+      sourceLocation(sourceFile, fnStart),
+    );
   }
   return { openPos, closePos };
 }
@@ -1817,13 +1803,7 @@ function compileExprBody(params: {
   } catch (error) {
     throw new ConfTSError(
       error instanceof Error ? error.message : String(error),
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(
-          sourceFile,
-          bodyExpression.getStart(),
-        ),
-      },
+      sourceLocation(sourceFile, bodyExpression),
     );
   }
 }
@@ -1851,10 +1831,10 @@ function evaluateExpr(
   );
 
   if (expression.arguments.length !== 1) {
-    throw new ConfTSError(EXPR_CALLBACK_ERROR, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-    });
+    throw new ConfTSError(
+      EXPR_CALLBACK_ERROR,
+      sourceLocation(sourceFile, expression),
+    );
   }
 
   const { paramName, paramIdentifier, bodyExpression } = getExprCallbackDetails(
@@ -2265,13 +2245,10 @@ function evaluateEnv(
       options,
     );
     if (typeof argument !== 'string') {
-      throw new ConfTSError('env macro argument must be a string', {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(
-          sourceFile,
-          expression.arguments[0].getStart(),
-        ),
-      });
+      throw new ConfTSError(
+        'env macro argument must be a string',
+        sourceLocation(sourceFile, expression.arguments[0]),
+      );
     }
 
     let defaultValue: string | undefined;
@@ -2288,13 +2265,10 @@ function evaluateEnv(
         options,
       );
       if (typeof defaultValue !== 'string' && defaultValue !== undefined) {
-        throw new ConfTSError('env macro default value must be a string', {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(
-            sourceFile,
-            expression.arguments[1].getStart(),
-          ),
-        });
+        throw new ConfTSError(
+          'env macro default value must be a string',
+          sourceLocation(sourceFile, expression.arguments[1]),
+        );
       }
     }
 
@@ -2523,9 +2497,6 @@ export function evaluateMacro(
 
   throw new ConfTSError(
     `Unsupported call expression in macro mode: ${expression.getText(sourceFile)}`,
-    {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-    },
+    sourceLocation(sourceFile, expression),
   );
 }

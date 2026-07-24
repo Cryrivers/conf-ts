@@ -12,5 +12,5 @@ export {
   resolveProgramOptions,
 } from './compiler';
 export { createInMemoryProgram } from './browser';
-export { evaluate } from './eval';
+export { addErrorReferencePath, evaluate } from './eval';
 export type { EvaluationOptions, EvaluationState } from './internal-types';

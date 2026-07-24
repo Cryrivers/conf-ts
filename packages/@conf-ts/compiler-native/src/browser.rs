@@ -87,7 +87,12 @@ pub fn compile_project(
     );
   }
 
-  let output = find_default_export(&entry, &mut eval_ctx, options)?;
+  let output = find_default_export(&entry, &mut eval_ctx, options).map_err(|mut error| {
+    for context in file_contexts.values() {
+      error.add_source(&context.file_path, context.parsed.source());
+    }
+    error
+  })?;
   let mut dependencies: Vec<String> = eval_ctx.evaluated_files.into_iter().collect();
   dependencies.sort();
   dependencies.dedup();

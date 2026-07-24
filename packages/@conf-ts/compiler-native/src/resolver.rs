@@ -52,12 +52,14 @@ pub fn read_tsconfig(path: &Path) -> Result<TsConfig, ConfTSError> {
   // Strip single-line comments (// ...) and trailing commas for JSON5-ish compatibility
   let cleaned = strip_json_comments(&content);
   serde_json::from_str::<TsConfig>(&cleaned).map_err(|e| {
-    ConfTSError::new(
+    let mut error = ConfTSError::new(
       format!("Failed to parse tsconfig.json: {}", e),
       path.display().to_string(),
-      1,
-      1,
-    )
+      e.line(),
+      e.column(),
+    );
+    error.add_source(&path.display().to_string(), &content);
+    error
   })
 }
 
