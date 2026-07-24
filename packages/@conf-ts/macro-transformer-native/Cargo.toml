@@ -4,12 +4,17 @@ version = "0.0.18"
 edition = "2024"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["napi-bindings"]
+napi-bindings = ["dep:napi", "dep:napi-derive"]
 
 [dependencies]
 compiler_native = { path = "../compiler-native", default-features = false }
-napi = { version = "3.10.5", features = ["serde-json"] }
-napi-derive = "3.5.10"
+indexmap = "2"
+napi = { version = "3.10.5", features = ["serde-json"], optional = true }
+napi-derive = { version = "3.5.10", optional = true }
 json-strip-comments = "=3.1.1"
 oxc_allocator = "=0.140.0"
 oxc_ast = "=0.140.0"
@@ -21,6 +26,13 @@ oxc_span = "=0.140.0"
 oxc_sourcemap = "=8.1.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "transformer_bench"
+harness = false
 
 [build-dependencies]
 napi-build = "2.3.2"

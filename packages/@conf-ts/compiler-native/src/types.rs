@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use indexmap::IndexMap;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
 use oxc_semantic::Scoping;
@@ -83,7 +84,7 @@ pub enum Value {
   Bool(bool),
   Null,
   Undefined,
-  Object(Vec<(String, Value)>),
+  Object(IndexMap<String, Value>),
   Array(Vec<Value>),
 }
 

@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
+use indexmap::IndexMap;
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
 
@@ -35,38 +36,34 @@ pub fn get_location(li: &LineIndex, offset: u32) -> (usize, usize) {
   li.get_location(offset)
 }
 
-pub fn module_export_name_to_string(name: &ModuleExportName) -> String {
+pub fn module_export_name_to_string<'a>(name: &'a ModuleExportName) -> &'a str {
   match name {
-    ModuleExportName::IdentifierName(ident) => ident.name.as_str().to_string(),
-    ModuleExportName::IdentifierReference(ident) => ident.name.as_str().to_string(),
-    ModuleExportName::StringLiteral(s) => s.value.as_str().to_string(),
+    ModuleExportName::IdentifierName(ident) => ident.name.as_str(),
+    ModuleExportName::IdentifierReference(ident) => ident.name.as_str(),
+    ModuleExportName::StringLiteral(s) => s.value.as_str(),
   }
 }
 
 fn set_object_prop(
-  map: &mut Vec<(String, Value)>,
+  map: &mut IndexMap<String, Value>,
   key: String,
   value: Value,
   preserve_key_order: bool,
 ) {
   if preserve_key_order {
-    if let Some(entry) = map.iter_mut().find(|(k, _)| k == &key) {
-      entry.1 = value;
-      return;
+    if let Some(existing) = map.get_mut(&key) {
+      *existing = value;
+    } else {
+      map.insert(key, value);
     }
-    map.push((key, value));
   } else {
-    map.retain(|(k, _)| k != &key);
-    map.push((key, value));
+    map.shift_remove(&key);
+    map.insert(key, value);
   }
 }
 
-fn get_object_prop(map: &[(String, Value)], key: &str) -> Value {
-  map
-    .iter()
-    .find(|(k, _)| k == key)
-    .map(|(_, v)| v.clone())
-    .unwrap_or(Value::Undefined)
+fn get_object_prop(map: &IndexMap<String, Value>, key: &str) -> Value {
+  map.get(key).cloned().unwrap_or(Value::Undefined)
 }
 
 fn enum_object_from_decl(
@@ -75,8 +72,8 @@ fn enum_object_from_decl(
   ctx: &mut EvalContext,
 ) -> Value {
   let enum_name = enum_decl.id.name.as_str();
-  let mut forward = Vec::new();
-  let mut reverse: Vec<(String, Value)> = Vec::new();
+  let mut forward = IndexMap::new();
+  let mut reverse: IndexMap<String, Value> = IndexMap::new();
   if let Some(file_enums) = ctx.enum_map.get(file_path) {
     for member in &enum_decl.body.members {
       let member_name = match &member.id {
@@ -98,12 +95,10 @@ fn enum_object_from_decl(
       }
     }
   }
-  reverse.sort_by(
-    |(a, _), (b, _)| match (a.parse::<u32>(), b.parse::<u32>()) {
-      (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num),
-      _ => a.cmp(b),
-    },
-  );
+  reverse.sort_by(|a, _, b, _| match (a.parse::<u32>(), b.parse::<u32>()) {
+    (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num),
+    _ => a.cmp(b),
+  });
   let mut map = reverse;
   map.extend(forward);
   ctx.evaluated_files.insert(file_path.to_string());
@@ -291,7 +286,7 @@ fn evaluate_inner(
     }
 
     Expression::ObjectExpression(obj) => {
-      let mut map: Vec<(String, Value)> = Vec::new();
+      let mut map: IndexMap<String, Value> = IndexMap::new();
       for prop_kind in &obj.properties {
         match prop_kind {
           ObjectPropertyKind::ObjectProperty(prop) => {
@@ -964,7 +959,7 @@ fn eval_binary_op(
     BinaryOperator::In => {
       let key = left.to_display_string();
       match &right {
-        Value::Object(map) => Ok(Value::Bool(map.iter().any(|(k, _)| k == &key))),
+        Value::Object(map) => Ok(Value::Bool(map.contains_key(&key))),
         Value::Array(arr) => match key.parse::<usize>() {
           Ok(idx) => Ok(Value::Bool(idx < arr.len())),
           Err(_) => Ok(Value::Bool(false)),
@@ -1205,8 +1200,8 @@ fn exported_values(
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   options: &CompileOptions,
-) -> Result<Vec<(String, Value)>, ConfTSError> {
-  let mut exports = Vec::new();
+) -> Result<IndexMap<String, Value>, ConfTSError> {
+  let mut exports = IndexMap::new();
 
   for stmt in &file_ctx.program().body {
     match stmt {
@@ -1254,7 +1249,12 @@ fn exported_values(
             resolve_declared_in_file(&original_name, file_ctx, ctx, None, options)?
           };
           if let Some(val) = val {
-            set_object_prop(&mut exports, exported_name, val, options.preserve_key_order);
+            set_object_prop(
+              &mut exports,
+              exported_name.to_string(),
+              val,
+              options.preserve_key_order,
+            );
           }
         }
       }
@@ -1471,7 +1471,7 @@ fn resolve_object_pattern_value(
 ) -> Result<Option<Value>, ConfTSError> {
   let map = match source_obj {
     Value::Object(map) => map,
-    _ => Vec::new(),
+    _ => IndexMap::new(),
   };
   for prop in &obj_pat.properties {
     if prop.shorthand {
@@ -1528,9 +1528,9 @@ fn resolve_object_pattern_value(
         }
       }
     }
-    let rest_obj: Vec<(String, Value)> = map
+    let rest_obj: IndexMap<String, Value> = map
       .iter()
-      .filter(|(k, _)| !keys_to_remove.contains(k))
+      .filter(|(k, _)| !keys_to_remove.contains(k.as_str()))
       .map(|(k, v)| (k.clone(), v.clone()))
       .collect();
     if let Some(resolved) = resolve_pattern_value(
@@ -1610,7 +1610,7 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
             match specifier {
               ImportDeclarationSpecifier::ImportSpecifier(named) => {
                 let local_name = named.local.name.as_str().to_string();
-                let original_name = Some(module_export_name_to_string(&named.imported));
+                let original_name = Some(module_export_name_to_string(&named.imported).to_string());
                 imports.insert(
                   local_name,
                   ImportInfo {

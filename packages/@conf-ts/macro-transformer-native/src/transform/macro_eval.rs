@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use compiler_native::error::ConfTSError;
 use compiler_native::eval::{EvalContext, evaluate, get_location};
 use compiler_native::types::{CompileOptions, FileContext, QuoteStyle, Value};
+use indexmap::IndexMap;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
@@ -587,7 +588,7 @@ type ExprReplacement = (usize, usize, String);
 /// Collapse source formatting whitespace in an emitted expr while preserving
 /// whitespace that belongs to string and template literal values. Template
 /// interpolations are code again, so they are compacted recursively.
-fn compact_expression_whitespace(source: &str) -> String {
+pub fn compact_expression_whitespace(source: &str) -> String {
   fn flush_space(output: &mut String, pending_space: &mut bool) {
     if *pending_space && !output.is_empty() {
       output.push(' ');
@@ -763,10 +764,9 @@ fn wrapped_expression_source(source: &str) -> String {
   format!("{}{};", EXPRESSION_WRAPPER_PREFIX, source)
 }
 
-fn collect_parenthesized_spans(source: &str) -> Vec<(usize, usize)> {
+fn collect_parenthesized_spans(source: &str, allocator: &Allocator) -> Vec<(usize, usize)> {
   let wrapped = wrapped_expression_source(source);
-  let allocator = Allocator::default();
-  let parsed = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
+  let parsed = Parser::new(allocator, &wrapped, SourceType::ts()).parse();
   if parsed.panicked || !parsed.diagnostics.is_empty() {
     return Vec::new();
   }
@@ -783,21 +783,20 @@ fn collect_parenthesized_spans(source: &str) -> Vec<(usize, usize)> {
     .collect()
 }
 
-fn expression_sources_are_equivalent(left: &str, right: &str) -> bool {
+fn expression_sources_are_equivalent(left: &str, right: &str, allocator: &Allocator) -> bool {
   let left = wrapped_expression_source(left);
   let right = wrapped_expression_source(right);
-  let allocator = Allocator::default();
   let options = ParseOptions {
     preserve_parens: false,
     ..ParseOptions::default()
   };
-  let left_parsed = Parser::new(&allocator, &left, SourceType::ts())
+  let left_parsed = Parser::new(allocator, &left, SourceType::ts())
     .with_options(options)
     .parse();
   if left_parsed.panicked || !left_parsed.diagnostics.is_empty() {
     return false;
   }
-  let right_parsed = Parser::new(&allocator, &right, SourceType::ts())
+  let right_parsed = Parser::new(allocator, &right, SourceType::ts())
     .with_options(options)
     .parse();
   !right_parsed.panicked
@@ -805,53 +804,98 @@ fn expression_sources_are_equivalent(left: &str, right: &str) -> bool {
     && left_parsed.program.content_eq(&right_parsed.program)
 }
 
-fn remove_redundant_parentheses(source: &str) -> String {
-  let mut output = source.to_string();
-
-  loop {
-    let mut spans = collect_parenthesized_spans(&output);
-    spans.sort_by_key(|(start, end)| end - start);
-    let mut simplified = false;
-
-    for (start, end) in spans {
-      if start >= end
-        || end > output.len()
-        || output.as_bytes().get(start) != Some(&b'(')
-        || output.as_bytes().get(end - 1) != Some(&b')')
-      {
-        continue;
-      }
-      let candidate = format!(
-        "{}{}{}",
-        &output[..start],
-        &output[start + 1..end - 1],
-        &output[end..]
-      );
-      if expression_sources_are_equivalent(&output, &candidate) {
-        output = candidate;
-        simplified = true;
-        break;
-      }
-    }
-
-    if !simplified {
-      return output;
-    }
+fn remove_spans(source: &str, spans: &[(usize, usize)]) -> String {
+  let mut remove_positions: Vec<usize> = Vec::with_capacity(spans.len() * 2);
+  for &(start, end) in spans {
+    remove_positions.push(start);
+    remove_positions.push(end - 1);
   }
+  remove_positions.sort_unstable();
+  remove_positions.dedup();
+
+  let mut result = String::with_capacity(source.len());
+  let mut pos = 0;
+  for &skip in &remove_positions {
+    if skip > pos {
+      result.push_str(&source[pos..skip]);
+    }
+    pos = skip + 1;
+  }
+  result.push_str(&source[pos..]);
+  result
+}
+
+fn is_valid_paren_span(source: &str, start: usize, end: usize) -> bool {
+  start + 1 < end
+    && end <= source.len()
+    && source.as_bytes().get(start) == Some(&b'(')
+    && source.as_bytes().get(end - 1) == Some(&b')')
+}
+
+pub fn remove_redundant_parentheses(source: &str) -> String {
+  let allocator = Allocator::default();
+  let mut spans = collect_parenthesized_spans(source, &allocator);
+  spans.retain(|(start, end)| is_valid_paren_span(source, *start, *end));
+  if spans.is_empty() {
+    return source.to_string();
+  }
+
+  spans.sort_by_key(|(start, end)| end - start);
+
+  // Fast path: try removing all parentheses at once.
+  let candidate = remove_spans(source, &spans);
+  if expression_sources_are_equivalent(source, &candidate, &allocator) {
+    return candidate;
+  }
+
+  // Slow path: test each span individually against the original source,
+  // then apply all removable spans in one pass.
+  let removable: Vec<(usize, usize)> = spans
+    .iter()
+    .filter(|(start, end)| {
+      let single = format!(
+        "{}{}{}",
+        &source[..*start],
+        &source[start + 1..end - 1],
+        &source[*end..]
+      );
+      expression_sources_are_equivalent(source, &single, &allocator)
+    })
+    .copied()
+    .collect();
+
+  if removable.is_empty() {
+    return source.to_string();
+  }
+  remove_spans(source, &removable)
 }
 
 // Keep this in sync with @conf-ts/macro-transformer/src/expression-rewrite.ts encodeStringLiteral.
 fn encode_string_literal(value: &str, quote: QuoteStyle) -> String {
-  let json = serde_json::to_string(value).unwrap();
-  match quote {
-    QuoteStyle::Double => json,
-    QuoteStyle::Single => {
-      let inner = json[1..json.len() - 1]
-        .replace("\\\"", "\"")
-        .replace('\'', "\\'");
-      format!("'{}'", inner)
+  let (open, close) = match quote {
+    QuoteStyle::Double => ('"', '"'),
+    QuoteStyle::Single => ('\'', '\''),
+  };
+  let mut out = String::with_capacity(value.len() + 2);
+  out.push(open);
+  for ch in value.chars() {
+    match ch {
+      '\\' => out.push_str("\\\\"),
+      '\n' => out.push_str("\\n"),
+      '\r' => out.push_str("\\r"),
+      '\t' => out.push_str("\\t"),
+      '\u{08}' => out.push_str("\\b"),
+      '\u{0C}' => out.push_str("\\f"),
+      '"' if quote == QuoteStyle::Double => out.push_str("\\\""),
+      '\'' if quote == QuoteStyle::Single => out.push_str("\\'"),
+      c if c < '\u{20}' => {
+        out.push_str(&format!("\\u{:04x}", c as u32));
+      }
+      c => out.push(c),
     }
   }
+  out.push(close);
+  out
 }
 
 fn value_to_expr_literal(
@@ -2812,7 +2856,7 @@ fn static_binding_key(property: &BindingProperty) -> Option<String> {
   }
 }
 
-fn object_entries(value: &Value) -> Vec<(String, Value)> {
+fn object_entries(value: &Value) -> IndexMap<String, Value> {
   match value {
     Value::Object(entries) => entries.clone(),
     Value::Array(values) => values
@@ -2825,17 +2869,13 @@ fn object_entries(value: &Value) -> Vec<(String, Value)> {
       .enumerate()
       .map(|(index, value)| (index.to_string(), Value::String(value.to_string())))
       .collect(),
-    _ => Vec::new(),
+    _ => IndexMap::new(),
   }
 }
 
 fn binding_property_value(value: &Value, key: &str) -> Value {
   match value {
-    Value::Object(entries) => entries
-      .iter()
-      .find(|(entry_key, _)| entry_key == key)
-      .map(|(_, value)| value.clone())
-      .unwrap_or(Value::Undefined),
+    Value::Object(entries) => entries.get(key).cloned().unwrap_or(Value::Undefined),
     Value::Array(values) => {
       if key == "length" {
         Value::number(values.len() as f64)

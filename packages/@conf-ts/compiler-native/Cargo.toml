@@ -13,6 +13,7 @@ napi-bindings = ["dep:napi", "dep:napi-derive"]
 [dependencies]
 napi = { version = "3.10.5", features = ["serde-json"], optional = true }
 napi-derive = { version = "3.5.10", optional = true }
+indexmap = "2"
 oxc_allocator = "=0.140.0"
 oxc_parser = "=0.140.0"
 oxc_ast = "=0.140.0"
@@ -22,6 +23,13 @@ self_cell = "1.3.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 serde_yaml = "0.9.34"
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "compiler_bench"
+harness = false
 
 [build-dependencies]
 napi-build = "2.3.2"

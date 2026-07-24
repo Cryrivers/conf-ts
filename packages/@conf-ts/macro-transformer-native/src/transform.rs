@@ -1,6 +1,6 @@
 //! Oxc-backed source transformation implementation used by the N-API adapter.
 
-mod macro_eval;
+pub mod macro_eval;
 
 use std::any::Any;
 use std::cell::RefCell;
