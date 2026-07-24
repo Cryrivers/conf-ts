@@ -10,7 +10,7 @@ use std::rc::Rc;
 use compiler_native::browser::{ProjectResolutions, build_file_contexts};
 use compiler_native::compiler::collect_enums;
 use compiler_native::error::ConfTSError;
-use compiler_native::eval::{EvalContext, MACRO_FUNCTIONS};
+use compiler_native::eval::{EvalContext, MACRO_FUNCTIONS, add_error_reference_path};
 use compiler_native::resolver::{TsCompilerOptions, resolve_module_in_memory_with_options};
 use compiler_native::types::{CompileOptions, FileContext, TransformState, Value};
 use oxc_ast::ast::*;
@@ -930,8 +930,20 @@ impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
     if canonical.is_some()
       || expr_template_definition(&call.callee, self.file_ctx, self.eval_ctx).is_some()
     {
-      if let Err(error) = macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options) {
-        if let Some(fatal) = take_fatal_transform_error(self.eval_ctx) {
+      if let Err(mut error) =
+        macro_evaluator(call, self.file_ctx, self.eval_ctx, None, self.options)
+      {
+        if let Some(mut fatal) = take_fatal_transform_error(self.eval_ctx) {
+          if fatal.location.file != self.file_ctx.file_path {
+            let target_file = fatal.location.file.clone();
+            add_error_reference_path(
+              &mut fatal,
+              self.file_ctx,
+              call.span.start,
+              &target_file,
+              self.eval_ctx,
+            );
+          }
           self.fatal_error = Some(fatal);
         } else {
           // Leave calls that cannot be statically evaluated (including their
@@ -942,6 +954,16 @@ impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
           // call, at which point the error location no longer points at the
           // real cause.
           self.skipped_macro = true;
+          if error.location.file != self.file_ctx.file_path {
+            let target_file = error.location.file.clone();
+            add_error_reference_path(
+              &mut error,
+              self.file_ctx,
+              call.span.start,
+              &target_file,
+              self.eval_ctx,
+            );
+          }
           warn_skipped_macro(call, self.file_ctx, &error);
         }
       }
@@ -1422,7 +1444,13 @@ pub fn transform_project(
       &mut eval_ctx,
       &evaluation_options,
       options.source_map,
-    )?;
+    )
+    .map_err(|mut error| {
+      for context in contexts.values() {
+        error.add_source(&context.file_path, context.parsed.source());
+      }
+      error
+    })?;
     dependencies.extend(result.dependencies.iter().cloned());
     transformed.insert(filename, result);
   }

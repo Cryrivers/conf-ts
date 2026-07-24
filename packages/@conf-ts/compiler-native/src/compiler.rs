@@ -46,23 +46,49 @@ pub fn parse_ts_file(
     },
     |owner| {
       let ret = Parser::new(&owner.allocator, &owner.source, source_type).parse();
-      if ret.panicked {
-        Err(ConfTSError::new(
-          format!("Failed to parse file: {}", file_name),
-          file_name,
-          1,
-          1,
-        ))
-      } else {
-        let scoping = {
-          let semantic = SemanticBuilder::new().build(&ret.program).semantic;
-          semantic.into_scoping()
-        };
-        Ok(ParsedProgram {
-          program: ret.program,
-          scoping,
-        })
+      if ret.panicked || ret.diagnostics.has_errors() {
+        let diagnostic = ret.diagnostics.errors().next();
+        let offset = diagnostic
+          .and_then(|value| value.labels.as_slice().first())
+          .map_or(0, |label| label.offset());
+        let (line, character) = line_index.get_location(offset);
+        let detail = diagnostic.map_or_else(
+          || format!("Failed to parse file: {}", file_name),
+          |value| {
+            let mut detail = format!("Failed to parse file: {}", value.message);
+            if let Some(help) = &value.help {
+              detail.push_str(&format!("\nHelp: {}", help));
+            }
+            detail
+          },
+        );
+        let mut error = ConfTSError::new(detail, file_name, line, character);
+        error.add_source(file_name, &owner.source);
+        return Err(error);
       }
+      let semantic = SemanticBuilder::new()
+        .with_check_syntax_error(true)
+        .build(&ret.program);
+      if let Some(diagnostic) = semantic.diagnostics.errors().next() {
+        let offset = diagnostic
+          .labels
+          .as_slice()
+          .first()
+          .map_or(0, |label| label.offset());
+        let (line, character) = line_index.get_location(offset);
+        let mut detail = format!("Failed to parse file: {}", diagnostic.message);
+        if let Some(help) = &diagnostic.help {
+          detail.push_str(&format!("\nHelp: {}", help));
+        }
+        let mut error = ConfTSError::new(detail, file_name, line, character);
+        error.add_source(file_name, &owner.source);
+        return Err(error);
+      }
+      let scoping = semantic.semantic.into_scoping();
+      Ok(ParsedProgram {
+        program: ret.program,
+        scoping,
+      })
     },
   )?;
   Ok((Rc::new(parsed), line_index))
@@ -333,7 +359,12 @@ fn compile_loaded(
     })?
     .clone();
 
-  let output = find_default_export(&entry_ctx, &mut eval_ctx, options)?;
+  let output = find_default_export(&entry_ctx, &mut eval_ctx, options).map_err(|mut error| {
+    for context in loaded.file_contexts.values() {
+      error.add_source(&context.file_path, context.parsed.source());
+    }
+    error
+  })?;
 
   eval_ctx
     .evaluated_files

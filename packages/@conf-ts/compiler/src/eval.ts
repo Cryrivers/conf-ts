@@ -1,6 +1,6 @@
 import ts from 'typescript';
 
-import { ConfTSError } from './error';
+import { ConfTSError, getSourceLocation, type SourceLocation } from './error';
 import type { EvaluationOptions as CompileOptions } from './internal-types';
 import { FormattedNumber } from './shared';
 
@@ -411,7 +411,213 @@ function evaluateEnumDeclaration(
   return result;
 }
 
+interface EvaluationFrame {
+  expression: ts.Expression;
+  sourceFile: ts.SourceFile;
+}
+
+const evaluationStacks = new WeakMap<Set<string>, EvaluationFrame[]>();
+
+function nodeLocation(
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): SourceLocation {
+  const position = ts.getLineAndCharacterOfPosition(
+    sourceFile,
+    node.getStart(sourceFile),
+  );
+  return getSourceLocation(
+    sourceFile.fileName,
+    sourceFile.text,
+    position.line,
+    position.character,
+  );
+}
+
+function moduleReferences(
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+): Array<{ sourceFile: ts.SourceFile; location: SourceLocation }> {
+  const references: Array<{
+    sourceFile: ts.SourceFile;
+    location: SourceLocation;
+  }> = [];
+  for (const statement of sourceFile.statements) {
+    const moduleSpecifier =
+      ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
+        ? statement.moduleSpecifier
+        : undefined;
+    if (!moduleSpecifier) continue;
+    const symbol = typeChecker.getSymbolAtLocation(moduleSpecifier);
+    const declaration =
+      symbol?.valueDeclaration ?? symbol?.declarations?.find(ts.isSourceFile);
+    if (!declaration || !ts.isSourceFile(declaration)) continue;
+    const position = ts.getLineAndCharacterOfPosition(
+      sourceFile,
+      moduleSpecifier.getStart(sourceFile),
+    );
+    references.push({
+      sourceFile: declaration,
+      location: getSourceLocation(
+        sourceFile.fileName,
+        sourceFile.text,
+        position.line,
+        position.character,
+      ),
+    });
+  }
+  return references;
+}
+
+function addReferencePath(
+  error: ConfTSError,
+  caller: EvaluationFrame,
+  target: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+): void {
+  const callerLocationPosition = ts.getLineAndCharacterOfPosition(
+    caller.sourceFile,
+    caller.expression.getStart(caller.sourceFile),
+  );
+  const callerLocation = getSourceLocation(
+    caller.sourceFile.fileName,
+    caller.sourceFile.text,
+    callerLocationPosition.line,
+    callerLocationPosition.character,
+  );
+  if (caller.sourceFile.fileName === target.fileName) return;
+
+  const queue = [caller.sourceFile];
+  const visited = new Set([caller.sourceFile.fileName]);
+  const predecessors = new Map<
+    string,
+    { from: ts.SourceFile; location: SourceLocation }
+  >();
+  while (queue.length > 0 && !visited.has(target.fileName)) {
+    const current = queue.shift()!;
+    for (const reference of moduleReferences(current, typeChecker)) {
+      if (visited.has(reference.sourceFile.fileName)) continue;
+      visited.add(reference.sourceFile.fileName);
+      predecessors.set(reference.sourceFile.fileName, {
+        from: current,
+        location: reference.location,
+      });
+      queue.push(reference.sourceFile);
+    }
+  }
+
+  const locations: SourceLocation[] = [];
+  let current = target.fileName;
+  while (current !== caller.sourceFile.fileName) {
+    const predecessor = predecessors.get(current);
+    if (!predecessor) {
+      error.addReference(callerLocation);
+      return;
+    }
+    locations.push(predecessor.location);
+    current = predecessor.from.fileName;
+  }
+  // The outermost frame is more useful at the actual identifier/property use
+  // than at its import declaration. Intermediate frames remain import/re-export
+  // sites, which preserves the complete path through the project.
+  locations[locations.length - 1] = callerLocation;
+  for (const location of locations) error.addReference(location);
+}
+
+function findReferencedSourceFile(
+  start: ts.SourceFile,
+  fileName: string,
+  typeChecker: ts.TypeChecker,
+): ts.SourceFile | undefined {
+  const queue = [start];
+  const visited = new Set([start.fileName]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current.fileName === fileName) return current;
+    for (const reference of moduleReferences(current, typeChecker)) {
+      if (visited.add(reference.sourceFile.fileName)) {
+        queue.push(reference.sourceFile);
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Add a cross-file import/re-export path to an error raised by an extension evaluator. */
+export function addErrorReferencePath(
+  error: ConfTSError,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+  targetFile: string,
+  typeChecker: ts.TypeChecker,
+): void {
+  const target = findReferencedSourceFile(sourceFile, targetFile, typeChecker);
+  if (target) {
+    addReferencePath(
+      error,
+      { expression: node as ts.Expression, sourceFile },
+      target,
+      typeChecker,
+    );
+  }
+}
+
 export function evaluate(
+  expression: ts.Expression,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker,
+  enumMap: { [filePath: string]: { [key: string]: any } },
+  importBindingsMap: { [filePath: string]: Set<string> },
+  interceptCalls: boolean,
+  evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
+  options?: CompileOptions,
+): any {
+  const stack = evaluationStacks.get(evaluatedFiles) ?? [];
+  if (!evaluationStacks.has(evaluatedFiles)) {
+    evaluationStacks.set(evaluatedFiles, stack);
+  }
+  const caller = stack.at(-1);
+  stack.push({ expression, sourceFile });
+  try {
+    return evaluateInner(
+      expression,
+      sourceFile,
+      typeChecker,
+      enumMap,
+      importBindingsMap,
+      interceptCalls,
+      evaluatedFiles,
+      context,
+      options,
+    );
+  } catch (error) {
+    if (error instanceof ConfTSError) {
+      error.addSource(sourceFile.fileName, sourceFile.text);
+      const rootFile = error.location.file;
+      const referencedSource =
+        rootFile && rootFile !== sourceFile.fileName
+          ? findReferencedSourceFile(sourceFile, rootFile, typeChecker)
+          : undefined;
+      if (referencedSource) {
+        addReferencePath(
+          error,
+          { expression, sourceFile },
+          referencedSource,
+          typeChecker,
+        );
+      } else if (caller && caller.sourceFile.fileName !== sourceFile.fileName) {
+        addReferencePath(error, caller, sourceFile, typeChecker);
+      }
+    }
+    throw error;
+  } finally {
+    stack.pop();
+    if (stack.length === 0) evaluationStacks.delete(evaluatedFiles);
+  }
+}
+
+function evaluateInner(
   expression: ts.Expression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -553,22 +759,13 @@ export function evaluate(
           } else {
             throw new ConfTSError(
               `Could not resolve shorthand property '${name}' because its declaration is not a variable or has no initializer.`,
-              {
-                file: sourceFile.fileName,
-                ...ts.getLineAndCharacterOfPosition(
-                  sourceFile,
-                  prop.getStart(),
-                ),
-              },
+              nodeLocation(sourceFile, prop),
             );
           }
         } else {
           throw new ConfTSError(
             `Could not find symbol for shorthand property '${name}'.`,
-            {
-              file: sourceFile.fileName,
-              ...ts.getLineAndCharacterOfPosition(sourceFile, prop.getStart()),
-            },
+            nodeLocation(sourceFile, prop),
           );
         }
       } else if (ts.isSpreadAssignment(prop)) {
@@ -665,13 +862,7 @@ export function evaluate(
               declarationList.flags & ts.NodeFlags.Let ? 'let' : 'var';
             throw new ConfTSError(
               `Failed to evaluate variable "${expression.text}". Only 'const' declarations are supported, but it was declared with '${kind}'.`,
-              {
-                file: sourceFile.fileName,
-                ...ts.getLineAndCharacterOfPosition(
-                  sourceFile,
-                  expression.getStart(),
-                ),
-              },
+              nodeLocation(sourceFile, expression),
             );
           }
           if (resolvedSymbol.valueDeclaration.initializer) {
@@ -741,11 +932,8 @@ export function evaluate(
       }
     }
     throw new ConfTSError(
-      `Unsupported variable type for identifier: ${expression.text}`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      },
+      `Cannot resolve identifier "${expression.text}" at build time. Unsupported variable type for identifier: ${expression.text}.`,
+      nodeLocation(sourceFile, expression),
     );
   } else if (ts.isElementAccessExpression(expression)) {
     const obj = evaluate(
@@ -765,13 +953,7 @@ export function evaluate(
     if (obj === null || obj === undefined) {
       throw new ConfTSError(
         `Cannot read property of ${obj === null ? 'null' : 'undefined'}`,
-        {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(
-            sourceFile,
-            expression.getStart(),
-          ),
-        },
+        nodeLocation(sourceFile, expression),
       );
     }
     const key = evaluate(
@@ -796,10 +978,10 @@ export function evaluate(
       const idx = Number(key);
       return Number.isInteger(idx) && idx >= 0 ? obj[idx] : undefined;
     }
-    throw new ConfTSError(`Unsupported element access on ${typeof obj}`, {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-    });
+    throw new ConfTSError(
+      `Unsupported element access on ${typeof obj}`,
+      nodeLocation(sourceFile, expression),
+    );
   } else if (ts.isPropertyAccessExpression(expression)) {
     try {
       const obj = evaluate(
@@ -879,13 +1061,7 @@ export function evaluate(
               declarationList.flags & ts.NodeFlags.Let ? 'let' : 'var';
             throw new ConfTSError(
               `Failed to evaluate variable "${expression.getText(sourceFile)}". Only 'const' declarations are supported, but it was declared with '${kind}'.`,
-              {
-                file: sourceFile.fileName,
-                ...ts.getLineAndCharacterOfPosition(
-                  sourceFile,
-                  expression.getStart(),
-                ),
-              },
+              nodeLocation(sourceFile, expression),
             );
           }
           if (declaration.initializer) {
@@ -916,10 +1092,7 @@ export function evaluate(
     }
     throw new ConfTSError(
       `Unsupported property access expression: ${expression.getText(sourceFile)}`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      },
+      nodeLocation(sourceFile, expression),
     );
   } else if (ts.isVoidExpression(expression)) {
     evaluate(
@@ -1031,13 +1204,7 @@ export function evaluate(
       default:
         throw new ConfTSError(
           `Unsupported unary operator: ${ts.SyntaxKind[expression.operator]}`,
-          {
-            file: sourceFile.fileName,
-            ...ts.getLineAndCharacterOfPosition(
-              sourceFile,
-              expression.getStart(),
-            ),
-          },
+          nodeLocation(sourceFile, expression),
         );
     }
   } else if (ts.isBinaryExpression(expression)) {
@@ -1158,13 +1325,7 @@ export function evaluate(
         if (right === null || right === undefined) {
           throw new ConfTSError(
             "Cannot use 'in' operator on null or undefined",
-            {
-              file: sourceFile.fileName,
-              ...ts.getLineAndCharacterOfPosition(
-                sourceFile,
-                expression.getStart(),
-              ),
-            },
+            nodeLocation(sourceFile, expression),
           );
         }
         return String(left) in (right as object);
@@ -1176,36 +1337,27 @@ export function evaluate(
           `Unsupported binary operator: ${
             ts.SyntaxKind[expression.operatorToken.kind]
           }`,
-          {
-            file: sourceFile.fileName,
-            ...ts.getLineAndCharacterOfPosition(
-              sourceFile,
-              expression.getStart(),
-            ),
-          },
+          nodeLocation(sourceFile, expression),
         );
     }
   } else if (
     ts.isArrowFunction(expression) ||
     ts.isFunctionExpression(expression)
   ) {
-    throw new ConfTSError('Unsupported type: Function', {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-    });
+    throw new ConfTSError(
+      'Unsupported type: Function',
+      nodeLocation(sourceFile, expression),
+    );
   } else if (ts.isNewExpression(expression)) {
     if (expression.expression.getText(sourceFile) === 'Date') {
-      throw new ConfTSError('Unsupported type: Date', {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      });
+      throw new ConfTSError(
+        'Unsupported type: Date',
+        nodeLocation(sourceFile, expression),
+      );
     }
     throw new ConfTSError(
       `Unsupported "new" expression: ${expression.expression.getText(sourceFile)}`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      },
+      nodeLocation(sourceFile, expression),
     );
   } else if (ts.isCallExpression(expression)) {
     if (expression.questionDotToken) {
@@ -1238,10 +1390,7 @@ export function evaluate(
     }
     throw new ConfTSError(
       `Unsupported call expression: ${expression.getText(sourceFile)}`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      },
+      nodeLocation(sourceFile, expression),
     );
   } else if (ts.isParenthesizedExpression(expression)) {
     return evaluate(
@@ -1269,10 +1418,10 @@ export function evaluate(
       options,
     );
   } else if (ts.isRegularExpressionLiteral(expression)) {
-    throw new ConfTSError('Unsupported type: RegExp', {
-      file: sourceFile.fileName,
-      ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-    });
+    throw new ConfTSError(
+      'Unsupported type: RegExp',
+      nodeLocation(sourceFile, expression),
+    );
   } else if (ts.isSatisfiesExpression(expression)) {
     return evaluate(
       expression.expression,
@@ -1347,35 +1496,20 @@ export function evaluate(
     if (typeIsStrictNullish) {
       throw new ConfTSError(
         "Non-null assertion applied to value typed as 'null' or 'undefined'",
-        {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(
-            sourceFile,
-            expression.getStart(),
-          ),
-        },
+        nodeLocation(sourceFile, expression),
       );
     }
     if (value === null || value === undefined) {
       throw new ConfTSError(
         'Non-null assertion failed: value is null or undefined',
-        {
-          file: sourceFile.fileName,
-          ...ts.getLineAndCharacterOfPosition(
-            sourceFile,
-            expression.getStart(),
-          ),
-        },
+        nodeLocation(sourceFile, expression),
       );
     }
     return value;
   } else {
     throw new ConfTSError(
       `Unsupported syntax kind: ${ts.SyntaxKind[expression.kind]}`,
-      {
-        file: sourceFile.fileName,
-        ...ts.getLineAndCharacterOfPosition(sourceFile, expression.getStart()),
-      },
+      nodeLocation(sourceFile, expression),
     );
   }
 }

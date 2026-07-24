@@ -150,7 +150,7 @@ pub fn create_macro_project_snapshot(
     },
   )
   .map(js_project)
-  .map_err(|error| Error::new(Status::GenericFailure, error.message))
+  .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))
 }
 
 /// Return static import/export specifiers for a set of source overrides.
@@ -159,7 +159,7 @@ pub fn scan_referenced_modules(
   files: HashMap<String, String>,
 ) -> Result<HashMap<String, Vec<String>>> {
   scan_referenced_modules_inner(&files)
-    .map_err(|error| Error::new(Status::GenericFailure, error.message))
+    .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))
 }
 
 /// Transform a project with one shared native analysis pass.
@@ -173,7 +173,7 @@ pub fn transform_project(
     input.files,
     options(transform_options)?,
   )
-  .map_err(|error| Error::new(Status::GenericFailure, error.message))?;
+  .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
   Ok(TransformProjectResult {
     transformed: output
       .transformed
@@ -196,6 +196,6 @@ pub fn transform(
     input.project.map(project),
     options(transform_options)?,
   )
-  .map_err(|error| Error::new(Status::GenericFailure, error.message))?;
+  .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
   Ok(js_result(output))
 }

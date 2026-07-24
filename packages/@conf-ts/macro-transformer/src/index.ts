@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'path';
 import { ConfTSError, FormattedNumber } from '@conf-ts/compiler';
 import {
+  addErrorReferencePath,
   createEvaluationState,
   createSourceProgram,
   resolveProgramOptions,
@@ -449,9 +450,28 @@ function hasExprTemplateInvocation(
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
-    if (ts.isCallExpression(node) && isExprTemplateInvocation(node, checker)) {
-      found = true;
-      return;
+    if (ts.isCallExpression(node)) {
+      try {
+        if (isExprTemplateInvocation(node, checker)) {
+          found = true;
+          return;
+        }
+      } catch (error) {
+        if (
+          error instanceof ConfTSError &&
+          error.location.file &&
+          error.location.file !== sourceFile.fileName
+        ) {
+          addErrorReferencePath(
+            error,
+            sourceFile,
+            node,
+            error.location.file,
+            checker,
+          );
+        }
+        throw error;
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -527,7 +547,21 @@ function transformAnalyzedSource(
             source: replacementSource,
           });
         } catch (error) {
-          if (isFatalMacroTransformError(error)) throw error;
+          if (isFatalMacroTransformError(error)) {
+            if (
+              error.location.file &&
+              error.location.file !== sourceFile.fileName
+            ) {
+              addErrorReferencePath(
+                error,
+                sourceFile,
+                node,
+                error.location.file,
+                state.typeChecker,
+              );
+            }
+            throw error;
+          }
           // A source transformer must be safe to run over files containing
           // macros it cannot statically evaluate. Keep the entire call
           // subtree untouched and retain the macro import below. Warn here

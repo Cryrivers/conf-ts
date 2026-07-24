@@ -55,7 +55,7 @@ fn result(
   value: std::result::Result<(String, Vec<String>), crate::error::ConfTSError>,
 ) -> Result<CompileResult> {
   let (output, dependencies) =
-    value.map_err(|error| Error::new(Status::GenericFailure, error.message))?;
+    value.map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
   Ok(CompileResult {
     output,
     dependencies,

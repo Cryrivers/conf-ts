@@ -1,7 +1,7 @@
 import { dirname, sep } from 'path';
 import ts from 'typescript';
 
-import { ConfTSError } from './error';
+import { ConfTSError, getSourceLocation } from './error';
 import { evaluate } from './eval';
 import type { EvaluationState } from './internal-types';
 import {
@@ -33,13 +33,24 @@ export function resolveProgramOptions(inputFile: string): {
         '\n',
       )}`,
       {
-        file: configFile.error.file?.fileName ?? tsConfigPath,
         ...(configFile.error.file && configFile.error.start !== undefined
-          ? ts.getLineAndCharacterOfPosition(
-              configFile.error.file,
-              configFile.error.start,
-            )
-          : { line: 1, character: 1 }),
+          ? (() => {
+              const position = ts.getLineAndCharacterOfPosition(
+                configFile.error.file,
+                configFile.error.start,
+              );
+              return getSourceLocation(
+                configFile.error.file.fileName,
+                configFile.error.file.text,
+                position.line,
+                position.character,
+              );
+            })()
+          : {
+              file: configFile.error.file?.fileName ?? tsConfigPath,
+              line: 1,
+              character: 1,
+            }),
       },
     );
   }
@@ -57,10 +68,24 @@ export function resolveProgramOptions(inputFile: string): {
         '\n',
       )}`,
       {
-        file: first.file?.fileName ?? tsConfigPath,
         ...(first.file && first.start !== undefined
-          ? ts.getLineAndCharacterOfPosition(first.file, first.start)
-          : { line: 1, character: 1 }),
+          ? (() => {
+              const position = ts.getLineAndCharacterOfPosition(
+                first.file,
+                first.start,
+              );
+              return getSourceLocation(
+                first.file.fileName,
+                first.file.text,
+                position.line,
+                position.character,
+              );
+            })()
+          : {
+              file: first.file?.fileName ?? tsConfigPath,
+              line: 1,
+              character: 1,
+            }),
       },
     );
   }
@@ -228,6 +253,37 @@ export function createEvaluationState(
   program: ts.Program,
   options?: CompileOptions,
 ): EvaluationState {
+  const diagnostic = program.getSyntacticDiagnostics()[0];
+  if (diagnostic) {
+    const sourceFile = diagnostic.file;
+    const location =
+      sourceFile && diagnostic.start !== undefined
+        ? (() => {
+            const position = ts.getLineAndCharacterOfPosition(
+              sourceFile,
+              diagnostic.start,
+            );
+            return getSourceLocation(
+              sourceFile.fileName,
+              sourceFile.text,
+              position.line,
+              position.character,
+            );
+          })()
+        : {
+            file: sourceFile?.fileName,
+            line: 1,
+            character: 1,
+          };
+    throw new ConfTSError(
+      `Failed to parse file: ${ts.flattenDiagnosticMessageText(
+        diagnostic.messageText,
+        '\n',
+      )}`,
+      location,
+    );
+  }
+
   const typeChecker = program.getTypeChecker();
   const enumMap: { [filePath: string]: { [key: string]: any } } = {};
   const importBindingsMap: { [filePath: string]: Set<string> } = {};

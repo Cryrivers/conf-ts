@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use compiler_native::error::ConfTSError;
+use compiler_native::types::LineIndex;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Statement;
 use oxc_parser::Parser;
@@ -172,13 +173,25 @@ fn referenced_module_names(filename: &str, source: &str) -> Result<Vec<String>, 
   let allocator = Allocator::default();
   let source_type = SourceType::from_path(filename).unwrap_or_default();
   let parsed = Parser::new(&allocator, source, source_type).parse();
-  if parsed.panicked {
-    return Err(ConfTSError::new(
-      format!("Failed to parse file: {}", filename),
-      filename,
-      1,
-      1,
-    ));
+  if parsed.panicked || parsed.diagnostics.has_errors() {
+    let diagnostic = parsed.diagnostics.errors().next();
+    let offset = diagnostic
+      .and_then(|value| value.labels.as_slice().first())
+      .map_or(0, |label| label.offset());
+    let (line, character) = LineIndex::new(source).get_location(offset);
+    let detail = diagnostic.map_or_else(
+      || format!("Failed to parse file: {}", filename),
+      |value| {
+        let mut detail = format!("Failed to parse file: {}", value.message);
+        if let Some(help) = &value.help {
+          detail.push_str(&format!("\nHelp: {}", help));
+        }
+        detail
+      },
+    );
+    let mut error = ConfTSError::new(detail, filename, line, character);
+    error.add_source(filename, source);
+    return Err(error);
   }
   let mut names = Vec::new();
   for statement in &parsed.program.body {
