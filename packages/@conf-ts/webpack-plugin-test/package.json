@@ -21,11 +21,11 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "@swc/core": "1.15.43",
+    "@swc/core": "1.15.46",
     "swc-loader": "^0.2.7",
     "ts-loader": "^9.6.2",
     "typescript": "^6.0.3",
-    "webpack": "^5.108.4",
+    "webpack": "^5.109.0",
     "webpack-cli": "^7.2.1"
   },
   "dependencies": {

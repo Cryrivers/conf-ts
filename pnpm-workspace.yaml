@@ -32,6 +32,7 @@ minimumReleaseAgeExclude:
   - '@turbo/windows-64@2.10.6'
   - '@turbo/windows-arm64@2.10.6'
   - turbo@2.10.6
+  - nuqs@2.9.2
 
 onlyBuiltDependencies:
   - esbuild
