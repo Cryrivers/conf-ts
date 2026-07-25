@@ -76,6 +76,69 @@ pub struct NumberValue {
   pub raw: Option<String>,
 }
 
+/// Interpret `digits` as an unsigned integer in `radix`, JS-style: no
+/// overflow, just accumulate into an f64 the way `Number('0xdead…')` does.
+fn radix_string_to_number(digits: &str, radix: u32) -> f64 {
+  if digits.is_empty() {
+    return f64::NAN;
+  }
+  let mut accumulator = 0.0f64;
+  for character in digits.chars() {
+    match character.to_digit(radix) {
+      Some(digit) => accumulator = accumulator * f64::from(radix) + f64::from(digit),
+      None => return f64::NAN,
+    }
+  }
+  accumulator
+}
+
+/// ECMA-262 `ToNumber` applied to a String.
+///
+/// `str::parse::<f64>` is not a substitute: JavaScript trims surrounding
+/// whitespace, maps the empty string to `0`, understands `0x`/`0o`/`0b`
+/// literals, and rejects Rust's `inf`/`infinity`/`nan` spellings. Using the
+/// raw parse silently turned `'' * 1` into `NaN` (JS: `0`), `'  5  ' > 3`
+/// into `false` (JS: `true`) and `'0x10' * 1` into `NaN` (JS: `16`).
+fn js_string_to_number(raw: &str) -> f64 {
+  let trimmed = raw.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+  if trimmed.is_empty() {
+    return 0.0;
+  }
+  if let Some(digits) = trimmed
+    .strip_prefix("0x")
+    .or_else(|| trimmed.strip_prefix("0X"))
+  {
+    return radix_string_to_number(digits, 16);
+  }
+  if let Some(digits) = trimmed
+    .strip_prefix("0o")
+    .or_else(|| trimmed.strip_prefix("0O"))
+  {
+    return radix_string_to_number(digits, 8);
+  }
+  if let Some(digits) = trimmed
+    .strip_prefix("0b")
+    .or_else(|| trimmed.strip_prefix("0B"))
+  {
+    return radix_string_to_number(digits, 2);
+  }
+  match trimmed {
+    "Infinity" | "+Infinity" => return f64::INFINITY,
+    "-Infinity" => return f64::NEG_INFINITY,
+    _ => {}
+  }
+  // A decimal JS numeric literal only ever contains digits, `.`, `e`/`E` and a
+  // sign; anything else alphabetic (`inf`, `nan`, `1px`) is NaN in JS even
+  // though Rust's parser may accept it.
+  if trimmed
+    .chars()
+    .any(|c| c.is_alphabetic() && c != 'e' && c != 'E')
+  {
+    return f64::NAN;
+  }
+  trimmed.parse::<f64>().unwrap_or(f64::NAN)
+}
+
 /// The internal value type used during evaluation.
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -114,7 +177,7 @@ impl Value {
       Value::Number(n) => n.value,
       Value::Bool(true) => 1.0,
       Value::Bool(false) => 0.0,
-      Value::String(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+      Value::String(s) => js_string_to_number(s),
       Value::Null => 0.0,
       Value::Undefined => f64::NAN,
       _ => f64::NAN,
@@ -157,13 +220,11 @@ impl Value {
       (Value::Number(a), Value::Number(b)) => a.value == b.value,
       (Value::String(a), Value::String(b)) => a == b,
       (Value::Bool(a), Value::Bool(b)) => a == b,
-      (Value::Number(_), Value::String(s)) => {
-        let n = s.parse::<f64>().unwrap_or(f64::NAN);
-        self.to_number() == n
-      }
-      (Value::String(s), Value::Number(_)) => {
-        let n = s.parse::<f64>().unwrap_or(f64::NAN);
-        n == other.to_number()
+      // `==` between a number and a string coerces the string with ToNumber,
+      // so it has to go through `to_number` (i.e. `js_string_to_number`) too;
+      // a bare `str::parse` made `0 == ''` and `0 == '0x0'` false.
+      (Value::Number(_), Value::String(_)) | (Value::String(_), Value::Number(_)) => {
+        self.to_number() == other.to_number()
       }
       _ => false,
     }

@@ -1,0 +1,18 @@
+{
+  "tripleNestedSingle": "a",
+  "redundantWithPrecedence": "(a + b) * c",
+  "requiredParensPreserved": "(a + b) * c",
+  "mixedRedundantAndRequired": "a + b * c - d",
+  "nullishThenOrGrouping": "(a ?? b) || c",
+  "logicalAndOrGrouping": "a && b || c && d",
+  "unaryNegationChain": "-a - -b",
+  "chainedSubtractionOfNegatives": "a - -b - -c",
+  "exponentiationLeftGroupingRequired": "(a ** b) ** c",
+  "exponentiationRightGroupingRedundant": "a ** b ** c",
+  "callOnParenthesizedCallee": "a(b)",
+  "callOnDoubleParenthesizedCallee": "a(b)",
+  "callOnParenthesizedExpression": "(a + 1)(b)",
+  "logicalNot": "!a",
+  "doubleLogicalNot": "!!a",
+  "typeofParenthesized": "typeof a"
+}

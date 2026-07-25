@@ -44,22 +44,55 @@ pub fn module_export_name_to_string<'a>(name: &'a ModuleExportName) -> &'a str {
   }
 }
 
+/// ECMA-262 `ToInt32`: truncate toward zero, then wrap modulo 2^32.
+///
+/// `value as i32` cannot be used here: Rust's float-to-int cast *saturates*,
+/// so `4294967296 | 0` would evaluate to `2147483647` instead of JavaScript's
+/// `0`. Every bitwise operator below must agree with the JS compiler.
+fn to_int32(value: f64) -> i32 {
+  if !value.is_finite() {
+    return 0;
+  }
+  let wrapped = value.trunc().rem_euclid(4_294_967_296.0);
+  if wrapped >= 2_147_483_648.0 {
+    (wrapped - 4_294_967_296.0) as i32
+  } else {
+    wrapped as i32
+  }
+}
+
+/// ECMA-262 `ToUint32`, which shares `ToInt32`'s modular arithmetic.
+fn to_uint32(value: f64) -> u32 {
+  to_int32(value) as u32
+}
+
+/// JavaScript strings are sequences of UTF-16 code units, so `.length` and
+/// `s[i]` must be measured in code units rather than Unicode scalar values —
+/// otherwise anything outside the BMP (emoji, rare CJK) makes the native
+/// compiler disagree with the JS compiler. A lone surrogate cannot be
+/// represented in a Rust `String`, so an index that lands on half of a
+/// surrogate pair yields the replacement character.
+fn js_string_length(value: &str) -> f64 {
+  value.encode_utf16().count() as f64
+}
+
+fn js_string_char_at(value: &str, index: usize) -> Value {
+  match value.encode_utf16().nth(index) {
+    Some(unit) => Value::String(String::from_utf16_lossy(&[unit])),
+    None => Value::Undefined,
+  }
+}
+
 fn set_object_prop(
   map: &mut IndexMap<String, Value>,
   key: String,
   value: Value,
   preserve_key_order: bool,
 ) {
-  if preserve_key_order {
-    if let Some(existing) = map.get_mut(&key) {
-      *existing = value;
-    } else {
-      map.insert(key, value);
-    }
-  } else {
+  if !preserve_key_order {
     map.shift_remove(&key);
-    map.insert(key, value);
   }
+  map.insert(key, value);
 }
 
 fn get_object_prop(map: &IndexMap<String, Value>, key: &str) -> Value {
@@ -457,7 +490,7 @@ fn evaluate_inner(
         UnaryOperator::UnaryNegation => Ok(Value::number(-operand.to_number())),
         UnaryOperator::LogicalNot => Ok(Value::Bool(!operand.is_truthy())),
         UnaryOperator::BitwiseNot => {
-          let n = operand.to_number() as i32;
+          let n = to_int32(operand.to_number());
           Ok(Value::number((!n) as f64))
         }
         _ => {
@@ -716,17 +749,12 @@ fn eval_member_access(
     Ok(Value::String(s)) => {
       if is_computed {
         if let Ok(idx) = prop_name.parse::<usize>() {
-          return Ok(
-            s.chars()
-              .nth(idx)
-              .map(|c| Value::String(c.to_string()))
-              .unwrap_or(Value::Undefined),
-          );
+          return Ok(js_string_char_at(s, idx));
         }
         return Ok(Value::Undefined);
       }
       if prop_name == "length" {
-        return Ok(Value::number(s.chars().count() as f64));
+        return Ok(Value::number(js_string_length(s)));
       }
       return Ok(Value::Undefined);
     }
@@ -893,16 +921,11 @@ fn eval_optional_member_access(
     Value::String(s) => {
       if is_computed {
         if let Ok(idx) = prop_name.parse::<usize>() {
-          return Ok(
-            s.chars()
-              .nth(idx)
-              .map(|c| Value::String(c.to_string()))
-              .unwrap_or(Value::Undefined),
-          );
+          return Ok(js_string_char_at(&s, idx));
         }
       }
       if prop_name == "length" {
-        return Ok(Value::number(s.chars().count() as f64));
+        return Ok(Value::number(js_string_length(&s)));
       }
       Ok(Value::Undefined)
     }
@@ -939,22 +962,22 @@ fn eval_binary_op(
     BinaryOperator::Inequality => Ok(Value::Bool(!left.loose_eq(&right))),
     BinaryOperator::StrictInequality => Ok(Value::Bool(!left.strict_eq(&right))),
     BinaryOperator::BitwiseAnd => Ok(Value::number(
-      ((left.to_number() as i32) & (right.to_number() as i32)) as f64,
+      (to_int32(left.to_number()) & to_int32(right.to_number())) as f64,
     )),
     BinaryOperator::BitwiseOR => Ok(Value::number(
-      ((left.to_number() as i32) | (right.to_number() as i32)) as f64,
+      (to_int32(left.to_number()) | to_int32(right.to_number())) as f64,
     )),
     BinaryOperator::BitwiseXOR => Ok(Value::number(
-      ((left.to_number() as i32) ^ (right.to_number() as i32)) as f64,
+      (to_int32(left.to_number()) ^ to_int32(right.to_number())) as f64,
     )),
     BinaryOperator::ShiftLeft => Ok(Value::number(
-      ((left.to_number() as i32) << ((right.to_number() as i32) & 31)) as f64,
+      (to_int32(left.to_number()) << (to_uint32(right.to_number()) & 31)) as f64,
     )),
     BinaryOperator::ShiftRight => Ok(Value::number(
-      ((left.to_number() as i32) >> ((right.to_number() as i32) & 31)) as f64,
+      (to_int32(left.to_number()) >> (to_uint32(right.to_number()) & 31)) as f64,
     )),
     BinaryOperator::ShiftRightZeroFill => Ok(Value::number(
-      ((left.to_number() as i32 as u32) >> ((right.to_number() as i32) & 31)) as f64,
+      (to_uint32(left.to_number()) >> (to_uint32(right.to_number()) & 31)) as f64,
     )),
     BinaryOperator::In => {
       let key = left.to_display_string();
@@ -1147,8 +1170,39 @@ fn resolve_declared_in_file(
   Ok(None)
 }
 
+/// Nesting limit for `resolve_in_file`. Circular `export * from` chains and
+/// circular `const` references recurse here forever; without a bound the
+/// native stack overflows and takes the whole Node process down with a
+/// SIGSEGV that no JS `try`/`catch` can see. Real import/re-export chains are
+/// nowhere near this deep, so the limit only ever fires on a cycle.
+const MAX_RESOLVE_DEPTH: usize = 400;
+
 /// Try to resolve a name within a file's declarations and re-exports.
 pub fn resolve_in_file(
+  name: &str,
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  local_context: Option<&HashMap<String, Value>>,
+  options: &CompileOptions,
+) -> Result<Option<Value>, ConfTSError> {
+  if ctx.resolve_depth >= MAX_RESOLVE_DEPTH {
+    return Err(ConfTSError::new(
+      format!(
+        "Circular reference detected while resolving \"{}\". Remove the circular import or re-export.",
+        name
+      ),
+      &file_ctx.file_path,
+      1,
+      1,
+    ));
+  }
+  ctx.resolve_depth += 1;
+  let result = resolve_in_file_inner(name, file_ctx, ctx, local_context, options);
+  ctx.resolve_depth -= 1;
+  result
+}
+
+fn resolve_in_file_inner(
   name: &str,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
@@ -1170,10 +1224,10 @@ pub fn resolve_in_file(
           let original_name = module_export_name_to_string(&specifier.local);
           if let Some(src) = &named_export.source {
             if let Some(imported_ctx) = resolve_imported_file(src.value.as_str(), file_ctx, ctx) {
-              return resolve_in_file(&original_name, &imported_ctx, ctx, None, options);
+              return resolve_in_file(original_name, &imported_ctx, ctx, None, options);
             }
           } else {
-            return resolve_declared_in_file(&original_name, file_ctx, ctx, local_context, options);
+            return resolve_declared_in_file(original_name, file_ctx, ctx, local_context, options);
           }
         }
       }
@@ -1240,13 +1294,11 @@ fn exported_values(
           let exported_name = module_export_name_to_string(&specifier.exported);
           let val = if let Some(src) = &export_decl.source {
             resolve_imported_file(src.value.as_str(), file_ctx, ctx)
-              .map(|imported_ctx| {
-                resolve_in_file(&original_name, &imported_ctx, ctx, None, options)
-              })
+              .map(|imported_ctx| resolve_in_file(original_name, &imported_ctx, ctx, None, options))
               .transpose()?
               .flatten()
           } else {
-            resolve_declared_in_file(&original_name, file_ctx, ctx, None, options)?
+            resolve_declared_in_file(original_name, file_ctx, ctx, None, options)?
           };
           if let Some(val) = val {
             set_object_prop(
@@ -1288,10 +1340,14 @@ fn check_var_decl(
     for decl in &var_decl.declarations {
       if let BindingPattern::BindingIdentifier(ident) = &decl.id {
         if ident.name.as_str() == name {
+          // `using` / `await using` reach this arm too, and a Rust panic here
+          // would abort the whole Node process instead of surfacing a
+          // diagnostic. The JS compiler derives this label from TypeScript's
+          // NodeFlags, which only distinguishes `let`, so everything that is
+          // not `let` is reported as `var` to keep the two messages identical.
           let kind = match var_decl.kind {
             VariableDeclarationKind::Let => "let",
-            VariableDeclarationKind::Var => "var",
-            _ => unreachable!(),
+            _ => "var",
           };
           return Err(ConfTSError::new(
             format!(
@@ -1682,6 +1738,9 @@ pub struct EvalContext {
   pub file_contexts: HashMap<String, FileContext>,
   pub resolver: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
   evaluation_stack: Vec<EvaluationFrame>,
+  /// Current `resolve_in_file` nesting, bounded by `MAX_RESOLVE_DEPTH` so a
+  /// circular import turns into a diagnostic instead of a stack overflow.
+  resolve_depth: usize,
   /// Set only by a macro pre-evaluation pass (see @conf-ts/macro-transformer-native)
   /// to intercept call-expression evaluation instead of the default
   /// "only allowed in macro mode" error. compiler-native's own compile
@@ -1775,6 +1834,7 @@ impl EvalContext {
       file_contexts: HashMap::new(),
       resolver: None,
       evaluation_stack: Vec::new(),
+      resolve_depth: 0,
       macro_evaluator: None,
       transform_state: None,
       extension: None,
@@ -1823,7 +1883,7 @@ pub fn find_default_export(
           };
           if let Some(target_ctx) = target_ctx {
             if let Some(value) =
-              resolve_in_file(&original_name, &target_ctx, eval_ctx, None, options)?
+              resolve_in_file(original_name, &target_ctx, eval_ctx, None, options)?
             {
               return Ok(value);
             }

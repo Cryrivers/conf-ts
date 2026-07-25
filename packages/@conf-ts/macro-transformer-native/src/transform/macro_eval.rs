@@ -783,25 +783,50 @@ fn collect_parenthesized_spans(source: &str, allocator: &Allocator) -> Vec<(usiz
     .collect()
 }
 
-fn expression_sources_are_equivalent(left: &str, right: &str, allocator: &Allocator) -> bool {
-  let left = wrapped_expression_source(left);
-  let right = wrapped_expression_source(right);
+// Parse an already-wrapped expression statement with parentheses folded away,
+// returning None when the text is not valid syntax. `wrapped` must outlive the
+// returned program, which is why callers hold the wrapped strings in scope.
+fn parse_paren_free_program<'a>(wrapped: &'a str, allocator: &'a Allocator) -> Option<Program<'a>> {
   let options = ParseOptions {
     preserve_parens: false,
     ..ParseOptions::default()
   };
-  let left_parsed = Parser::new(allocator, &left, SourceType::ts())
+  let parsed = Parser::new(allocator, wrapped, SourceType::ts())
     .with_options(options)
     .parse();
-  if left_parsed.panicked || !left_parsed.diagnostics.is_empty() {
-    return false;
-  }
-  let right_parsed = Parser::new(allocator, &right, SourceType::ts())
-    .with_options(options)
-    .parse();
-  !right_parsed.panicked
-    && right_parsed.diagnostics.is_empty()
-    && left_parsed.program.content_eq(&right_parsed.program)
+  (!parsed.panicked && parsed.diagnostics.is_empty()).then_some(parsed.program)
+}
+
+// Whether `wrapped_candidate` parses to the same AST as a program already
+// parsed from the text being simplified. The candidate is taken pre-wrapped so
+// it can be materialized by the caller: the program the allocator parses it
+// into borrows from it, and must share a lifetime with `reference`.
+fn candidate_matches<'a>(
+  wrapped_candidate: &'a str,
+  reference: &Program<'a>,
+  allocator: &'a Allocator,
+) -> bool {
+  parse_paren_free_program(wrapped_candidate, allocator)
+    .is_some_and(|candidate| reference.content_eq(&candidate))
+}
+
+// Drop the parenthesis pair delimiting `source[start..end]`, keeping everything
+// between them. Callers must have checked `is_valid_paren_span` first.
+fn remove_paren_pair(source: &str, start: usize, end: usize) -> String {
+  format!(
+    "{}{}{}",
+    &source[..start],
+    &source[start + 1..end - 1],
+    &source[end..]
+  )
+}
+
+// Collect the parenthesis pairs of `source` that are safe to slice out,
+// ordered smallest first so the innermost redundant layer is tried first.
+fn collect_removable_paren_spans(source: &str, allocator: &Allocator) -> Vec<(usize, usize)> {
+  let mut spans = collect_parenthesized_spans(source, allocator);
+  spans.retain(|(start, end)| is_valid_paren_span(source, *start, *end));
+  spans
 }
 
 fn remove_spans(source: &str, spans: &[(usize, usize)]) -> String {
@@ -834,40 +859,104 @@ fn is_valid_paren_span(source: &str, start: usize, end: usize) -> bool {
 
 pub fn remove_redundant_parentheses(source: &str) -> String {
   let allocator = Allocator::default();
-  let mut spans = collect_parenthesized_spans(source, &allocator);
-  spans.retain(|(start, end)| is_valid_paren_span(source, *start, *end));
+  let spans = collect_removable_paren_spans(source, &allocator);
   if spans.is_empty() {
     return source.to_string();
   }
 
-  spans.sort_by_key(|(start, end)| end - start);
+  // `source` is the fixed left-hand side of every comparison below, so parse it
+  // once here rather than re-parsing it inside each equivalence check. The
+  // wrapped candidates are materialized before being parsed because the
+  // programs the allocator produces borrow from them.
+  let wrapped_source = wrapped_expression_source(source);
+  let Some(source_program) = parse_paren_free_program(&wrapped_source, &allocator) else {
+    return source.to_string();
+  };
 
   // Fast path: try removing all parentheses at once.
-  let candidate = remove_spans(source, &spans);
-  if expression_sources_are_equivalent(source, &candidate, &allocator) {
-    return candidate;
+  let all_removed = remove_spans(source, &spans);
+  let wrapped_all_removed = wrapped_expression_source(&all_removed);
+  if candidate_matches(&wrapped_all_removed, &source_program, &allocator) {
+    return all_removed;
   }
 
   // Slow path: test each span individually against the original source,
-  // then apply all removable spans in one pass.
+  // then apply all removable spans in one pass -- but only if that batch
+  // removal is *itself* still equivalent to the original. Individually-safe
+  // spans are not always jointly safe: e.g. for `((a+b))*(c)` both the
+  // inner and outer parens of `((a+b))` pass the individual test (each
+  // leaves the other layer in place to protect `a+b` from the following
+  // `*`), but removing both at once yields `a+b*c`, which reassociates
+  // under operator precedence. Fall back to the provably-correct
+  // one-at-a-time algorithm whenever the batch isn't verified safe.
+  let wrapped_singles: Vec<String> = spans
+    .iter()
+    .map(|&(start, end)| wrapped_expression_source(&remove_paren_pair(source, start, end)))
+    .collect();
   let removable: Vec<(usize, usize)> = spans
     .iter()
-    .filter(|(start, end)| {
-      let single = format!(
-        "{}{}{}",
-        &source[..*start],
-        &source[start + 1..end - 1],
-        &source[*end..]
-      );
-      expression_sources_are_equivalent(source, &single, &allocator)
-    })
-    .copied()
+    .zip(&wrapped_singles)
+    .filter(|(_, wrapped)| candidate_matches(wrapped, &source_program, &allocator))
+    .map(|(&span, _)| span)
     .collect();
 
   if removable.is_empty() {
     return source.to_string();
   }
-  remove_spans(source, &removable)
+
+  // When every span is individually removable the batch below is byte-identical
+  // to the all-at-once candidate the fast path already rejected, so only the
+  // one-at-a-time algorithm can still make progress.
+  if removable.len() < spans.len() {
+    let batch_candidate = remove_spans(source, &removable);
+    let wrapped_batch = wrapped_expression_source(&batch_candidate);
+    if candidate_matches(&wrapped_batch, &source_program, &allocator) {
+      return batch_candidate;
+    }
+  }
+
+  remove_redundant_parentheses_iterative(source)
+}
+
+// Provably-correct fallback used only when batching individually-safe
+// removals is not itself safe (interacting/nested spans, see above): remove
+// one redundant span at a time, smallest first, re-collecting and
+// re-validating spans against the current output after every removal.
+fn remove_redundant_parentheses_iterative(source: &str) -> String {
+  let mut output = source.to_string();
+
+  loop {
+    let allocator = Allocator::default();
+    let mut spans = collect_removable_paren_spans(&output, &allocator);
+    spans.sort_by_key(|(start, end)| end - start);
+
+    // `output` is the fixed left-hand side for every comparison below, so
+    // parse it once instead of re-parsing it inside each equivalence check.
+    // The wrapped candidates are materialized up front because they have to
+    // outlive the programs the allocator parses them into.
+    let wrapped_output = wrapped_expression_source(&output);
+    let Some(output_program) = parse_paren_free_program(&wrapped_output, &allocator) else {
+      return output;
+    };
+    let wrapped_candidates: Vec<String> = spans
+      .iter()
+      .map(|&(start, end)| wrapped_expression_source(&remove_paren_pair(&output, start, end)))
+      .collect();
+
+    let simplified = wrapped_candidates
+      .iter()
+      .position(|wrapped| candidate_matches(wrapped, &output_program, &allocator));
+
+    match simplified {
+      // Recover the unwrapped candidate from the wrapped text instead of
+      // keeping a second copy of every candidate around.
+      Some(index) => {
+        let wrapped = &wrapped_candidates[index];
+        output = wrapped[EXPRESSION_WRAPPER_PREFIX.len()..wrapped.len() - 1].to_string();
+      }
+      None => return output,
+    }
+  }
 }
 
 // Keep this in sync with @conf-ts/macro-transformer/src/expression-rewrite.ts encodeStringLiteral.
