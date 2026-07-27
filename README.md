@@ -8,6 +8,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 
 - [Why conf-ts](#why-conf-ts)
 - [Quick start](#quick-start)
+- [Agent skill](#agent-skill)
 - [Packages in this monorepo](#packages-in-this-monorepo)
 - [Macro transform](#macro-transform)
 - [Runtime expression evaluator](#runtime-expression-evaluator)
@@ -77,6 +78,37 @@ conf-ts -p src/config.conf.ts
 The compiled output is printed to stdout.
 
 </details>
+
+## Agent skill
+
+This repo ships an [Agent Skill](https://agentskills.io) that teaches coding agents how to author conf-ts configs — the supported TypeScript subset, the macro and `expr()` rules, and how to read a conf-ts compile error. Install it with the [`skills`](https://www.npmjs.com/package/skills) CLI:
+
+```bash
+npx skills add Cryrivers/conf-ts
+```
+
+It works with Claude Code, Codex, Cursor, OpenCode, Gemini CLI, GitHub Copilot, and [70+ other agents](https://github.com/vercel-labs/skills#supported-agents). Pick targets explicitly, or install globally, with the usual flags:
+
+```bash
+# Install for specific agents
+npx skills add Cryrivers/conf-ts -a claude-code -a codex
+
+# Install once for every project
+npx skills add Cryrivers/conf-ts -g
+
+# Try it without installing
+npx skills use Cryrivers/conf-ts@conf-ts | claude
+```
+
+The skill lives in [`skills/conf-ts`](skills/conf-ts) and is scoped to writing config files: it deliberately leaves out the CLI, the programmatic API, and the bundler plugins, which are documented below.
+
+| File                                                                         | Covers                                                                                     |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| [`SKILL.md`](skills/conf-ts/SKILL.md)                                        | Mode selection, the rules that most often break a config, authoring conventions            |
+| [`references/config-syntax.md`](skills/conf-ts/references/config-syntax.md) | Supported and unsupported TypeScript, enums, key ordering, multi-file configs, path aliases |
+| [`references/macros.md`](skills/conf-ts/references/macros.md)               | `String`/`Number`/`Boolean`, the array macros, `env`, nesting and import rules              |
+| [`references/expr.md`](skills/conf-ts/references/expr.md)                   | `expr()`, `exprTemplate()`, composition, nested callbacks, `LooseExpr`, emitted grammar     |
+| [`references/errors.md`](skills/conf-ts/references/errors.md)               | Every compile error message, its cause, and the fix                                        |
 
 ## Packages in this monorepo
 

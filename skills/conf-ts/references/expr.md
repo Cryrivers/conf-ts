@@ -1,0 +1,334 @@
+# `expr()`, `exprTemplate()`, and the runtime evaluator
+
+Use `expr()` when a value can only be resolved later, against data available at
+runtime — a permission check, a feature-flag rule, a pricing formula. Write it as
+ordinary type-checked TypeScript; during compilation the macro turns it into a
+portable **expression string** instead of running it.
+
+Requires macro mode and `import { expr } from '@conf-ts/macro'`.
+
+## Basics
+
+```ts
+import { expr } from '@conf-ts/macro';
+
+enum Status { Active = 'active' }
+const MIN_AGE = 18;
+
+type UserContext = { user: { age: number; status: Status } };
+
+export default {
+  canEnter: expr<UserContext, boolean>(
+    ctx => ctx.user.age >= MIN_AGE && ctx.user.status === Status.Active,
+  ),
+};
+```
+
+```json
+{ "canEnter": "user.age >= 18 && user.status === \"active\"" }
+```
+
+The context parameter's name is stripped; constants and enum members are folded
+to literals.
+
+### Callback rules
+
+- Synchronous **arrow function** with an **expression body**.
+- Exactly one identifier parameter, or **no parameter at all**.
+- Root context access must go through a property: `ctx.user`, `ctx['user']`.
+  Bare `ctx` is rejected. A computed root key (`ctx[key]`) must resolve to a
+  valid identifier name at compile time.
+- Rejected: block bodies, `function` expressions, `async`, assignments,
+  `++`/`--`, `new`, regex — anything outside the runtime grammar below.
+
+All rejections surface as `Unsupported call expression: expr` (TypeScript
+transformer) / `Function "expr" is only allowed in macro mode` (native).
+
+### Operators
+
+Everything in the runtime grammar is available:
+
+```ts
+expr<Context, number>(ctx => ctx.base ** ctx.exponent);   // "base ** exponent"
+expr<Context, number>(ctx => ctx.left >>> ctx.right);      // "left >>> right"
+expr<Context, boolean>(ctx => ctx.key in ctx.object);      // "key in object"
+expr<Context, boolean>(ctx => ctx.v instanceof ctx.Ctor);  // "v instanceof Ctor"
+expr<Context, boolean>(ctx => delete ctx.object.removable);
+expr<Context, string>(ctx => typeof ctx.value);
+```
+
+### Formatting of the emitted string
+
+- Formatting whitespace (newlines, tabs, runs of spaces) collapses to a single
+  space; whitespace **inside** string and template literals is preserved.
+- Comments are erased; type assertions (`as`, `satisfies`, `<T>`, `!`) and
+  explicit type arguments are erased.
+- Semantically redundant parentheses are removed, precedence-required ones kept:
+
+  | Source                       | Emitted            |
+  | ---------------------------- | ------------------ |
+  | `(((ctx.a)))`               | `a`                |
+  | `ctx.a + (ctx.b * ctx.c)`   | `a + b * c`        |
+  | `(ctx.a + ctx.b) * ctx.c`   | `(a + b) * c`      |
+  | `ctx.a - (ctx.b - ctx.c)`   | `a - (b - c)`      |
+  | `(ctx.a ?? ctx.b) \|\| ctx.c` | `(a ?? b) \|\| c` |
+  | `(ctx.a ** ctx.b) ** ctx.c` | `(a ** b) ** c`    |
+  | `(-ctx.a) ** ctx.b`         | `(-a) ** b`        |
+
+### Quote style
+
+String literals in the emitted expression use double quotes by default; a build
+may switch this to single quotes. Either way it is the *output* encoding, not
+something you control per call — write the callback with whichever quotes the
+file's style uses, and expect the emitted string to be normalized.
+
+## Other macros inside `expr()`
+
+`String`/`Number`/`Boolean`/`env` fold to literals whenever their argument is
+compile-time known, and stay as runtime calls when it depends on the context:
+
+```ts
+expr<Context, boolean>(ctx => ctx.a === String(1));        // "a === \"1\""
+expr<Context, boolean>(ctx => ctx.mode === env('MODE', 'dev')); // "mode === \"dev\""
+expr<Context, boolean>(ctx => ctx.a === String(ctx.n));    // "a === String(n)"
+expr<Context, number>(ctx => Number(ctx.n + 41));          // "Number(n + 41)"
+```
+
+A property or object key that merely happens to be spelled like the context
+parameter is not a reference to it, and still folds.
+
+Rejected: a macro call referencing an identifier that is neither a constant nor
+sourced from the context, and a cast macro called with the wrong arity.
+
+## Composing `Expr` values
+
+A compiled `Expr` can be called with the current context; the transformer inlines
+it recursively and adds parentheses to preserve precedence.
+
+```ts
+type Context = { a: boolean; b: boolean; c: boolean };
+
+const bOrC = expr<Context, boolean>(ctx => ctx.b || ctx.c);
+const alias = bOrC;
+const scored = expr<Context, boolean>(ctx => ctx.a && alias(ctx));
+
+export default {
+  single: expr<Context, boolean>(ctx => ctx.a && bOrC(ctx)),      // "a && (b || c)"
+  multiLevel: expr<Context, boolean>(ctx => scored(ctx) || ctx.c),
+};
+```
+
+- Resolves through local `const` aliases and directly named/default imported
+  `Expr` values, at any nesting depth, across files.
+- The argument must be the enclosing callback's **bare parameter identifier**
+  (any name, not just `ctx`).
+- Rejected — `subExpr(ctx.child)`, `subExpr(other)`, `subExpr()`,
+  `subExpr(ctx, ctx)`, `subExpr(...[ctx])`:
+  `Nested Expr 'subExpr' must be called with exactly one argument: the current expr context parameter 'ctx'.`
+- Namespace properties, function-returned `Expr` values, and re-export chains are
+  **not** resolved as composed `Expr` sources.
+- Ordinary (non-`Expr`) functions are not subject to this validation.
+
+### Context-less expressions
+
+```ts
+const always = expr(() => true);
+
+export default {
+  literal: expr(() => true),                 // "true"
+  computed: expr(() => 1 + 2),               // "1 + 2"
+  combined: expr(() => always() && 1 < 2),   // "true && 1 < 2"
+};
+```
+
+A nested `Expr` composed into a context-less callback must be called with **no**
+arguments.
+
+## Nested callbacks inside `expr()`
+
+The body may call methods that take their own callback. Callbacks are
+down-leveled to expression-bodied arrow text.
+
+```ts
+type Context = { matrix: number[][]; threshold: number; scores: number[] };
+
+export default {
+  countPositiveRows: expr<Context, number>(
+    ctx => ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold)).length,
+  ),
+  reduceSum: expr<Context, number>(
+    ctx => ctx.scores.reduce((sum, value) => sum + value, 0),
+  ),
+};
+```
+
+Emitted: `matrix.filter(row => row.some(cell => cell > threshold)).length`,
+`scores.reduce((sum, value) => sum + value, 0)`.
+
+Supported callback forms:
+
+- Arrow function or `function` expression.
+- Expression body, or a block body containing a **single** `return` statement.
+  Both down-level to the same arrow text.
+- Zero, one, or many parameters.
+- Parameters may be plain identifiers, **one level** of object/array
+  destructuring (defaults, renaming, holes, pattern rest), and a single trailing
+  rest parameter.
+- Arbitrary nesting depth; inner callbacks may reference the outer `expr()`
+  context and bindings from any enclosing callback.
+- Method calls on non-context receivers stay as runtime calls:
+  `[1, 2].includes(ctx.quota)` → `[1, 2].includes(quota)`.
+
+```ts
+ctx => ctx.pairs.some(({ a, b = MIN_SCORE }) => a < b)  // "pairs.some(({a, b = 3}) => a < b)"
+ctx => ctx.matrix.map(([, b]) => b)                      // "matrix.map(([, b]) => b)"
+ctx => ctx.queue.reduce((sum, ...rest) => sum + rest.length, 0)
+```
+
+Not supported inside a nested callback: `async`/generator functions, type
+annotations, more than one statement in a block body, and a parameter name that
+**shadows** the `expr()` context parameter or a name bound by an enclosing
+callback.
+
+### Object/array syntax in expressions
+
+```ts
+expr<Context, number[]>(ctx => [...ctx.items, 99]);            // "[...items, 99]"
+expr<Context, unknown>(ctx => ({ TAX_RATE, key: ctx.key }));   // "{TAX_RATE: 0.08, key: key}"
+expr<Context, unknown>(ctx => ({ [ctx.key]: ctx.value }));     // "{[key]: value}"
+expr<Context, unknown>(ctx => ctx.items.map(item => ({ item, doubled: item * 2 })));
+```
+
+Shorthand referencing an outer constant folds to a literal; shorthand
+referencing a callback's own parameter stays as runtime shorthand.
+
+## `exprTemplate()`: reusable parameterized expressions
+
+The callback's first parameter is always the runtime context; every parameter
+after it is supplied at instantiation and folded into the emitted `Expr`.
+
+```ts
+import { exprTemplate, type LooseExprTemplate } from '@conf-ts/macro';
+
+type Context = { subtotal: number; customer?: { discount?: number } };
+
+const withTax = exprTemplate<Context, number, [number]>(
+  (ctx, taxRate) => ctx.subtotal * (1 + taxRate),
+);
+
+const singaporeTotal = withTax(0.09);   // "subtotal * (1 + 0.09)"
+
+const discounted: LooseExprTemplate<Context, boolean, [number]> =
+  exprTemplate((ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum);
+```
+
+Rules:
+
+- The context parameter must be a **plain identifier** — destructuring it fails
+  with `exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier`.
+- Later parameters support optional/default values, a trailing rest parameter,
+  and one level of object/array destructuring (defaults, holes, renaming,
+  pattern rest). Nested patterns and computed binding keys are not supported.
+  Defaults evaluate in declaration order and may reference earlier template
+  parameters or outer constants.
+- Arguments must be statically analyzable: literals, enums, imported/local
+  `const` values, `undefined`, `null`, finite numbers, strings, booleans,
+  arrays, plain objects, and static array spreads.
+- A specialized result is an ordinary `Expr` and can take part in `subExpr(ctx)`
+  composition.
+- Templates forward through `const` aliases, named/default/namespace imports, and
+  named/default/star re-export chains.
+- The template itself is compile-time-only: it cannot escape into runtime data
+  (`{ invalid: [add] }`) or be invoked dynamically (`function f(v) { return add(v); }`).
+
+```ts
+const includes = exprTemplate<Context, boolean, [number[]]>(
+  (ctx, allowed) => allowed.includes(ctx.a),
+);
+includes([1, 2, 3]);   // "[1, 2, 3].includes(a)"
+```
+
+Errors: `exprTemplate arguments must be statically analyzable`,
+`exprTemplate expected at most N static argument(s), but received M`,
+`exprTemplate values are compile-time-only`.
+
+## `LooseExpr`: skipping `?.` for deeply optional contexts
+
+`LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr`. It
+presents the callback with a deeply-required view of `Context` so the body reads
+naturally:
+
+```ts
+import { expr, type LooseExpr } from '@conf-ts/macro';
+
+type Context = { a?: { b?: { c?: number } } };
+
+const check: LooseExpr<Context, number | boolean> = expr(ctx => ctx.a.b.c || true);
+```
+
+Only container types (nested objects, arrays, including object types inside
+array element types) are made non-optional. The value read at the end of a path
+that crossed an optional level is still unioned with `undefined`: for
+`{ a?: { b?: { c?: { d: string } } } }`, `ctx.a.b.c.d` type-checks with no `?.`
+but has type `string | undefined`. Tuple element positions are not preserved.
+
+Compile-time behavior is identical to `Expr`. **`LooseExpr` values must be
+evaluated with `optionalMemberAccess: true` (or `loose: true`)** — `expression()`
+only accepts a `LooseExpr` argument when one of those options is set.
+
+## The grammar the emitted string may use
+
+The compiled string is evaluated later by `@conf-ts/expression`, against a plain
+environment object whose properties become the expression's root identifiers.
+That grammar is the real limit on what you can write inside `expr()` — anything
+outside it is rejected at compile time.
+
+```ts
+// config.conf.ts
+export default { canEnter: expr<UserContext, boolean>(ctx => ctx.user.age >= 18) };
+// → { "canEnter": "user.age >= 18" }
+// consumed at runtime as: expression(config.canEnter)({ user: { age: 20 } })
+```
+
+### Supported syntax
+
+| Category    | Supported                                                                                                                     |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Literals    | Decimal numbers incl. exponents, strings (with `\uXXXX` escapes), booleans, `null`, `undefined`                              |
+| Collections | Array literals with spread; object literals with identifier/string/computed keys, shorthand, trailing commas, object spread   |
+| Access      | Identifiers, `o.p`, `o[k]`, `o?.p`, `o?.[k]`                                                                                  |
+| Calls       | Functions and methods from the environment; method calls preserve `this`                                                      |
+| Functions   | Arrow functions as callback arguments — expression bodies only, with identifier/destructured/rest/defaulted params, nesting, closures |
+| Templates   | Template literals, nested interpolation, tagged templates                                                                     |
+| Arithmetic  | `+ - * / % **` (right-associative `**`)                                                                                       |
+| Comparison  | `< <= > >= == != === !==`, `in`, `instanceof`                                                                                 |
+| Bitwise     | `& \| ^ ~ << >> >>>`                                                                                                          |
+| Logical     | `! && \|\| ??` with short-circuiting                                                                                          |
+| Unary       | `+ -`, `typeof`, `void`, `delete`                                                                                             |
+| Control     | Parentheses, conditional `c ? a : b`                                                                                          |
+
+Not supported: assignments, `++`/`--`, block-bodied arrows, `new`, classes,
+regular expressions, comments.
+
+### Runtime semantics to write against
+
+Within that grammar the evaluator follows JavaScript: missing properties are
+`undefined`; non-optional access through `null`/`undefined` **throws**; accessor,
+Proxy, non-callable and invoked-function errors propagate; unary coercion,
+short-circuiting, spread, computed keys, array holes, `this`, `delete`, and
+`void` behave as in JS.
+
+Two consequences for how you write the callback:
+
+- **Guard optional paths.** `ctx.a.b.c` compiles happily and then throws at
+  runtime if `a` is missing. Either write `ctx.a?.b?.c`, or annotate the result
+  as `LooseExpr` and have the consumer evaluate with `loose: true`.
+- **Only call what the environment will actually provide.** Method calls on
+  non-context receivers (`[1, 2].includes(...)`, `'ab'.includes(...)`) survive as
+  runtime calls, and array methods resolve against the real value passed in. A
+  helper the runtime doesn't supply becomes an error only when the expression is
+  evaluated, not when the config compiles.
+
+The evaluator is not a security sandbox — an expression can read any object and
+invoke any function reachable through the environment. Keep configs that carry
+`expr()` output under the same review as code.
