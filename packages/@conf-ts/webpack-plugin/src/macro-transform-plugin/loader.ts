@@ -232,6 +232,7 @@ function transformOptionsKey(options: MacroTransformOptions): string {
       left.localeCompare(right),
     ),
     preserveKeyOrder: options.preserveKeyOrder === true,
+    pruneExprTemplate: options.pruneExprTemplate === true,
     quote: options.quote ?? 'double',
     sourceMap: options.sourceMap === true,
   });

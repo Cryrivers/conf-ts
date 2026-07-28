@@ -12,6 +12,12 @@ export interface EvaluationState {
 
 /** @internal Extension point for evaluating call expressions. */
 export interface EvaluationOptions extends CompileOptions {
+  /**
+   * Propagate errors raised while evaluating a `typeof` operand instead of
+   * applying the unresolved-identifier fallback. Used by callers that must
+   * distinguish a genuinely static expression from an unsupported one.
+   */
+  propagateTypeofErrors?: boolean;
   evaluateCallExpression?: (
     expression: ts.CallExpression,
     sourceFile: ts.SourceFile,

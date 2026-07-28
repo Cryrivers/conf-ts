@@ -324,6 +324,14 @@ ordinary `Expr` and can participate in `subExpr(ctx)` composition. The template
 itself cannot escape into runtime data or be invoked dynamically; it may only
 be called or forwarded through those compile-time bindings.
 
+With the macro transform option `pruneExprTemplate: true`, ternary conditions
+that can be decided entirely from template arguments and other static values
+are evaluated during specialization. Only the selected branch is emitted, so
+an omitted optional argument can select a branch with a check such as
+`typeof value === 'undefined'`. The option defaults to `false`; disabled
+transforms keep the full conditional and skip the extra analysis. Dynamic
+conditions that reference `ctx` are retained even when pruning is enabled.
+
 #### Nested callbacks inside `expr()`
 
 The expression body can call methods that take their own callback — `ctx.queue.filter(i => i < 5)`, `ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold))`, `ctx.scores.reduce((sum, value) => sum + value, 0)`, and so on. A nested callback can be an arrow function or a `function` expression, with either an expression body or a block body containing a single `return` statement; both forms are down-leveled to the same expression-bodied arrow text that `@conf-ts/expression` evaluates at runtime. Nested callback parameters may be plain identifiers, one level of object/array destructuring (with defaults, renamed properties, and holes), and a single trailing rest parameter. Callbacks can nest arbitrarily deep and freely reference the outer `expr()` context and bindings from any enclosing callback.
@@ -512,7 +520,11 @@ const code = readFileSync(filename, 'utf8');
 const project = createMacroProjectSnapshot([filename]);
 const transformed = transform(
   { filename, code, project },
-  { quote: 'single', env: process.env },
+  {
+    quote: 'single',
+    env: process.env,
+    pruneExprTemplate: true,
+  },
 );
 
 const result = compile({ filename, code: transformed.code, project }, 'json');
@@ -538,6 +550,14 @@ Object.assign(
 
 `createMacroProjectSnapshot`, `transformProject`, and `transform` are also exported by `@conf-ts/macro-transformer-native` with the same project and result shapes. The native snapshot builder scans and resolves the TypeScript project in Rust, so native-only callers do not need to load the TypeScript transformer. Its `transformed` record is sparse, and each file reports only itself and files actually used during macro evaluation. The compiler only receives ordinary TypeScript and never expands macros.
 
+`pruneExprTemplate` is an opt-in macro transform option and defaults to
+`false`. When enabled, an `exprTemplate()` instantiation evaluates a ternary
+condition at build time when it depends only on template arguments and other
+statically analyzable values, then emits only the selected branch. Leaving the
+option disabled preserves the original expression text and avoids the extra
+condition analysis. The option is supported by both transformer packages and
+by `TypeScriptMacroTransformPlugin` / `NativeMacroTransformPlugin`.
+
 ## Webpack plugin
 
 `ConfTsWebpackPlugin` compiles each matching `.conf.ts` file and writes the generated JSON/YAML next to the source file by default. Add the plugin once — no separate `module.rules` entry is needed.
@@ -554,6 +574,7 @@ module.exports = {
     new TypeScriptMacroTransformPlugin({
       // A pre-loader that expands macros in JS/TS modules.
       quote: 'double',
+      pruneExprTemplate: true,
     }),
     new ConfTsWebpackPlugin({
       // All options are optional.

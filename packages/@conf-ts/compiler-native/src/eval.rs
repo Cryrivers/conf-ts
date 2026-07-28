@@ -472,6 +472,7 @@ fn evaluate_inner(
       if matches!(unary.operator, UnaryOperator::Typeof) {
         let operand = match evaluate(&unary.argument, file_ctx, ctx, local_context, options) {
           Ok(val) => val,
+          Err(error) if options.propagate_typeof_errors => return Err(error),
           Err(_) => Value::Undefined,
         };
         return Ok(Value::String(operand.typeof_string().to_string()));

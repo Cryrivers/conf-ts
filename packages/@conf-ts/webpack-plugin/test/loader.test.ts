@@ -304,6 +304,40 @@ describe('loader generated file path interpolation', () => {
     expect(enabled.map.version).toBe(3);
   });
 
+  it('forwards pruneExprTemplate and isolates enabled transforms in the cache', async () => {
+    const resourcePath = path.resolve(
+      __dirname,
+      '../../tests/fixtures/macros/expr-template-prune-disabled.conf.ts',
+    );
+    const source = fs.readFileSync(resourcePath, 'utf8');
+    const compilation = {};
+    const transform = vi.spyOn(runtimeMacroTransformer, 'transformProject');
+    try {
+      const disabled = await runMacroTransformLoader({
+        resourcePath,
+        source,
+        compilation,
+        transformOptions: { pruneExprTemplate: false },
+      });
+      const enabled = await runMacroTransformLoader({
+        resourcePath,
+        source,
+        compilation,
+        transformOptions: { pruneExprTemplate: true },
+      });
+
+      expect(disabled.code).toContain('typeof undefined');
+      expect(enabled.code).not.toContain('typeof undefined');
+      expect(enabled.code).toContain('expressionA + 2');
+      expect(transform).toHaveBeenCalledTimes(2);
+      expect(transform.mock.calls[1][1]).toMatchObject({
+        pruneExprTemplate: true,
+      });
+    } finally {
+      transform.mockRestore();
+    }
+  });
+
   it('compiles the loader source payload without reading the entry path', () => {
     const filename = '/virtual/config.conf.ts';
     const code = 'export default { answer: 40 + 2 };';

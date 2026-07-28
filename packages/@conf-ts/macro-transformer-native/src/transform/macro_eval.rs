@@ -1052,6 +1052,26 @@ fn evaluate_expr_constant(
   evaluate(expr, file_ctx, ctx, local.as_ref(), options)
 }
 
+fn try_evaluate_expr_template_condition(
+  expr: &Expression,
+  param_name: &str,
+  bound_names: &[String],
+  file_ctx: &FileContext,
+  ctx: &mut EvalContext,
+  options: &CompileOptions,
+) -> Option<bool> {
+  if !super::should_prune_expr_template(ctx)
+    || references_unfoldable_name(expr, param_name, bound_names)
+  {
+    return None;
+  }
+  let mut condition_options = options.clone();
+  condition_options.propagate_typeof_errors = true;
+  evaluate_expr_constant(expr, file_ctx, ctx, &condition_options)
+    .ok()
+    .map(|value| value.is_truthy())
+}
+
 fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
   match expr {
     Expression::StaticMemberExpression(member) => get_member_root(&member.object),
@@ -1936,6 +1956,40 @@ fn walk_const_children(
       options,
     ),
     Expression::ConditionalExpression(cond) => {
+      if let Some(condition) = try_evaluate_expr_template_condition(
+        &cond.test,
+        param_name,
+        bound_names,
+        file_ctx,
+        ctx,
+        options,
+      ) {
+        let selected = if condition {
+          &cond.consequent
+        } else {
+          &cond.alternate
+        };
+        let expression_start = expr.span().start as usize - body_start as usize;
+        let expression_end = expr.span().end as usize - body_start as usize;
+        let selected_start = selected.span().start as usize - body_start as usize;
+        let selected_end = selected.span().end as usize - body_start as usize;
+        if expression_start < selected_start {
+          replacements.push((expression_start, selected_start, String::new()));
+        }
+        if selected_end < expression_end {
+          replacements.push((selected_end, expression_end, String::new()));
+        }
+        return collect_const_replacements(
+          selected,
+          param_name,
+          bound_names,
+          body_start,
+          replacements,
+          file_ctx,
+          ctx,
+          options,
+        );
+      }
       collect_const_replacements(
         &cond.test,
         param_name,

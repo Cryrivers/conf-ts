@@ -236,6 +236,10 @@ Rules:
   arrays, plain objects, and static array spreads.
 - A specialized result is an ordinary `Expr` and can take part in `subExpr(ctx)`
   composition.
+- With the macro transform option `pruneExprTemplate: true`, statically
+  decidable ternary conditions are replaced by their selected branch during
+  specialization. The option defaults to `false`; dynamic `ctx` conditions
+  remain runtime expressions.
 - Templates forward through `const` aliases, named/default/namespace imports, and
   named/default/star re-export chains.
 - The template itself is compile-time-only: it cannot escape into runtime data

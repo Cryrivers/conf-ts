@@ -26,6 +26,7 @@ pub struct TransformOptions {
   pub env: HashMap<String, String>,
   pub quote: QuoteStyle,
   pub preserve_key_order: bool,
+  pub prune_expr_template: bool,
   pub source_map: bool,
   pub inherit_process_env: bool,
 }
@@ -67,6 +68,7 @@ struct CoreState {
   bindings: HashMap<String, MacroBindings>,
   fatal_error: RefCell<Option<ConfTSError>>,
   expr_template_bindings: RefCell<Vec<HashMap<String, Value>>>,
+  prune_expr_template: bool,
 }
 
 fn core_state(ctx: &EvalContext) -> Rc<CoreState> {
@@ -102,6 +104,11 @@ pub(crate) fn current_expr_template_bindings(ctx: &EvalContext) -> Option<HashMa
     .borrow()
     .last()
     .cloned()
+}
+
+pub(crate) fn should_prune_expr_template(ctx: &EvalContext) -> bool {
+  let state = core_state(ctx);
+  state.prune_expr_template && !state.expr_template_bindings.borrow().is_empty()
 }
 
 fn module_export_name(value: &ModuleExportName<'_>) -> String {
@@ -675,6 +682,7 @@ fn compile_options(options: &TransformOptions) -> CompileOptions {
     preserve_key_order: options.preserve_key_order,
     env: Some(options.env.clone()),
     quote: options.quote,
+    propagate_typeof_errors: false,
   }
 }
 
@@ -1396,6 +1404,7 @@ pub fn transform_project(
     bindings,
     fatal_error: RefCell::new(None),
     expr_template_bindings: RefCell::new(Vec::new()),
+    prune_expr_template: options.prune_expr_template,
   });
   eval_ctx.extension = Some(extension);
 

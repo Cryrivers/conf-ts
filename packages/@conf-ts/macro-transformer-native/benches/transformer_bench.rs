@@ -12,6 +12,7 @@ fn default_options() -> TransformOptions {
     env: HashMap::new(),
     quote: QuoteStyle::Double,
     preserve_key_order: false,
+    prune_expr_template: false,
     source_map: false,
     inherit_process_env: false,
   }

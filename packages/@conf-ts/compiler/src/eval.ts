@@ -4,6 +4,14 @@ import { ConfTSError, getSourceLocation, type SourceLocation } from './error';
 import type { EvaluationOptions as CompileOptions } from './internal-types';
 import { FormattedNumber } from './shared';
 
+function toRuntimePrimitive(value: any): any {
+  return value instanceof FormattedNumber ? value.value : value;
+}
+
+function isRuntimeTruthy(value: any): boolean {
+  return Boolean(toRuntimePrimitive(value));
+}
+
 function setObjectProp(
   obj: { [key: string]: any },
   key: string,
@@ -1175,10 +1183,13 @@ function evaluateInner(
         context,
         options,
       );
-    } catch {
+    } catch (error) {
+      if (options?.propagateTypeofErrors) {
+        throw error;
+      }
       operand = undefined;
     }
-    return typeof operand;
+    return typeof toRuntimePrimitive(operand);
   } else if (ts.isPrefixUnaryExpression(expression)) {
     const operand = evaluate(
       expression.operand,
@@ -1198,7 +1209,7 @@ function evaluateInner(
       case ts.SyntaxKind.MinusToken:
         return -operand;
       case ts.SyntaxKind.ExclamationToken:
-        return !operand;
+        return !isRuntimeTruthy(operand);
       case ts.SyntaxKind.TildeToken:
         return ~operand;
       default:
@@ -1223,7 +1234,7 @@ function evaluateInner(
     // Short-circuiting operators: only evaluate the right operand when needed.
     switch (expression.operatorToken.kind) {
       case ts.SyntaxKind.AmpersandAmpersandToken:
-        return left
+        return isRuntimeTruthy(left)
           ? evaluate(
               expression.right,
               sourceFile,
@@ -1237,7 +1248,7 @@ function evaluateInner(
             )
           : left;
       case ts.SyntaxKind.BarBarToken:
-        return left
+        return isRuntimeTruthy(left)
           ? left
           : evaluate(
               expression.right,
@@ -1304,11 +1315,11 @@ function evaluateInner(
       case ts.SyntaxKind.EqualsEqualsToken:
         return left == right;
       case ts.SyntaxKind.EqualsEqualsEqualsToken:
-        return left === right;
+        return toRuntimePrimitive(left) === toRuntimePrimitive(right);
       case ts.SyntaxKind.ExclamationEqualsToken:
         return left != right;
       case ts.SyntaxKind.ExclamationEqualsEqualsToken:
-        return left !== right;
+        return toRuntimePrimitive(left) !== toRuntimePrimitive(right);
       case ts.SyntaxKind.AmpersandToken:
         return left & right;
       case ts.SyntaxKind.BarToken:
@@ -1446,7 +1457,7 @@ function evaluateInner(
       context,
       options,
     );
-    return condition
+    return isRuntimeTruthy(condition)
       ? evaluate(
           expression.whenTrue,
           sourceFile,

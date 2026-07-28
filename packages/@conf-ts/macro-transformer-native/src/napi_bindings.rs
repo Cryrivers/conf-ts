@@ -43,6 +43,7 @@ pub struct JsTransformInput {
 pub struct JsTransformOptions {
   pub env: Option<HashMap<String, String>>,
   pub inherit_process_env: Option<bool>,
+  pub prune_expr_template: Option<bool>,
   #[napi(ts_type = "'single' | 'double'")]
   pub quote: Option<String>,
   pub preserve_key_order: Option<bool>,
@@ -127,6 +128,7 @@ fn options(value: Option<JsTransformOptions>) -> Result<TransformOptions> {
     env: value.env.unwrap_or_default(),
     quote: quote(value.quote)?,
     preserve_key_order: value.preserve_key_order.unwrap_or(false),
+    prune_expr_template: value.prune_expr_template.unwrap_or(false),
     source_map: value.source_map.unwrap_or(false),
     inherit_process_env: value.inherit_process_env.unwrap_or(true),
   })

@@ -28,6 +28,7 @@ export interface JsTransformInput {
 export interface JsTransformOptions {
   env?: Record<string, string>
   inheritProcessEnv?: boolean
+  pruneExprTemplate?: boolean
   quote?: 'single' | 'double'
   preserveKeyOrder?: boolean
   sourceMap?: boolean

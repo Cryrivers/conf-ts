@@ -1,0 +1,4 @@
+{
+  "optionalMissing": "typeof undefined === \"undefined\" ? expressionA + 2 : expressionB + undefined",
+  "optionalPresent": "typeof 5 === \"undefined\" ? expressionA + 2 : expressionB + 5"
+}

@@ -18,6 +18,7 @@ const MACRO_DIR = path.resolve(__dirname, 'fixtures/macros');
 // Fixtures that need non-default options or environment variables to
 // compile successfully — mirrors the setup in macro.test.ts/macro-expr-compiler.test.ts.
 const FIXTURE_OPTIONS: Record<string, MacroTransformOptions> = {
+  'expr-template-prune': { pruneExprTemplate: true },
   'expr-quote-single': { quote: 'single' },
 };
 

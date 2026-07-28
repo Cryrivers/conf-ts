@@ -57,6 +57,32 @@ describe('Expr Macro', () => {
     ).toBe('7');
   });
 
+  it('should prune statically decidable exprTemplate branches only when enabled', () => {
+    assertMacroOutput('expr-template-prune-disabled');
+    assertMacroOutput('expr-template-prune-disabled', {
+      pruneExprTemplate: false,
+    });
+    assertMacroOutput('expr-template-prune', { pruneExprTemplate: true });
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-template-prune.conf.ts'),
+      'json',
+      { macro: true, pruneExprTemplate: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const context = { expressionA: 10, expressionB: 20, enabled: false };
+    expect(expression(output.optionalMissing)(context)).toBe(12);
+    expect(expression(output.optionalPresent)(context)).toBe(25);
+    expect(expression(output.arithmetic)(context)).toBe(13);
+    expect(expression(output.formattedFalsy)(context)).toBe(20);
+    expect(expression(output.formattedOperators)(context)).toBe(10);
+    expect(expression(output.formattedUnary)(context)).toBe(10);
+    expect(expression(output.defaultedExplicitUndefined)(context)).toBe(10);
+    expect(expression(output.unsupportedStatic)(context)).toBe(10);
+    expect(expression(output.dynamic)(context)).toBe(24);
+    expect(expression(output.ordinaryExpr)(context)).toBe(10);
+  });
+
   it('should reject an invalid exprTemplate context parameter', () => {
     assertMacroError(
       'expr-template-invalid-context',
@@ -75,6 +101,10 @@ describe('Expr Macro', () => {
     assertMacroError(
       'expr-template-invalid-arity',
       'exprTemplate expected at most 1 static argument(s), but received 2',
+    );
+    assertMacroError(
+      'expr-template-invalid-arity-missing',
+      'exprTemplate expected at least 1 static argument(s), but received 0',
     );
   });
 

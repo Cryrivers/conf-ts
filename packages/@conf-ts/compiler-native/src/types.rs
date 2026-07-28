@@ -450,6 +450,9 @@ pub struct CompileOptions {
   pub preserve_key_order: bool,
   pub env: Option<HashMap<String, String>>,
   pub quote: QuoteStyle,
+  /// Propagate errors from a `typeof` operand instead of treating the operand
+  /// as unresolved. Transformer-only callers use this to test staticity.
+  pub propagate_typeof_errors: bool,
 }
 
 /// The result of a macro pre-evaluation pass (see @conf-ts/macro-transformer-native):

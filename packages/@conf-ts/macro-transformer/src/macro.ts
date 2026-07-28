@@ -69,6 +69,14 @@ function inlineableMacroName(
 //     compile time)
 const EXPR_RUNTIME_FALLBACK_MACROS = new Set(['String', 'Number', 'Boolean']);
 
+function toRuntimePrimitive(value: any): any {
+  return value instanceof FormattedNumber ? value.value : value;
+}
+
+function isRuntimeTruthy(value: any): boolean {
+  return Boolean(toRuntimePrimitive(value));
+}
+
 function referencesName(
   node: ts.Node,
   isTargetName: (name: string) => boolean,
@@ -1144,6 +1152,77 @@ function evaluateNodeLiteral(
   return valueToExprLiteral(value, sourceFile, node, options?.quote);
 }
 
+function tryEvaluateExprTemplateCondition(
+  node: ts.Expression,
+  context: ExprReplacementContext,
+): boolean | undefined {
+  if (referencesUnfoldableName(node, context)) {
+    return undefined;
+  }
+  const {
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    evaluatedFiles,
+    options,
+  } = context;
+  const conditionOptions = {
+    ...options,
+    propagateTypeofErrors: true,
+  };
+  try {
+    return isRuntimeTruthy(
+      evaluate(
+        node,
+        sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        true,
+        evaluatedFiles,
+        context.constantContext,
+        conditionOptions,
+      ),
+    );
+  } catch {
+    // A condition which is not supported by the static evaluator remains a
+    // runtime expression and follows the existing literal-inlining path.
+    return undefined;
+  }
+}
+
+function pruneConditionalExpression(
+  node: ts.ConditionalExpression,
+  context: ExprReplacementContext,
+): boolean {
+  const condition = tryEvaluateExprTemplateCondition(node.condition, context);
+  if (condition === undefined) {
+    return false;
+  }
+  const selected = condition ? node.whenTrue : node.whenFalse;
+  const nodeStart = node.getStart(context.sourceFile);
+  const nodeEnd = node.getEnd();
+  const selectedStart = selected.getStart(context.sourceFile);
+  const selectedEnd = selected.getEnd();
+  if (nodeStart < selectedStart) {
+    context.replacements.push([
+      nodeStart - context.bodyStart,
+      selectedStart - context.bodyStart,
+      '',
+    ]);
+  }
+  if (selectedEnd < nodeEnd) {
+    context.replacements.push([
+      selectedEnd - context.bodyStart,
+      nodeEnd - context.bodyStart,
+      '',
+    ]);
+  }
+  collectConstReplacements(selected, context);
+  return true;
+}
+
 function collectContextComputedReplacements(
   node: ts.Expression,
   context: ExprReplacementContext,
@@ -1476,6 +1555,15 @@ function collectConstReplacements(
   context: ExprReplacementContext,
 ): void {
   const { paramName } = context;
+
+  if (
+    context.options?.pruneExprTemplate === true &&
+    context.constantContext !== undefined &&
+    ts.isConditionalExpression(node) &&
+    pruneConditionalExpression(node, context)
+  ) {
+    return;
+  }
 
   if (
     (ts.isPropertyAccessExpression(node) ||
@@ -2361,7 +2449,7 @@ function evaluateTypeCasting(
       return Number(argument);
     }
     if (callee === 'Boolean') {
-      return Boolean(argument);
+      return isRuntimeTruthy(argument);
     }
   }
   return undefined;
@@ -2440,7 +2528,7 @@ function evaluateArrayMacro(
     case 'flatMap':
       return arr.flatMap((item: any) => evalItem(item));
     case 'filter':
-      return arr.filter((item: any) => Boolean(evalItem(item)));
+      return arr.filter((item: any) => isRuntimeTruthy(evalItem(item)));
   }
 }
 

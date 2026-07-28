@@ -22,6 +22,7 @@ function splitOptions(options?: TestCompileOptions): {
   const {
     macro: _macro,
     env,
+    pruneExprTemplate,
     quote,
     sourceMap,
     ...sharedOptions
@@ -31,6 +32,7 @@ function splitOptions(options?: TestCompileOptions): {
     transformOptions: {
       ...sharedOptions,
       env,
+      pruneExprTemplate,
       quote,
       sourceMap,
     },

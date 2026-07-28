@@ -1,0 +1,19 @@
+{
+  "optionalMissing": "expressionA + 2",
+  "optionalPresent": "expressionB + 5",
+  "comparisonTrue": "expressionA",
+  "comparisonFalse": "expressionB",
+  "unary": "expressionA",
+  "formattedFalsy": "expressionB",
+  "formattedOperators": "expressionA",
+  "formattedUnary": "expressionA",
+  "nullish": "expressionA",
+  "nested": "expressionB",
+  "arithmetic": "expressionA + (2 + 1)",
+  "defaulted": "expressionA",
+  "defaultedExplicitUndefined": "expressionA",
+  "unsupportedStatic": "typeof [1, 2].includes(2) === \"boolean\" ? expressionA : expressionB",
+  "dynamic": "enabled ? expressionA + 4 : expressionB + 4",
+  "deadBranch": "expressionA",
+  "ordinaryExpr": "true ? expressionA : expressionB"
+}
