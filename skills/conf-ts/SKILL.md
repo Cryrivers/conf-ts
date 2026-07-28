@@ -1,6 +1,6 @@
 ---
 name: conf-ts
-description: Write conf-ts config files - TypeScript that compiles to plain JSON/YAML. Use when authoring or reviewing .conf.ts files, deciding which TypeScript is allowed inside a config, using @conf-ts/macro (String/Number/Boolean, arrayMap/arrayFilter/arrayFlatMap, env, expr, exprTemplate), or interpreting a conf-ts compile error.
+description: Write conf-ts config files - TypeScript that compiles to plain JSON/YAML. Use when authoring or reviewing .conf.ts files, deciding which TypeScript is allowed inside a config, using @conf-ts/macro (String/Number/Boolean, arrayMap/arrayFilter/arrayFlatMap, env, expr, exprTemplate), configuring opt-in exprTemplate branch pruning, or interpreting a conf-ts compile error.
 ---
 
 # Writing conf-ts configs
@@ -47,7 +47,14 @@ that the build compiles in plain mode.
    identifier parameter (or none), and must reach the context through a
    property: `ctx.user`, `ctx['user']`. Bare `ctx` is rejected. Block bodies,
    `function` expressions, `async`, and assignments are rejected.
-6. **Key ordering is not JS ordering by default.** `{ ...obj, b: 'new' }` moves
+6. **`exprTemplate()` branch pruning is opt-in.** Set
+   `pruneExprTemplate: true` on `transform`/`transformProject`,
+   `TypeScriptMacroTransformPlugin`, or `NativeMacroTransformPlugin` to replace
+   a ternary whose condition depends only on template arguments and static
+   constants with its selected branch. It defaults to `false` to preserve the
+   original expression and avoid the extra analysis; conditions involving
+   `ctx` or unsupported operations stay intact.
+7. **Key ordering is not JS ordering by default.** `{ ...obj, b: 'new' }` moves
    `b` to the end. Preserving insertion order is a compile option the build
    sets — don't rely on either ordering unless you know which one is configured.
 
@@ -83,5 +90,5 @@ Read the file that matches the task; each is self-contained.
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `references/config-syntax.md` | Every supported/unsupported TypeScript construct, enum semantics, key ordering, JS serialization, multi-file and path aliases |
 | `references/macros.md`        | `String`/`Number`/`Boolean`, `arrayMap`/`arrayFilter`/`arrayFlatMap`, `env`, nesting rules, import handling                   |
-| `references/expr.md`          | `expr()`, `exprTemplate()`, composition, nested callbacks, quoting, `LooseExpr`, and the grammar the emitted string may use   |
+| `references/expr.md`          | `expr()`, `exprTemplate()`, optional/default parameters, opt-in branch pruning, composition, quoting, and emitted grammar     |
 | `references/errors.md`        | Error message → cause → fix                                                                                                  |

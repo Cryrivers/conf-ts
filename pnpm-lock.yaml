@@ -211,6 +211,9 @@ importers:
 
   packages/@conf-ts/macro-transformer-native:
     devDependencies:
+      '@conf-ts/compiler-native':
+        specifier: workspace:*
+        version: link:../compiler-native
       '@ianvs/prettier-plugin-sort-imports':
         specifier: ^4.7.1
         version: 4.7.1(prettier@3.9.6)(supports-color@8.1.1)

@@ -47,6 +47,7 @@
     "version": "napi version"
   },
   "devDependencies": {
+    "@conf-ts/compiler-native": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@napi-rs/cli": "^3.7.4",
     "@types/node": "^26.1.1",

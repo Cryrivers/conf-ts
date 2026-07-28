@@ -236,10 +236,18 @@ Rules:
   arrays, plain objects, and static array spreads.
 - A specialized result is an ordinary `Expr` and can take part in `subExpr(ctx)`
   composition.
-- With the macro transform option `pruneExprTemplate: true`, statically
-  decidable ternary conditions are replaced by their selected branch during
-  specialization. The option defaults to `false`; dynamic `ctx` conditions
-  remain runtime expressions.
+- With the macro transform option `pruneExprTemplate: true`, ternary conditions
+  that depend only on template arguments and other static values are replaced
+  by their selected branch during specialization. `typeof`, unary,
+  comparison/equality, logical, and nullish operations supported by the static
+  evaluator may participate in the condition. Only the selected branch is
+  visited, so an invalid value in an unreachable branch does not fail
+  specialization.
+- `pruneExprTemplate` defaults to `false`, preserving the full conditional and
+  skipping the extra analysis. Conditions involving `ctx`, unsupported
+  operations, and ordinary `expr()` callbacks remain unchanged even when it is
+  enabled. Pass the option to `transform`/`transformProject` or either
+  `TypeScriptMacroTransformPlugin` / `NativeMacroTransformPlugin`.
 - Templates forward through `const` aliases, named/default/namespace imports, and
   named/default/star re-export chains.
 - The template itself is compile-time-only: it cannot escape into runtime data
@@ -253,8 +261,12 @@ includes([1, 2, 3]);   // "[1, 2, 3].includes(a)"
 ```
 
 Errors: `exprTemplate arguments must be statically analyzable`,
+`exprTemplate expected at least N static argument(s), but received M`,
 `exprTemplate expected at most N static argument(s), but received M`,
-`exprTemplate values are compile-time-only`.
+`exprTemplate values are compile-time-only`. These use the normal detailed
+diagnostic format with the source location, source line, reference chain, and
+specific suggested fixes. Branch pruning itself is conservative: an
+undecidable condition is retained instead of producing a pruning error.
 
 ## `LooseExpr`: skipping `?.` for deeply optional contexts
 

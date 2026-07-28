@@ -69,12 +69,21 @@ Specific messages:
 
 ## `exprTemplate()`
 
-| Message                                                                                                              | Cause                                            | Fix                                                            |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
-| `exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier`      | The context parameter was destructured or the callback isn't a plain sync arrow | Use `(ctx, ...) => ...`                                        |
-| `exprTemplate arguments must be statically analyzable` (native: `Unsupported variable type for identifier: value`)   | An argument came from a runtime value            | Pass a literal, enum, or `const`                               |
-| `exprTemplate expected at most N static argument(s), but received M`                                                 | Arity mismatch                                   | Match the parameter tuple, or add a rest parameter             |
-| `exprTemplate values are compile-time-only`                                                                          | The template escaped into runtime data (`[add]`) or was called dynamically | Instantiate it at the call site instead of passing it around   |
+| Message                                                                                                            | Cause                                                                           | Fix                                                          |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier`   | The context parameter was destructured or the callback isn't a plain sync arrow | Use `(ctx, ...) => ...`                                      |
+| `exprTemplate arguments must be statically analyzable` (native: `Unsupported variable type for identifier: value`) | An argument came from a runtime value                                           | Pass a literal, enum, or `const`                             |
+| `exprTemplate expected at least N static argument(s), but received M`                                              | A required parameter was omitted                                                | Pass it, or make the parameter optional/defaulted            |
+| `exprTemplate expected at most N static argument(s), but received M`                                               | Too many arguments were passed and no rest parameter accepts them               | Remove extras, or add a trailing rest parameter              |
+| `exprTemplate cannot destructure null or undefined`                                                                | A destructured argument resolved to a nullish value                             | Pass an object/array, or default the destructured parameter  |
+| `exprTemplate array destructuring requires a statically analyzable array or string`                                | Array destructuring received another static type                                | Pass a static array/string                                   |
+| `exprTemplate values are compile-time-only`                                                                        | The template escaped into runtime data (`[add]`) or was called dynamically      | Instantiate it at the call site instead of passing it around |
+
+Enabling `pruneExprTemplate` does not introduce a separate error category. If a
+ternary condition cannot be decided safely, the transformer leaves it intact.
+Any error from specializing the selected branch still uses the standard
+location, source line, reference chain, and `Suggested fixes:` diagnostics; an
+unselected branch is not evaluated.
 
 ## Suggested fixes
 

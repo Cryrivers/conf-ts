@@ -203,4 +203,77 @@ describe('Detailed diagnostics', () => {
       'Replace the callback with a synchronous arrow function',
     );
   });
+
+  it('reports actionable exprTemplate arity diagnostics in both transformers when pruning is enabled', () => {
+    const scenarios = [
+      {
+        filename: '/expr-template-missing.ts',
+        callback:
+          'const template = exprTemplate((ctx, required, optional = 1) => required ? ctx.a : optional);',
+        invocation: 'template()',
+        message:
+          'exprTemplate expected at least 1 static argument(s), but received 0',
+        suggestion:
+          'Pass every required template argument, or make omitted parameters optional or defaulted.',
+      },
+      {
+        filename: '/expr-template-excess.ts',
+        callback:
+          'const template = exprTemplate((ctx, value) => value ? ctx.a : ctx.b);',
+        invocation: 'template(1, 2)',
+        message:
+          'exprTemplate expected at most 1 static argument(s), but received 2',
+        suggestion:
+          'Remove excess template arguments, or add a trailing rest parameter when additional arguments are intentional.',
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const source = [
+        "import { exprTemplate } from '@conf-ts/macro';",
+        '',
+        scenario.callback,
+        '',
+        `export default { value: ${scenario.invocation} };`,
+      ].join('\n');
+      const project: MacroProjectSnapshot = {
+        files: { [scenario.filename]: source },
+        resolutions: {},
+        compilerOptions: {},
+        entryFiles: [scenario.filename],
+        dependencies: [scenario.filename],
+      };
+
+      const tsError = thrown(() =>
+        transformProjectTs(
+          { project, files: [scenario.filename] },
+          { pruneExprTemplate: true },
+        ),
+      );
+      expect(tsError).toBeInstanceOf(ConfTSError);
+      const tsMessage = (tsError as ConfTSError).toString();
+      expect(tsMessage).toContain(scenario.message);
+      expect(tsMessage).toContain(`at ${scenario.filename}:5:`);
+      expect(tsMessage).toContain(
+        `5 | export default { value: ${scenario.invocation} };`,
+      );
+      expect(tsMessage).toContain('Suggested fixes:');
+      expect(tsMessage).toContain(scenario.suggestion);
+
+      const nativeError = thrown(() =>
+        transformProjectNative(
+          { project, files: [scenario.filename] },
+          { pruneExprTemplate: true },
+        ),
+      );
+      const nativeMessage = (nativeError as Error).message;
+      expect(nativeMessage).toContain(scenario.message);
+      expect(nativeMessage).toContain(`at ${scenario.filename}:5:`);
+      expect(nativeMessage).toContain(
+        `5 | export default { value: ${scenario.invocation} };`,
+      );
+      expect(nativeMessage).toContain('Suggested fixes:');
+      expect(nativeMessage).toContain(scenario.suggestion);
+    }
+  });
 });

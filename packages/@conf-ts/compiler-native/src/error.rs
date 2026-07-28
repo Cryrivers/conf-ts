@@ -88,6 +88,35 @@ pub fn suggestions_for_error(message: &str) -> Vec<String> {
       "Use plain identifier parameters or one level of destructuring, and remove type annotations, `async`, generators, and nested patterns.",
     ]);
   }
+  if message.contains("exprTemplate expected at least") {
+    return suggest(&[
+      "Pass every required template argument, or make omitted parameters optional or defaulted.",
+      "Keep optional or defaulted parameters after required parameters so the minimum arity is unambiguous.",
+    ]);
+  }
+  if message.contains("exprTemplate expected at most") {
+    return suggest(&[
+      "Remove excess template arguments, or add a trailing rest parameter when additional arguments are intentional.",
+    ]);
+  }
+  if message.contains("exprTemplate parameters after the context must be") {
+    return suggest(&[
+      "Use identifiers, optional or defaulted parameters, one level of object/array destructuring, or one trailing rest parameter after the context.",
+      "Remove computed keys, nested destructuring patterns, and non-trailing rest parameters.",
+    ]);
+  }
+  if message.contains("exprTemplate cannot destructure null or undefined") {
+    return suggest(&[
+      "Pass a non-null object or array, or give the destructured template parameter a default value.",
+    ]);
+  }
+  if message
+    .contains("exprTemplate array destructuring requires a statically analyzable array or string")
+  {
+    return suggest(&[
+      "Pass a statically analyzable array or string to the destructured template parameter.",
+    ]);
+  }
   if message.contains("exprTemplate arguments must be statically analyzable")
     || message.contains("static argument")
   {
