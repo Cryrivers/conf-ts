@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/cli",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "CLI for conf-ts.",
   "type": "module",
   "author": {
