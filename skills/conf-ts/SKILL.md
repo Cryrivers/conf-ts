@@ -76,8 +76,19 @@ that the build compiles in plain mode.
 - **Reference constants instead of repeating literals.** They fold to the same
   output, and inside `expr()` they fold into the emitted expression string, so
   there is no cost to naming a threshold.
-- **Type the `expr()` context explicitly** — `expr<UserContext, boolean>(...)`
-  — so the rule is type-checked against the shape the runtime will supply.
+- **Prefer letting TypeScript infer `expr()`/`exprTemplate()` types; only fall
+  back to explicit `expr<Context, Result>(...)` when inference can't produce
+  the right type.** Annotate the callback's own `ctx` parameter —
+  `expr((ctx: UserContext) => ...)` — and `ReturnType` (and, for
+  `exprTemplate`, later parameter types) infer correctly with nothing else
+  written. Write the full explicit type argument list only when the return
+  value needs its shape checked against a declared type that inference alone
+  won't enforce (typically an object/array literal), or when using
+  `LooseExpr`/`LooseExprTemplate`, whose loosened context type can only be
+  reached by annotating the binding. Never write a *partial* type argument
+  list such as `expr<UserContext>(...)` — it silently defaults the remaining
+  type parameters to `unknown` instead of inferring them, which type-checks
+  but throws away return-type safety.
 - **Read the whole compile error before editing.** It names the file, line,
   column, source line, and every `referenced from` hop in the re-export chain;
   the failure is usually in an imported module, not the entry file.

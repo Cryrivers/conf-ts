@@ -18,8 +18,8 @@ const MIN_AGE = 18;
 type UserContext = { user: { age: number; status: Status } };
 
 export default {
-  canEnter: expr<UserContext, boolean>(
-    ctx => ctx.user.age >= MIN_AGE && ctx.user.status === Status.Active,
+  canEnter: expr((ctx: UserContext) =>
+    ctx.user.age >= MIN_AGE && ctx.user.status === Status.Active,
   ),
 };
 ```
@@ -29,7 +29,73 @@ export default {
 ```
 
 The context parameter's name is stripped; constants and enum members are folded
-to literals.
+to literals. Note there's no `boolean` written anywhere — `ReturnType` is
+inferred from the callback body once `ctx` carries a type.
+
+### Typing the callback: prefer inference over explicit type arguments
+
+`Context` can never be inferred from how the callback *uses* `ctx` — a bare
+`ctx => ctx.user.age` types `ctx` as `unknown` and fails to compile, since
+`ctx`'s type is a parameter (contravariant) position TypeScript can't recover
+from usage inside the body. Pin `Context` with an inline parameter annotation
+and let everything else — `ReturnType`, and for `exprTemplate` every later
+parameter and the `Parameters` tuple — infer normally:
+
+```ts
+const canEnter = expr((ctx: UserContext) => ctx.user.age >= MIN_AGE);
+// Expr<UserContext, boolean> — ReturnType inferred, nothing else to write
+
+const withTax = exprTemplate(
+  (ctx: Context, taxRate: number) => ctx.subtotal * (1 + taxRate),
+);
+// ExprTemplate<Context, number, [number]> — all inferred from the callback
+```
+
+Reach for the full explicit type argument list — `expr<Context, Result>(...)`
+/ `exprTemplate<Context, Result, Parameters>(...)` — only when inference can't
+produce the type you actually want:
+
+- **The callback returns an object or array literal.** An inline `ctx`
+  annotation only pins `Context`; the return value's shape is still whatever
+  TypeScript structurally infers from the literal, so a typo'd or missing key
+  type-checks fine and is only caught later, if ever, wherever the value
+  happens to be consumed against an expected type:
+
+  ```ts
+  type Pricing = { base: number; tax: number };
+
+  // Typo ("tex") — compiles fine with only `ctx` annotated:
+  const wrong = expr((ctx: Context) => ({ base: ctx.subtotal, tex: 0 }));
+
+  // Same typo, caught immediately at the definition:
+  const right = expr<Context, Pricing>(ctx => ({ base: ctx.subtotal, tex: 0 }));
+  //                                                                   ~~~ error here
+  ```
+
+- **`LooseExpr` / `LooseExprTemplate`.** The loosened context type isn't
+  something you can spell yourself — annotate the *binding* instead of the
+  parameter, and let it flow into the call:
+
+  ```ts
+  const check: LooseExpr<Context, number | boolean> =
+    expr(ctx => ctx.a.b.c || true);
+  ```
+
+  The same "annotate the binding, not the call" trick works for plain
+  `Expr`/`ExprTemplate` too, whenever you already have a named type to reuse
+  across sibling declarations instead of repeating a call-site type argument
+  list on each one.
+
+**Never write a partial type argument list.** `expr<Context>(ctx => ...)`
+compiles without error, but it does *not* infer `ReturnType` from the
+callback — it silently defaults to `unknown`, discarding return-type safety
+with no diagnostic to warn you. The same applies to `exprTemplate<Context>(...)`
+or `exprTemplate<Context, ReturnType>(...)`: every type parameter after the
+ones you supplied defaults instead of inferring, which then makes an
+otherwise-correct annotated later parameter (`(ctx, rate: number) => ...`)
+fail to type-check against the defaulted `unknown`. Supply either zero
+explicit type arguments (relying on inline annotations or a binding
+annotation) or the complete list — nothing in between.
 
 ### Callback rules
 
@@ -49,12 +115,12 @@ transformer) / `Function "expr" is only allowed in macro mode` (native).
 Everything in the runtime grammar is available:
 
 ```ts
-expr<Context, number>(ctx => ctx.base ** ctx.exponent);   // "base ** exponent"
-expr<Context, number>(ctx => ctx.left >>> ctx.right);      // "left >>> right"
-expr<Context, boolean>(ctx => ctx.key in ctx.object);      // "key in object"
-expr<Context, boolean>(ctx => ctx.v instanceof ctx.Ctor);  // "v instanceof Ctor"
-expr<Context, boolean>(ctx => delete ctx.object.removable);
-expr<Context, string>(ctx => typeof ctx.value);
+expr((ctx: Context) => ctx.base ** ctx.exponent);   // "base ** exponent"
+expr((ctx: Context) => ctx.left >>> ctx.right);      // "left >>> right"
+expr((ctx: Context) => ctx.key in ctx.object);        // "key in object"
+expr((ctx: Context) => ctx.v instanceof ctx.Ctor);    // "v instanceof Ctor"
+expr((ctx: Context) => delete ctx.object.removable);
+expr((ctx: Context) => typeof ctx.value);
 ```
 
 ### Formatting of the emitted string
@@ -88,10 +154,10 @@ file's style uses, and expect the emitted string to be normalized.
 compile-time known, and stay as runtime calls when it depends on the context:
 
 ```ts
-expr<Context, boolean>(ctx => ctx.a === String(1));        // "a === \"1\""
-expr<Context, boolean>(ctx => ctx.mode === env('MODE', 'dev')); // "mode === \"dev\""
-expr<Context, boolean>(ctx => ctx.a === String(ctx.n));    // "a === String(n)"
-expr<Context, number>(ctx => Number(ctx.n + 41));          // "Number(n + 41)"
+expr((ctx: Context) => ctx.a === String(1));                // "a === \"1\""
+expr((ctx: Context) => ctx.mode === env('MODE', 'dev'));     // "mode === \"dev\""
+expr((ctx: Context) => ctx.a === String(ctx.n));             // "a === String(n)"
+expr((ctx: Context) => Number(ctx.n + 41));                  // "Number(n + 41)"
 ```
 
 A property or object key that merely happens to be spelled like the context
@@ -108,13 +174,13 @@ it recursively and adds parentheses to preserve precedence.
 ```ts
 type Context = { a: boolean; b: boolean; c: boolean };
 
-const bOrC = expr<Context, boolean>(ctx => ctx.b || ctx.c);
+const bOrC = expr((ctx: Context) => ctx.b || ctx.c);
 const alias = bOrC;
-const scored = expr<Context, boolean>(ctx => ctx.a && alias(ctx));
+const scored = expr((ctx: Context) => ctx.a && alias(ctx));
 
 export default {
-  single: expr<Context, boolean>(ctx => ctx.a && bOrC(ctx)),      // "a && (b || c)"
-  multiLevel: expr<Context, boolean>(ctx => scored(ctx) || ctx.c),
+  single: expr((ctx: Context) => ctx.a && bOrC(ctx)),      // "a && (b || c)"
+  multiLevel: expr((ctx: Context) => scored(ctx) || ctx.c),
 };
 ```
 
@@ -153,11 +219,11 @@ down-leveled to expression-bodied arrow text.
 type Context = { matrix: number[][]; threshold: number; scores: number[] };
 
 export default {
-  countPositiveRows: expr<Context, number>(
-    ctx => ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold)).length,
+  countPositiveRows: expr(
+    (ctx: Context) => ctx.matrix.filter(row => row.some(cell => cell > ctx.threshold)).length,
   ),
-  reduceSum: expr<Context, number>(
-    ctx => ctx.scores.reduce((sum, value) => sum + value, 0),
+  reduceSum: expr(
+    (ctx: Context) => ctx.scores.reduce((sum, value) => sum + value, 0),
   ),
 };
 ```
@@ -193,10 +259,10 @@ callback.
 ### Object/array syntax in expressions
 
 ```ts
-expr<Context, number[]>(ctx => [...ctx.items, 99]);            // "[...items, 99]"
-expr<Context, unknown>(ctx => ({ TAX_RATE, key: ctx.key }));   // "{TAX_RATE: 0.08, key: key}"
-expr<Context, unknown>(ctx => ({ [ctx.key]: ctx.value }));     // "{[key]: value}"
-expr<Context, unknown>(ctx => ctx.items.map(item => ({ item, doubled: item * 2 })));
+expr((ctx: Context) => [...ctx.items, 99]);                       // "[...items, 99]"
+expr((ctx: Context) => ({ TAX_RATE, key: ctx.key }));             // "{TAX_RATE: 0.08, key: key}"
+expr((ctx: Context) => ({ [ctx.key]: ctx.value }));                // "{[key]: value}"
+expr((ctx: Context) => ctx.items.map(item => ({ item, doubled: item * 2 })));
 ```
 
 Shorthand referencing an outer constant folds to a literal; shorthand
@@ -205,15 +271,24 @@ referencing a callback's own parameter stays as runtime shorthand.
 ## `exprTemplate()`: reusable parameterized expressions
 
 The callback's first parameter is always the runtime context; every parameter
-after it is supplied at instantiation and folded into the emitted `Expr`.
+after it is supplied at instantiation and folded into the emitted `Expr`. The
+same typing preference from "Typing the callback" above applies here:
+annotate `ctx` and every later parameter inline and
+`ReturnType`/`Parameters` both infer — don't write
+`exprTemplate<Context, ReturnType, Parameters>(...)` unless the return value
+needs its shape checked against a declared type. Because there are three type
+parameters instead of two, a partial list is an even easier mistake to make
+here — `exprTemplate<Context>(...)` and `exprTemplate<Context, number>(...)`
+both silently default the parameters after the ones given, which then breaks
+type-checking for correctly-annotated later parameters.
 
 ```ts
 import { exprTemplate, type LooseExprTemplate } from '@conf-ts/macro';
 
 type Context = { subtotal: number; customer?: { discount?: number } };
 
-const withTax = exprTemplate<Context, number, [number]>(
-  (ctx, taxRate) => ctx.subtotal * (1 + taxRate),
+const withTax = exprTemplate(
+  (ctx: Context, taxRate: number) => ctx.subtotal * (1 + taxRate),
 );
 
 const singaporeTotal = withTax(0.09);   // "subtotal * (1 + 0.09)"
@@ -254,8 +329,8 @@ Rules:
   (`{ invalid: [add] }`) or be invoked dynamically (`function f(v) { return add(v); }`).
 
 ```ts
-const includes = exprTemplate<Context, boolean, [number[]]>(
-  (ctx, allowed) => allowed.includes(ctx.a),
+const includes = exprTemplate(
+  (ctx: Context, allowed: number[]) => allowed.includes(ctx.a),
 );
 includes([1, 2, 3]);   // "[1, 2, 3].includes(a)"
 ```
@@ -301,7 +376,7 @@ outside it is rejected at compile time.
 
 ```ts
 // config.conf.ts
-export default { canEnter: expr<UserContext, boolean>(ctx => ctx.user.age >= 18) };
+export default { canEnter: expr((ctx: UserContext) => ctx.user.age >= 18) };
 // → { "canEnter": "user.age >= 18" }
 // consumed at runtime as: expression(config.canEnter)({ user: { age: 20 } })
 ```
