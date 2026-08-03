@@ -325,10 +325,17 @@ function createArrayCallbackChecker(params: {
   enumMap: { [filePath: string]: { [key: string]: any } };
   macroImportsMap: { [filePath: string]: Set<string> };
   paramName: string;
+  contextNames?: ReadonlySet<string>;
   errorMessage: string;
 }): (node: ts.Node) => void {
-  const { sourceFile, typeChecker, enumMap, macroImportsMap, paramName } =
-    params;
+  const {
+    sourceFile,
+    typeChecker,
+    enumMap,
+    macroImportsMap,
+    paramName,
+    contextNames,
+  } = params;
   const allowedMacroImports = macroImportsMap[sourceFile.fileName] || new Set();
 
   function isAllowedIdentifier(node: ts.Node): boolean {
@@ -367,6 +374,9 @@ function createArrayCallbackChecker(params: {
         return true;
       }
       if (node.text === paramName) {
+        return true;
+      }
+      if (contextNames?.has(node.text)) {
         return true;
       }
       if (isVariableReferenceIdentifier(node, typeChecker)) {
@@ -458,6 +468,7 @@ function getArrayCallbackDetails(params: {
   typeChecker: ts.TypeChecker;
   enumMap: { [filePath: string]: { [key: string]: any } };
   macroImportsMap: { [filePath: string]: Set<string> };
+  contextNames?: ReadonlySet<string>;
   arrowErrorMessage: string;
   paramErrorMessage: string;
   bodyErrorMessage: string;
@@ -469,6 +480,7 @@ function getArrayCallbackDetails(params: {
     typeChecker,
     enumMap,
     macroImportsMap,
+    contextNames,
     arrowErrorMessage,
     paramErrorMessage,
     bodyErrorMessage,
@@ -493,6 +505,7 @@ function getArrayCallbackDetails(params: {
     enumMap,
     macroImportsMap,
     paramName,
+    contextNames,
     errorMessage: identifierErrorMessage,
   });
   const bodyExpression = getCallbackBodyExpression(
@@ -739,7 +752,10 @@ function isImportedExprCall(
   return isImportedMacroCall(node, typeChecker, 'expr');
 }
 
-type ExprTemplateDefinition = {
+type CompileTimeTemplateKind = 'exprTemplate' | 'modifier';
+
+type CompileTimeTemplateDefinition = {
+  kind: CompileTimeTemplateKind;
   call: ts.CallExpression;
   callback: ts.ArrowFunction;
   sourceFile: ts.SourceFile;
@@ -747,8 +763,11 @@ type ExprTemplateDefinition = {
 
 const EXPR_TEMPLATE_CALLBACK_ERROR =
   'exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier and whose body is a single expression';
+const MODIFIER_CALLBACK_ERROR =
+  'modifier callback must be a synchronous arrow function whose body is a single expression';
 
-function exprTemplateError(
+function compileTimeTemplateError(
+  _kind: CompileTimeTemplateKind,
   message: string,
   sourceFile: ts.SourceFile,
   node: ts.Node,
@@ -759,44 +778,64 @@ function exprTemplateError(
   );
 }
 
-function getExprTemplateCallback(
+function importedCompileTimeTemplateKind(
   call: ts.CallExpression,
   typeChecker: ts.TypeChecker,
-): ts.ArrowFunction | undefined {
-  if (!isImportedMacroCall(call, typeChecker, 'exprTemplate')) {
-    return undefined;
+): CompileTimeTemplateKind | undefined {
+  if (isImportedMacroCall(call, typeChecker, 'exprTemplate')) {
+    return 'exprTemplate';
   }
+  if (isImportedMacroCall(call, typeChecker, 'modifier')) {
+    return 'modifier';
+  }
+  return undefined;
+}
+
+function getCompileTimeTemplateCallback(
+  call: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): Pick<CompileTimeTemplateDefinition, 'kind' | 'callback'> | undefined {
+  const kind = importedCompileTimeTemplateKind(call, typeChecker);
+  if (!kind) return undefined;
   const sourceFile = call.getSourceFile();
+  const callbackError =
+    kind === 'exprTemplate'
+      ? EXPR_TEMPLATE_CALLBACK_ERROR
+      : MODIFIER_CALLBACK_ERROR;
   if (call.arguments.length !== 1) {
-    throw exprTemplateError(EXPR_TEMPLATE_CALLBACK_ERROR, sourceFile, call);
+    throw compileTimeTemplateError(kind, callbackError, sourceFile, call);
   }
   const callback = unwrapExprSyntax(call.arguments[0]);
   if (
     !ts.isArrowFunction(callback) ||
     isAsyncArrowFunction(callback) ||
     ts.isBlock(callback.body) ||
-    callback.parameters.length === 0
+    (kind === 'exprTemplate' && callback.parameters.length === 0)
   ) {
-    throw exprTemplateError(
-      EXPR_TEMPLATE_CALLBACK_ERROR,
+    throw compileTimeTemplateError(
+      kind,
+      callbackError,
       sourceFile,
       call.arguments[0],
     );
   }
-  const contextParam = callback.parameters[0];
-  if (
-    !ts.isIdentifier(contextParam.name) ||
-    !!contextParam.dotDotDotToken ||
-    !!contextParam.initializer ||
-    !!contextParam.questionToken
-  ) {
-    throw exprTemplateError(
-      EXPR_TEMPLATE_CALLBACK_ERROR,
-      sourceFile,
-      contextParam,
-    );
+  if (kind === 'exprTemplate') {
+    const contextParam = callback.parameters[0];
+    if (
+      !ts.isIdentifier(contextParam.name) ||
+      !!contextParam.dotDotDotToken ||
+      !!contextParam.initializer ||
+      !!contextParam.questionToken
+    ) {
+      throw compileTimeTemplateError(
+        kind,
+        callbackError,
+        sourceFile,
+        contextParam,
+      );
+    }
   }
-  return callback;
+  return { kind, callback };
 }
 
 function symbolForTemplateExpression(
@@ -820,19 +859,19 @@ function symbolForTemplateExpression(
   return undefined;
 }
 
-function resolveExprTemplateDefinition(
+function resolveCompileTimeTemplateDefinition(
   node: ts.Expression,
   typeChecker: ts.TypeChecker,
   evaluatedFiles?: Set<string>,
   visited: Set<ts.Symbol> = new Set(),
-): ExprTemplateDefinition | undefined {
+): CompileTimeTemplateDefinition | undefined {
   const expression = unwrapExprSyntax(node);
   if (ts.isCallExpression(expression)) {
-    const callback = getExprTemplateCallback(expression, typeChecker);
-    if (!callback) return undefined;
+    const template = getCompileTimeTemplateCallback(expression, typeChecker);
+    if (!template) return undefined;
     const sourceFile = expression.getSourceFile();
     evaluatedFiles?.add(sourceFile.fileName);
-    return { call: expression, callback, sourceFile };
+    return { call: expression, sourceFile, ...template };
   }
   if (
     !ts.isIdentifier(expression) &&
@@ -870,7 +909,7 @@ function resolveExprTemplateDefinition(
       ts.isVariableDeclarationList(declaration.parent) &&
       !!(declaration.parent.flags & ts.NodeFlags.Const)
     ) {
-      const definition = resolveExprTemplateDefinition(
+      const definition = resolveCompileTimeTemplateDefinition(
         declaration.initializer,
         typeChecker,
         evaluatedFiles,
@@ -879,7 +918,7 @@ function resolveExprTemplateDefinition(
       if (definition) return definition;
     }
     if (ts.isExportAssignment(declaration)) {
-      const definition = resolveExprTemplateDefinition(
+      const definition = resolveCompileTimeTemplateDefinition(
         declaration.expression,
         typeChecker,
         evaluatedFiles,
@@ -896,27 +935,46 @@ export function isExprTemplateInvocation(
   typeChecker: ts.TypeChecker,
 ): boolean {
   return (
-    !isImportedMacroCall(node, typeChecker, 'exprTemplate') &&
-    !!resolveExprTemplateDefinition(node.expression, typeChecker)
+    compileTimeTemplateInvocationKind(node, typeChecker) === 'exprTemplate'
   );
 }
 
-export function validateExprTemplateDefinition(
+export function compileTimeTemplateInvocationKind(
+  node: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): CompileTimeTemplateKind | undefined {
+  if (importedCompileTimeTemplateKind(node, typeChecker)) return undefined;
+  return resolveCompileTimeTemplateDefinition(node.expression, typeChecker)
+    ?.kind;
+}
+
+export function isCompileTimeTemplateInvocation(
+  node: ts.CallExpression,
+  typeChecker: ts.TypeChecker,
+): boolean {
+  return compileTimeTemplateInvocationKind(node, typeChecker) !== undefined;
+}
+
+export function validateCompileTimeTemplateDefinition(
   node: ts.CallExpression,
   typeChecker: ts.TypeChecker,
 ): void {
-  getExprTemplateCallback(node, typeChecker);
+  getCompileTimeTemplateCallback(node, typeChecker);
 }
 
 export const EXPR_TEMPLATE_PLACEHOLDER =
   '(() => { throw new Error("exprTemplate is compile-time-only and must be invoked with statically analyzable arguments"); })';
+export const MODIFIER_PLACEHOLDER =
+  '(() => { throw new Error("modifier is compile-time-only and must be invoked with statically analyzable arguments"); })';
 
-export function validateExprTemplateUsages(
+export function validateCompileTimeTemplateUsages(
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
 ): void {
-  const isTemplate = (node: ts.Expression): boolean =>
-    !!resolveExprTemplateDefinition(node, typeChecker);
+  const templateDefinition = (
+    node: ts.Expression,
+  ): CompileTimeTemplateDefinition | undefined =>
+    resolveCompileTimeTemplateDefinition(node, typeChecker);
 
   const visit = (node: ts.Node, templateAllowed = false): void => {
     if (
@@ -936,11 +994,13 @@ export function validateExprTemplateUsages(
         ts.isNonNullExpression(node) ||
         ts.isTypeAssertionExpression(node) ||
         ts.isParenthesizedExpression(node)) &&
-      isTemplate(node as ts.Expression)
+      templateDefinition(node as ts.Expression)
     ) {
       if (!templateAllowed) {
-        throw exprTemplateError(
-          'exprTemplate values are compile-time-only and may only be called, assigned to a const alias, or forwarded through import/export',
+        const kind = templateDefinition(node as ts.Expression)!.kind;
+        throw compileTimeTemplateError(
+          kind,
+          `${kind} values are compile-time-only and may only be called, assigned to a const alias, or forwarded through import/export`,
           sourceFile,
           node,
         );
@@ -949,28 +1009,29 @@ export function validateExprTemplateUsages(
     }
 
     if (ts.isVariableDeclaration(node) && node.initializer) {
-      const initializerIsTemplate = isTemplate(node.initializer);
+      const initializerTemplate = templateDefinition(node.initializer);
       if (
-        initializerIsTemplate &&
+        initializerTemplate &&
         (!ts.isVariableDeclarationList(node.parent) ||
           !(node.parent.flags & ts.NodeFlags.Const))
       ) {
-        throw exprTemplateError(
-          'exprTemplate aliases must use const declarations',
+        throw compileTimeTemplateError(
+          initializerTemplate.kind,
+          `${initializerTemplate.kind} aliases must use const declarations`,
           sourceFile,
           node,
         );
       }
-      visit(node.initializer, initializerIsTemplate);
+      visit(node.initializer, !!initializerTemplate);
       return;
     }
     if (ts.isCallExpression(node)) {
-      visit(node.expression, isTemplate(node.expression));
+      visit(node.expression, !!templateDefinition(node.expression));
       node.arguments.forEach(argument => visit(argument));
       return;
     }
     if (ts.isExportAssignment(node)) {
-      visit(node.expression, isTemplate(node.expression));
+      visit(node.expression, !!templateDefinition(node.expression));
       return;
     }
     ts.forEachChild(node, child => visit(child));
@@ -986,9 +1047,13 @@ function expressionOriginatesFromExpr(
 ): boolean {
   const expression = unwrapExprSyntax(node);
   if (ts.isCallExpression(expression)) {
+    const templateKind = compileTimeTemplateInvocationKind(
+      expression,
+      typeChecker,
+    );
     return (
       isImportedExprCall(expression, typeChecker) ||
-      isExprTemplateInvocation(expression, typeChecker)
+      templateKind === 'exprTemplate'
     );
   }
   if (
@@ -1933,6 +1998,7 @@ function evaluateExpr(
   enumMap: { [filePath: string]: { [key: string]: any } },
   macroImportsMap: { [filePath: string]: Set<string> },
   evaluatedFiles: Set<string>,
+  context?: { [name: string]: any },
   options?: MacroOptions,
 ): string | undefined {
   if (callee !== 'expr') {
@@ -1969,13 +2035,19 @@ function evaluateExpr(
     macroImportsMap,
     evaluatedFiles,
     options,
+    constantContext: context,
   });
 }
 
-const EXPR_TEMPLATE_PARAMETER_ERROR =
-  'exprTemplate parameters after the context must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter';
+function compileTimeTemplateParameterError(
+  kind: CompileTimeTemplateKind,
+): string {
+  return kind === 'exprTemplate'
+    ? 'exprTemplate parameters after the context must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter'
+    : 'modifier parameters must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter';
+}
 
-function evaluateExprTemplateDefault(
+function evaluateCompileTimeTemplateDefault(
   expression: ts.Expression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -1998,7 +2070,8 @@ function evaluateExprTemplateDefault(
   );
 }
 
-function bindExprTemplateIdentifier(
+function bindCompileTimeTemplateIdentifier(
+  kind: CompileTimeTemplateKind,
   element: ts.BindingElement,
   value: any,
   sourceFile: ts.SourceFile,
@@ -2010,11 +2083,16 @@ function bindExprTemplateIdentifier(
   options?: MacroOptions,
 ): void {
   if (!ts.isIdentifier(element.name)) {
-    throw exprTemplateError(EXPR_TEMPLATE_PARAMETER_ERROR, sourceFile, element);
+    throw compileTimeTemplateError(
+      kind,
+      compileTimeTemplateParameterError(kind),
+      sourceFile,
+      element,
+    );
   }
   let boundValue = value;
   if (boundValue === undefined && element.initializer) {
-    boundValue = evaluateExprTemplateDefault(
+    boundValue = evaluateCompileTimeTemplateDefault(
       element.initializer,
       sourceFile,
       typeChecker,
@@ -2029,13 +2107,15 @@ function bindExprTemplateIdentifier(
 }
 
 function propertyKeyForBindingElement(
+  kind: CompileTimeTemplateKind,
   element: ts.BindingElement,
   sourceFile: ts.SourceFile,
 ): string {
   if (!element.propertyName) {
     if (!ts.isIdentifier(element.name)) {
-      throw exprTemplateError(
-        EXPR_TEMPLATE_PARAMETER_ERROR,
+      throw compileTimeTemplateError(
+        kind,
+        compileTimeTemplateParameterError(kind),
         sourceFile,
         element,
       );
@@ -2049,10 +2129,16 @@ function propertyKeyForBindingElement(
   ) {
     return element.propertyName.text;
   }
-  throw exprTemplateError(EXPR_TEMPLATE_PARAMETER_ERROR, sourceFile, element);
+  throw compileTimeTemplateError(
+    kind,
+    compileTimeTemplateParameterError(kind),
+    sourceFile,
+    element,
+  );
 }
 
-function bindExprTemplateParameter(
+function bindCompileTimeTemplateParameter(
+  kind: CompileTimeTemplateKind,
   parameter: ts.ParameterDeclaration,
   inputValue: any,
   sourceFile: ts.SourceFile,
@@ -2065,7 +2151,7 @@ function bindExprTemplateParameter(
 ): void {
   let value = inputValue;
   if (value === undefined && parameter.initializer) {
-    value = evaluateExprTemplateDefault(
+    value = evaluateCompileTimeTemplateDefault(
       parameter.initializer,
       sourceFile,
       typeChecker,
@@ -2082,8 +2168,9 @@ function bindExprTemplateParameter(
   }
 
   if (value === null || value === undefined) {
-    throw exprTemplateError(
-      'exprTemplate cannot destructure null or undefined',
+    throw compileTimeTemplateError(
+      kind,
+      `${kind} cannot destructure null or undefined`,
       sourceFile,
       parameter,
     );
@@ -2100,8 +2187,9 @@ function bindExprTemplateParameter(
           !ts.isIdentifier(element.name) ||
           !!element.initializer
         ) {
-          throw exprTemplateError(
-            EXPR_TEMPLATE_PARAMETER_ERROR,
+          throw compileTimeTemplateError(
+            kind,
+            compileTimeTemplateParameterError(kind),
             sourceFile,
             element,
           );
@@ -2113,9 +2201,10 @@ function bindExprTemplateParameter(
         );
         return;
       }
-      const key = propertyKeyForBindingElement(element, sourceFile);
+      const key = propertyKeyForBindingElement(kind, element, sourceFile);
       usedKeys.add(key);
-      bindExprTemplateIdentifier(
+      bindCompileTimeTemplateIdentifier(
+        kind,
         element,
         objectValue[key],
         sourceFile,
@@ -2139,8 +2228,9 @@ function bindExprTemplateParameter(
           ? value
           : undefined;
     if (!arrayValue) {
-      throw exprTemplateError(
-        'exprTemplate array destructuring requires a statically analyzable array or string',
+      throw compileTimeTemplateError(
+        kind,
+        `${kind} array destructuring requires a statically analyzable array or string`,
         sourceFile,
         parameter,
       );
@@ -2153,8 +2243,9 @@ function bindExprTemplateParameter(
           !ts.isIdentifier(element.name) ||
           !!element.initializer
         ) {
-          throw exprTemplateError(
-            EXPR_TEMPLATE_PARAMETER_ERROR,
+          throw compileTimeTemplateError(
+            kind,
+            compileTimeTemplateParameterError(kind),
             sourceFile,
             element,
           );
@@ -2162,7 +2253,8 @@ function bindExprTemplateParameter(
         bindings[element.name.text] = arrayValue.slice(index);
         return;
       }
-      bindExprTemplateIdentifier(
+      bindCompileTimeTemplateIdentifier(
+        kind,
         element,
         arrayValue[index],
         sourceFile,
@@ -2177,10 +2269,20 @@ function bindExprTemplateParameter(
     return;
   }
 
-  throw exprTemplateError(EXPR_TEMPLATE_PARAMETER_ERROR, sourceFile, parameter);
+  throw compileTimeTemplateError(
+    kind,
+    compileTimeTemplateParameterError(kind),
+    sourceFile,
+    parameter,
+  );
 }
 
-function evaluateExprTemplateInvocation(
+type CompileTimeTemplateInvocationResult = {
+  kind: CompileTimeTemplateKind;
+  value: any;
+};
+
+function evaluateCompileTimeTemplateInvocation(
   expression: ts.CallExpression,
   sourceFile: ts.SourceFile,
   typeChecker: ts.TypeChecker,
@@ -2189,8 +2291,8 @@ function evaluateExprTemplateInvocation(
   evaluatedFiles: Set<string>,
   context?: { [name: string]: any },
   options?: MacroOptions,
-): string | undefined {
-  const definition = resolveExprTemplateDefinition(
+): CompileTimeTemplateInvocationResult | undefined {
+  const definition = resolveCompileTimeTemplateDefinition(
     expression.expression,
     typeChecker,
     evaluatedFiles,
@@ -2213,8 +2315,9 @@ function evaluateExprTemplateInvocation(
           options,
         );
         if (!Array.isArray(spread)) {
-          throw exprTemplateError(
-            'exprTemplate spread arguments must resolve to an array',
+          throw compileTimeTemplateError(
+            definition.kind,
+            `${definition.kind} spread arguments must resolve to an array`,
             sourceFile,
             argument,
           );
@@ -2238,8 +2341,9 @@ function evaluateExprTemplateInvocation(
     }
   } catch (error) {
     if (isFatalMacroTransformError(error)) throw error;
-    throw exprTemplateError(
-      `exprTemplate arguments must be statically analyzable: ${
+    throw compileTimeTemplateError(
+      definition.kind,
+      `${definition.kind} arguments must be statically analyzable: ${
         error instanceof Error ? error.message : String(error)
       }`,
       sourceFile,
@@ -2247,13 +2351,16 @@ function evaluateExprTemplateInvocation(
     );
   }
 
-  const parameters = definition.callback.parameters.slice(1);
+  const parameters = definition.callback.parameters.slice(
+    definition.kind === 'exprTemplate' ? 1 : 0,
+  );
   const restIndex = parameters.findIndex(
     parameter => !!parameter.dotDotDotToken,
   );
   if (restIndex !== -1 && restIndex !== parameters.length - 1) {
-    throw exprTemplateError(
-      EXPR_TEMPLATE_PARAMETER_ERROR,
+    throw compileTimeTemplateError(
+      definition.kind,
+      compileTimeTemplateParameterError(definition.kind),
       definition.sourceFile,
       parameters[restIndex],
     );
@@ -2268,15 +2375,17 @@ function evaluateExprTemplateInvocation(
     0,
   );
   if (values.length < minimum) {
-    throw exprTemplateError(
-      `exprTemplate expected at least ${minimum} static argument(s), but received ${values.length}`,
+    throw compileTimeTemplateError(
+      definition.kind,
+      `${definition.kind} expected at least ${minimum} static argument(s), but received ${values.length}`,
       sourceFile,
       expression,
     );
   }
   if (restIndex === -1 && values.length > parameters.length) {
-    throw exprTemplateError(
-      `exprTemplate expected at most ${parameters.length} static argument(s), but received ${values.length}`,
+    throw compileTimeTemplateError(
+      definition.kind,
+      `${definition.kind} expected at most ${parameters.length} static argument(s), but received ${values.length}`,
       sourceFile,
       expression,
     );
@@ -2286,8 +2395,9 @@ function evaluateExprTemplateInvocation(
   parameters.forEach((parameter, index) => {
     if (parameter.dotDotDotToken) {
       if (!ts.isIdentifier(parameter.name) || parameter.initializer) {
-        throw exprTemplateError(
-          EXPR_TEMPLATE_PARAMETER_ERROR,
+        throw compileTimeTemplateError(
+          definition.kind,
+          compileTimeTemplateParameterError(definition.kind),
           definition.sourceFile,
           parameter,
         );
@@ -2295,7 +2405,8 @@ function evaluateExprTemplateInvocation(
       bindings[parameter.name.text] = values.slice(index);
       return;
     }
-    bindExprTemplateParameter(
+    bindCompileTimeTemplateParameter(
+      definition.kind,
       parameter,
       values[index],
       definition.sourceFile,
@@ -2308,20 +2419,60 @@ function evaluateExprTemplateInvocation(
     );
   });
 
+  if (definition.kind === 'modifier') {
+    let value: any;
+    try {
+      value = evaluate(
+        definition.callback.body as ts.Expression,
+        definition.sourceFile,
+        typeChecker,
+        enumMap,
+        macroImportsMap,
+        true,
+        evaluatedFiles,
+        bindings,
+        options,
+      );
+    } catch (error) {
+      if (isFatalMacroTransformError(error)) throw error;
+      if (error instanceof ConfTSError) {
+        throw new FatalMacroTransformError(
+          error.message,
+          error.location,
+          error.references,
+          error.suggestions,
+        );
+      }
+      throw compileTimeTemplateError(
+        definition.kind,
+        error instanceof Error ? error.message : String(error),
+        definition.sourceFile,
+        definition.callback.body,
+      );
+    }
+    return {
+      kind: definition.kind,
+      value,
+    };
+  }
+
   const contextParameter = definition.callback.parameters[0];
   const contextIdentifier = contextParameter.name as ts.Identifier;
-  return compileExprBody({
-    paramName: contextIdentifier.text,
-    paramIdentifier: contextIdentifier,
-    bodyExpression: definition.callback.body as ts.Expression,
-    sourceFile: definition.sourceFile,
-    typeChecker,
-    enumMap,
-    macroImportsMap,
-    evaluatedFiles,
-    options,
-    constantContext: bindings,
-  });
+  return {
+    kind: definition.kind,
+    value: compileExprBody({
+      paramName: contextIdentifier.text,
+      paramIdentifier: contextIdentifier,
+      bodyExpression: definition.callback.body as ts.Expression,
+      sourceFile: definition.sourceFile,
+      typeChecker,
+      enumMap,
+      macroImportsMap,
+      evaluatedFiles,
+      options,
+      constantContext: bindings,
+    }),
+  };
 }
 /**
  * Evaluate env macro. Supports nested macros in the argument by evaluating in macro mode
@@ -2502,6 +2653,7 @@ function evaluateArrayMacro(
     typeChecker,
     enumMap,
     macroImportsMap,
+    contextNames: context && new Set(Object.keys(context)),
     arrowErrorMessage: `${callee}: callback must be an arrow function`,
     paramErrorMessage: `${callee}: callback must have exactly one parameter`,
     bodyErrorMessage: `${callee}: callback body must be a single return statement`,
@@ -2519,7 +2671,7 @@ function evaluateArrayMacro(
       macroImportsMap,
       true,
       evaluatedFiles,
-      { [paramName]: item },
+      { ...context, [paramName]: item },
       options,
     );
   switch (method) {
@@ -2549,7 +2701,7 @@ export function evaluateMacro(
 ): any {
   const callee = importedName ?? getCalleeName(expression, sourceFile);
 
-  const exprTemplateResult = evaluateExprTemplateInvocation(
+  const compileTimeTemplateResult = evaluateCompileTimeTemplateInvocation(
     expression,
     sourceFile,
     typeChecker,
@@ -2559,8 +2711,8 @@ export function evaluateMacro(
     context,
     options,
   );
-  if (exprTemplateResult !== undefined) {
-    return exprTemplateResult;
+  if (compileTimeTemplateResult !== undefined) {
+    return compileTimeTemplateResult.value;
   }
 
   const result =
@@ -2572,6 +2724,7 @@ export function evaluateMacro(
       enumMap,
       macroImportsMap,
       evaluatedFiles,
+      context,
       options,
     ) ??
     evaluateTypeCasting(

@@ -11,24 +11,24 @@ formats it into the `Error.message` instead of a `ConfTSError` instance.
 
 ## Compiler (plain mode)
 
-| Message                                                                                                  | Cause                                                     | Fix                                                                          |
-| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `No default export found in the entry file`                                                              | Entry only has named exports                              | Add `export default`, `export { x as default }`, or `export { default } from` |
-| `Unsupported type: Function`                                                                             | An arrow/`function` value in the config                   | Move the logic out, or express it with `expr()` in macro mode                 |
-| `Unsupported type: Date`                                                                                 | `new Date()` (or any `new` expression)                    | Use an ISO date string or a numeric timestamp                                 |
-| `Unsupported type: RegExp`                                                                               | A regex literal                                           | Store the pattern as a string and compile it at runtime                       |
-| `Failed to evaluate variable "c". Only 'const' declarations are supported, but it was declared with 'let'.` | A referenced `let`/`var`                              | Change it to `const`                                                          |
-| `Non-null assertion failed: value is null or undefined`                                                  | `x!` where `x` really is nullish at compile time          | Provide a value, or use `?? fallback`                                         |
-| `Non-null assertion applied to value typed as 'null' or 'undefined'`                                     | `x!` where the declared type is exactly `null`/`undefined` | Widen the type or drop the assertion                                          |
-| `Failed to parse file:`                                                                                  | Syntax error                                              | The diagnostic prints the offending line — check for a missing or extra comma |
+| Message                                                                                                     | Cause                                                      | Fix                                                                           |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `No default export found in the entry file`                                                                 | Entry only has named exports                               | Add `export default`, `export { x as default }`, or `export { default } from` |
+| `Unsupported type: Function`                                                                                | An arrow/`function` value in the config                    | Move the logic out, or express it with `expr()` in macro mode                 |
+| `Unsupported type: Date`                                                                                    | `new Date()` (or any `new` expression)                     | Use an ISO date string or a numeric timestamp                                 |
+| `Unsupported type: RegExp`                                                                                  | A regex literal                                            | Store the pattern as a string and compile it at runtime                       |
+| `Failed to evaluate variable "c". Only 'const' declarations are supported, but it was declared with 'let'.` | A referenced `let`/`var`                                   | Change it to `const`                                                          |
+| `Non-null assertion failed: value is null or undefined`                                                     | `x!` where `x` really is nullish at compile time           | Provide a value, or use `?? fallback`                                         |
+| `Non-null assertion applied to value typed as 'null' or 'undefined'`                                        | `x!` where the declared type is exactly `null`/`undefined` | Widen the type or drop the assertion                                          |
+| `Failed to parse file:`                                                                                     | Syntax error                                               | The diagnostic prints the offending line — check for a missing or extra comma |
 
 ## Macro mode
 
-| Message                                                                                   | Cause                                                                  | Fix                                                              |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `Unsupported call expression: arrayMap` / `Function "arrayMap" is only allowed in macro mode` | `arrayMap`/`arrayFilter`/`arrayFlatMap` callback isn't a single-parameter arrow with an expression body | Rewrite the callback as `x => expr`                              |
-| `String` / `Boolean` reported as an unevaluatable call                                    | The macro wasn't imported from `@conf-ts/macro`, or the file is being compiled in plain mode | Add the import; if the build compiles this file without macro mode, rewrite the value in plain TypeScript |
-| `'<name>' is a compile-time macro from '@conf-ts/macro' … it cannot run at runtime.`      | The macro reached runtime unexpanded                                    | The transform never ran — the file is outside macro mode, or it was imported by application code |
+| Message                                                                                       | Cause                                                                                                   | Fix                                                                                                       |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `Unsupported call expression: arrayMap` / `Function "arrayMap" is only allowed in macro mode` | `arrayMap`/`arrayFilter`/`arrayFlatMap` callback isn't a single-parameter arrow with an expression body | Rewrite the callback as `x => expr`                                                                       |
+| `String` / `Boolean` reported as an unevaluatable call                                        | The macro wasn't imported from `@conf-ts/macro`, or the file is being compiled in plain mode            | Add the import; if the build compiles this file without macro mode, rewrite the value in plain TypeScript |
+| `'<name>' is a compile-time macro from '@conf-ts/macro' … it cannot run at runtime.`          | The macro reached runtime unexpanded                                                                    | The transform never ran — the file is outside macro mode, or it was imported by application code          |
 
 The two macro-mode symptoms that look confusing:
 
@@ -37,6 +37,20 @@ The two macro-mode symptoms that look confusing:
 - A macro call the transformer **cannot** rewrite is left in place together with
   its import, so `@conf-ts/macro` still appears in the output. A fully
   transformed file has no `from '@conf-ts/macro'` left.
+
+## `modifier()`
+
+| Message                                                                                    | Cause                                                                | Fix                                                                |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `modifier callback must be a synchronous arrow function whose body is a single expression` | The callback is async, a function expression, or has a block body    | Use `(...args) => expression`                                      |
+| `modifier arguments must be statically analyzable`                                         | An invocation argument depends on a runtime value                    | Pass literals, enums, or local/imported `const` values             |
+| `modifier expected at least N static argument(s), but received M`                          | A required argument was omitted                                      | Pass it, or make the parameter optional/defaulted                  |
+| `modifier expected at most N static argument(s), but received M`                           | Too many arguments were passed without a rest parameter              | Remove extras, or add a trailing rest parameter                    |
+| `modifier parameters must be identifiers…`                                                 | A parameter uses a nested/computed pattern or invalid rest placement | Use identifiers or one level of object/array destructuring         |
+| `modifier cannot destructure null or undefined`                                            | A destructured argument resolved to a nullish value                  | Pass an object/array, or default the parameter                     |
+| `modifier array destructuring requires a statically analyzable array or string`            | Array destructuring received another static type                     | Pass a static array/string                                         |
+| `modifier aliases must use const declarations`                                             | A modifier was assigned through `let`/`var`                          | Change the alias to `const`                                        |
+| `modifier values are compile-time-only`                                                    | The modifier function escaped into generated data                    | Invoke it, or forward it only through const/import/export bindings |
 
 ## `expr()`
 
@@ -62,10 +76,10 @@ Triggers:
 
 Specific messages:
 
-| Message                                                                                                       | Fix                                                                      |
-| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `Nested Expr 'subExpr' must be called with exactly one argument: the current expr context parameter 'ctx'.`   | Call it as `subExpr(ctx)` with the bare parameter — not a property, another value, zero args, multiple args, or a spread |
-| `Nested Expr 'always' must be called with no arguments because the enclosing expr callback doesn't take a context parameter.` | Drop the argument: `always()`                                            |
+| Message                                                                                                                       | Fix                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `Nested Expr 'subExpr' must be called with exactly one argument: the current expr context parameter 'ctx'.`                   | Call it as `subExpr(ctx)` with the bare parameter — not a property, another value, zero args, multiple args, or a spread |
+| `Nested Expr 'always' must be called with no arguments because the enclosing expr callback doesn't take a context parameter.` | Drop the argument: `always()`                                                                                            |
 
 ## `exprTemplate()`
 

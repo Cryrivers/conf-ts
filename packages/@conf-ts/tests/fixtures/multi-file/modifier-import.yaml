@@ -1,0 +1,13 @@
+defaultImport:
+  value: 1
+  source: default
+namespaceReexport:
+  value: 2
+  added: 5
+exportedNamespace:
+  value: 3
+  added: 7
+starReexport:
+  value: 4
+  added: 9
+stringified: "6"

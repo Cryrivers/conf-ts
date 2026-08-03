@@ -18,7 +18,7 @@ pub fn evaluate_macro(
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Value, ConfTSError> {
-  match evaluate_expr_template_invocation(call, file_ctx, ctx, local_context, options) {
+  match evaluate_compile_time_template_invocation(call, file_ctx, ctx, local_context, options) {
     Ok(Some(value)) => return Ok(value),
     Ok(None) => {}
     Err(error) => {
@@ -469,13 +469,13 @@ fn evaluate_array_macro(
   for item in items {
     match method {
       ArrayMacroMethod::Map => {
-        let mut local = HashMap::new();
+        let mut local = local_context.cloned().unwrap_or_default();
         local.insert(param_name.clone(), item);
         let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
         result.push(val);
       }
       ArrayMacroMethod::FlatMap => {
-        let mut local = HashMap::new();
+        let mut local = local_context.cloned().unwrap_or_default();
         local.insert(param_name.clone(), item);
         let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
         match val {
@@ -484,7 +484,7 @@ fn evaluate_array_macro(
         }
       }
       ArrayMacroMethod::Filter => {
-        let mut local = HashMap::new();
+        let mut local = local_context.cloned().unwrap_or_default();
         local.insert(param_name.clone(), item.clone());
         let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
         if val.is_truthy() {
@@ -2848,25 +2848,61 @@ fn collect_string_requotes(
   }
 }
 
-pub(crate) const EXPR_TEMPLATE_PLACEHOLDER: &str = "(() => { throw new Error(\"exprTemplate is compile-time-only and must be invoked with statically analyzable arguments\"); })";
-
 const EXPR_TEMPLATE_CALLBACK_ERROR: &str = "exprTemplate callback must be a synchronous arrow function whose first parameter is a plain context identifier and whose body is a single expression";
 const EXPR_TEMPLATE_PARAMETER_ERROR: &str = "exprTemplate parameters after the context must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter";
+const MODIFIER_CALLBACK_ERROR: &str =
+  "modifier callback must be a synchronous arrow function whose body is a single expression";
+const MODIFIER_PARAMETER_ERROR: &str = "modifier parameters must be identifiers, optional/defaulted identifiers, a single level of object/array destructuring, or a trailing rest parameter";
 
-fn unwrap_expr_template_expression<'e, 'a>(expression: &'e Expression<'a>) -> &'e Expression<'a> {
+pub(crate) fn compile_time_template_placeholder(
+  kind: super::CompileTimeTemplateKind,
+) -> &'static str {
+  match kind {
+    super::CompileTimeTemplateKind::ExprTemplate => {
+      "(() => { throw new Error(\"exprTemplate is compile-time-only and must be invoked with statically analyzable arguments\"); })"
+    }
+    super::CompileTimeTemplateKind::Modifier => {
+      "(() => { throw new Error(\"modifier is compile-time-only and must be invoked with statically analyzable arguments\"); })"
+    }
+  }
+}
+
+fn compile_time_template_callback_error(kind: super::CompileTimeTemplateKind) -> &'static str {
+  match kind {
+    super::CompileTimeTemplateKind::ExprTemplate => EXPR_TEMPLATE_CALLBACK_ERROR,
+    super::CompileTimeTemplateKind::Modifier => MODIFIER_CALLBACK_ERROR,
+  }
+}
+
+fn compile_time_template_parameter_error(kind: super::CompileTimeTemplateKind) -> &'static str {
+  match kind {
+    super::CompileTimeTemplateKind::ExprTemplate => EXPR_TEMPLATE_PARAMETER_ERROR,
+    super::CompileTimeTemplateKind::Modifier => MODIFIER_PARAMETER_ERROR,
+  }
+}
+
+fn unwrap_compile_time_template_expression<'e, 'a>(
+  expression: &'e Expression<'a>,
+) -> &'e Expression<'a> {
   match expression {
     Expression::ParenthesizedExpression(value) => {
-      unwrap_expr_template_expression(&value.expression)
+      unwrap_compile_time_template_expression(&value.expression)
     }
-    Expression::TSAsExpression(value) => unwrap_expr_template_expression(&value.expression),
-    Expression::TSSatisfiesExpression(value) => unwrap_expr_template_expression(&value.expression),
-    Expression::TSNonNullExpression(value) => unwrap_expr_template_expression(&value.expression),
-    Expression::TSTypeAssertion(value) => unwrap_expr_template_expression(&value.expression),
+    Expression::TSAsExpression(value) => unwrap_compile_time_template_expression(&value.expression),
+    Expression::TSSatisfiesExpression(value) => {
+      unwrap_compile_time_template_expression(&value.expression)
+    }
+    Expression::TSNonNullExpression(value) => {
+      unwrap_compile_time_template_expression(&value.expression)
+    }
+    Expression::TSTypeAssertion(value) => {
+      unwrap_compile_time_template_expression(&value.expression)
+    }
     _ => expression,
   }
 }
 
-fn expr_template_error(
+fn compile_time_template_error(
   file_ctx: &FileContext,
   offset: u32,
   message: impl Into<String>,
@@ -2875,116 +2911,88 @@ fn expr_template_error(
   ConfTSError::new(message.into(), &file_ctx.file_path, line, character)
 }
 
-fn expr_template_callback<'e, 'a>(
+fn compile_time_template_callback<'e, 'a>(
   call: &'e CallExpression<'a>,
   file_ctx: &FileContext,
+  kind: super::CompileTimeTemplateKind,
 ) -> Result<&'e ArrowFunctionExpression<'a>, ConfTSError> {
+  let callback_error = compile_time_template_callback_error(kind);
   if call.arguments.len() != 1 {
-    return Err(expr_template_error(
+    return Err(compile_time_template_error(
       file_ctx,
       call.span.start,
-      EXPR_TEMPLATE_CALLBACK_ERROR,
+      callback_error,
     ));
   }
   let callback = call.arguments[0].as_expression().ok_or_else(|| {
-    expr_template_error(
-      file_ctx,
-      call.arguments[0].span().start,
-      EXPR_TEMPLATE_CALLBACK_ERROR,
-    )
+    compile_time_template_error(file_ctx, call.arguments[0].span().start, callback_error)
   })?;
-  let Expression::ArrowFunctionExpression(arrow) = unwrap_expr_template_expression(callback) else {
-    return Err(expr_template_error(
+  let Expression::ArrowFunctionExpression(arrow) =
+    unwrap_compile_time_template_expression(callback)
+  else {
+    return Err(compile_time_template_error(
       file_ctx,
       callback.span().start,
-      EXPR_TEMPLATE_CALLBACK_ERROR,
+      callback_error,
     ));
   };
-  if arrow.r#async
-    || !arrow.expression
-    || arrow.params.items.is_empty()
-    || arrow.params.items[0].initializer.is_some()
-    || arrow.params.items[0].optional
-    || !matches!(
-      arrow.params.items[0].pattern,
-      BindingPattern::BindingIdentifier(_)
-    )
-  {
-    return Err(expr_template_error(
+  let invalid_context = kind == super::CompileTimeTemplateKind::ExprTemplate
+    && (arrow.params.items.is_empty()
+      || arrow.params.items[0].initializer.is_some()
+      || arrow.params.items[0].optional
+      || !matches!(
+        arrow.params.items[0].pattern,
+        BindingPattern::BindingIdentifier(_)
+      ));
+  if arrow.r#async || !arrow.expression || invalid_context {
+    return Err(compile_time_template_error(
       file_ctx,
       arrow.span.start,
-      EXPR_TEMPLATE_CALLBACK_ERROR,
+      callback_error,
     ));
   }
   Ok(arrow.as_ref())
 }
 
-pub(crate) fn validate_expr_template_definition(
+pub(crate) fn validate_compile_time_template_definition(
   call: &CallExpression,
   file_ctx: &FileContext,
+  kind: super::CompileTimeTemplateKind,
 ) -> Result<(), ConfTSError> {
-  expr_template_callback(call, file_ctx).map(|_| ())
+  compile_time_template_callback(call, file_ctx, kind).map(|_| ())
 }
 
-fn find_expr_template_call_in_expression<'e, 'a>(
-  expression: &'e Expression<'a>,
-  call_start: u32,
-) -> Option<&'e CallExpression<'a>> {
-  match unwrap_expr_template_expression(expression) {
-    Expression::CallExpression(call) => {
-      if call.span.start == call_start {
-        return Some(call.as_ref());
-      }
-      find_expr_template_call_in_expression(&call.callee, call_start)
-    }
-    _ => None,
-  }
-}
-
-fn find_expr_template_call<'e, 'a>(
+fn find_compile_time_template_call<'e, 'a>(
   file_ctx: &'e FileContext,
   call_start: u32,
 ) -> Option<&'e CallExpression<'a>>
 where
   'e: 'a,
 {
-  fn from_declaration<'e, 'a>(
-    declaration: &'e VariableDeclaration<'a>,
+  struct CompileTimeTemplateCall<'a> {
     call_start: u32,
-  ) -> Option<&'e CallExpression<'a>> {
-    declaration.declarations.iter().find_map(|declarator| {
-      declarator
-        .init
-        .as_ref()
-        .and_then(|expression| find_expr_template_call_in_expression(expression, call_start))
-    })
+    found: Option<&'a CallExpression<'a>>,
   }
 
-  for statement in &file_ctx.program().body {
-    match statement {
-      Statement::VariableDeclaration(declaration) => {
-        if let Some(call) = from_declaration(declaration, call_start) {
-          return Some(call);
-        }
+  impl<'a> Visit<'a> for CompileTimeTemplateCall<'a> {
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+      if self.found.is_some() {
+        return;
       }
-      Statement::ExportNamedDeclaration(export) => {
-        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
-          && let Some(call) = from_declaration(declaration, call_start)
-        {
-          return Some(call);
-        }
+      if call.span.start == self.call_start {
+        self.found = Some(self.alloc(call));
+        return;
       }
-      Statement::ExportDefaultDeclaration(export) => {
-        if let Some(expression) = export.declaration.as_expression()
-          && let Some(call) = find_expr_template_call_in_expression(expression, call_start)
-        {
-          return Some(call);
-        }
-      }
-      _ => {}
+      walk::walk_call_expression(self, call);
     }
   }
-  None
+
+  let mut finder = CompileTimeTemplateCall {
+    call_start,
+    found: None,
+  };
+  finder.visit_program(file_ctx.program());
+  finder.found
 }
 
 fn static_binding_key(property: &BindingProperty) -> Option<String> {
@@ -3046,7 +3054,8 @@ fn binding_property_value(value: &Value, key: &str) -> Value {
   }
 }
 
-fn bind_expr_template_pattern(
+fn bind_compile_time_template_pattern(
+  kind: super::CompileTimeTemplateKind,
   pattern: &BindingPattern,
   mut value: Value,
   allow_pattern: bool,
@@ -3059,7 +3068,8 @@ fn bind_expr_template_pattern(
     if matches!(value, Value::Undefined) {
       value = evaluate(&assignment.right, file_ctx, ctx, Some(bindings), options)?;
     }
-    return bind_expr_template_pattern(
+    return bind_compile_time_template_pattern(
+      kind,
       &assignment.left,
       value,
       false,
@@ -3077,24 +3087,25 @@ fn bind_expr_template_pattern(
     }
     BindingPattern::ObjectPattern(object) if allow_pattern => {
       if matches!(value, Value::Null | Value::Undefined) {
-        return Err(expr_template_error(
+        return Err(compile_time_template_error(
           file_ctx,
           object.span.start,
-          "exprTemplate cannot destructure null or undefined",
+          format!("{} cannot destructure null or undefined", kind.name()),
         ));
       }
       let mut used = Vec::new();
       for property in &object.properties {
         let Some(key) = static_binding_key(property) else {
-          return Err(expr_template_error(
+          return Err(compile_time_template_error(
             file_ctx,
             property.span.start,
-            EXPR_TEMPLATE_PARAMETER_ERROR,
+            compile_time_template_parameter_error(kind),
           ));
         };
         let property_value = binding_property_value(&value, &key);
         used.push(key);
-        bind_expr_template_pattern(
+        bind_compile_time_template_pattern(
+          kind,
           &property.value,
           property_value,
           false,
@@ -3106,10 +3117,10 @@ fn bind_expr_template_pattern(
       }
       if let Some(rest) = &object.rest {
         let BindingPattern::BindingIdentifier(identifier) = &rest.argument else {
-          return Err(expr_template_error(
+          return Err(compile_time_template_error(
             file_ctx,
             rest.span.start,
-            EXPR_TEMPLATE_PARAMETER_ERROR,
+            compile_time_template_parameter_error(kind),
           ));
         };
         let remaining = object_entries(&value)
@@ -3131,16 +3142,20 @@ fn bind_expr_template_pattern(
           .map(|character| Value::String(character.to_string()))
           .collect(),
         _ => {
-          return Err(expr_template_error(
+          return Err(compile_time_template_error(
             file_ctx,
             array.span.start,
-            "exprTemplate array destructuring requires a statically analyzable array or string",
+            format!(
+              "{} array destructuring requires a statically analyzable array or string",
+              kind.name()
+            ),
           ));
         }
       };
       for (index, element) in array.elements.iter().enumerate() {
         if let Some(element) = element {
-          bind_expr_template_pattern(
+          bind_compile_time_template_pattern(
+            kind,
             element,
             values.get(index).cloned().unwrap_or(Value::Undefined),
             false,
@@ -3153,10 +3168,10 @@ fn bind_expr_template_pattern(
       }
       if let Some(rest) = &array.rest {
         let BindingPattern::BindingIdentifier(identifier) = &rest.argument else {
-          return Err(expr_template_error(
+          return Err(compile_time_template_error(
             file_ctx,
             rest.span.start,
-            EXPR_TEMPLATE_PARAMETER_ERROR,
+            compile_time_template_parameter_error(kind),
           ));
         };
         bindings.insert(
@@ -3166,24 +3181,26 @@ fn bind_expr_template_pattern(
       }
       Ok(())
     }
-    _ => Err(expr_template_error(
+    _ => Err(compile_time_template_error(
       file_ctx,
       pattern.span().start,
-      EXPR_TEMPLATE_PARAMETER_ERROR,
+      compile_time_template_parameter_error(kind),
     )),
   }
 }
 
-fn evaluate_expr_template_invocation(
+fn evaluate_compile_time_template_invocation(
   call: &CallExpression,
   file_ctx: &FileContext,
   ctx: &mut EvalContext,
   local_context: Option<&HashMap<String, Value>>,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
-  let Some(definition) = super::expr_template_definition(&call.callee, file_ctx, ctx) else {
+  let Some(definition) = super::compile_time_template_definition(&call.callee, file_ctx, ctx)
+  else {
     return Ok(None);
   };
+  let kind = definition.kind;
   for dependency in definition.dependencies {
     ctx.evaluated_files.insert(dependency);
   }
@@ -3193,21 +3210,21 @@ fn evaluate_expr_template_invocation(
     .get(&definition.file_path)
     .cloned()
     .ok_or_else(|| {
-      expr_template_error(
+      compile_time_template_error(
         file_ctx,
         call.span.start,
-        "exprTemplate definition file is unavailable",
+        format!("{} definition file is unavailable", kind.name()),
       )
     })?;
-  let definition_call = find_expr_template_call(&definition_ctx, definition.call_start)
+  let definition_call = find_compile_time_template_call(&definition_ctx, definition.call_start)
     .ok_or_else(|| {
-      expr_template_error(
+      compile_time_template_error(
         &definition_ctx,
         definition.call_start,
-        "exprTemplate definition could not be resolved",
+        format!("{} definition could not be resolved", kind.name()),
       )
     })?;
-  let arrow = expr_template_callback(definition_call, &definition_ctx)?;
+  let arrow = compile_time_template_callback(definition_call, &definition_ctx, kind)?;
 
   let mut values = Vec::new();
   for argument in &call.arguments {
@@ -3215,28 +3232,44 @@ fn evaluate_expr_template_invocation(
       Argument::SpreadElement(spread) => {
         let value = evaluate(&spread.argument, file_ctx, ctx, local_context, options)?;
         let Value::Array(spread_values) = value else {
-          return Err(expr_template_error(
+          return Err(compile_time_template_error(
             file_ctx,
             spread.span.start,
-            "exprTemplate spread arguments must resolve to an array",
+            format!("{} spread arguments must resolve to an array", kind.name()),
           ));
         };
         values.extend(spread_values);
       }
       _ => {
         let expression = argument.as_expression().ok_or_else(|| {
-          expr_template_error(
+          compile_time_template_error(
             file_ctx,
             argument.span().start,
-            "exprTemplate arguments must be statically analyzable",
+            format!("{} arguments must be statically analyzable", kind.name()),
           )
         })?;
-        values.push(evaluate(expression, file_ctx, ctx, local_context, options)?);
+        let value =
+          evaluate(expression, file_ctx, ctx, local_context, options).map_err(|error| {
+            if kind == super::CompileTimeTemplateKind::Modifier {
+              compile_time_template_error(
+                file_ctx,
+                call.span.start,
+                format!(
+                  "modifier arguments must be statically analyzable: {}",
+                  error.message
+                ),
+              )
+            } else {
+              error
+            }
+          })?;
+        values.push(value);
       }
     }
   }
 
-  let parameters = &arrow.params.items[1..];
+  let parameter_offset = usize::from(kind == super::CompileTimeTemplateKind::ExprTemplate);
+  let parameters = &arrow.params.items[parameter_offset..];
   let minimum = parameters
     .iter()
     .enumerate()
@@ -3245,22 +3278,24 @@ fn evaluate_expr_template_invocation(
     .max()
     .unwrap_or(0);
   if values.len() < minimum {
-    return Err(expr_template_error(
+    return Err(compile_time_template_error(
       file_ctx,
       call.span.start,
       format!(
-        "exprTemplate expected at least {} static argument(s), but received {}",
+        "{} expected at least {} static argument(s), but received {}",
+        kind.name(),
         minimum,
         values.len()
       ),
     ));
   }
   if arrow.params.rest.is_none() && values.len() > parameters.len() {
-    return Err(expr_template_error(
+    return Err(compile_time_template_error(
       file_ctx,
       call.span.start,
       format!(
-        "exprTemplate expected at most {} static argument(s), but received {}",
+        "{} expected at most {} static argument(s), but received {}",
+        kind.name(),
         parameters.len(),
         values.len()
       ),
@@ -3275,7 +3310,8 @@ fn evaluate_expr_template_invocation(
     {
       value = evaluate(initializer, &definition_ctx, ctx, Some(&bindings), options)?;
     }
-    bind_expr_template_pattern(
+    bind_compile_time_template_pattern(
+      kind,
       &parameter.pattern,
       value,
       true,
@@ -3287,10 +3323,10 @@ fn evaluate_expr_template_invocation(
   }
   if let Some(rest) = &arrow.params.rest {
     let BindingPattern::BindingIdentifier(identifier) = &rest.rest.argument else {
-      return Err(expr_template_error(
+      return Err(compile_time_template_error(
         &definition_ctx,
         rest.span.start,
-        EXPR_TEMPLATE_PARAMETER_ERROR,
+        compile_time_template_parameter_error(kind),
       ));
     };
     bindings.insert(
@@ -3299,21 +3335,30 @@ fn evaluate_expr_template_invocation(
     );
   }
 
-  let context_name = match &arrow.params.items[0].pattern {
-    BindingPattern::BindingIdentifier(identifier) => identifier.name.as_str(),
-    _ => unreachable!(),
-  };
   let body_expr = match arrow.body.statements.first() {
     Some(Statement::ExpressionStatement(statement)) => &statement.expression,
     _ => {
-      return Err(expr_template_error(
+      return Err(compile_time_template_error(
         &definition_ctx,
         arrow.body.span.start,
-        EXPR_TEMPLATE_CALLBACK_ERROR,
+        compile_time_template_callback_error(kind),
       ));
     }
   };
 
+  if kind == super::CompileTimeTemplateKind::Modifier {
+    let mut expr_bindings = super::current_expr_template_bindings(ctx).unwrap_or_default();
+    expr_bindings.extend(bindings.clone());
+    super::push_expr_template_bindings(ctx, expr_bindings);
+    let result = evaluate(body_expr, &definition_ctx, ctx, Some(&bindings), options);
+    super::pop_expr_template_bindings(ctx);
+    return result.map(Some);
+  }
+
+  let context_name = match &arrow.params.items[0].pattern {
+    BindingPattern::BindingIdentifier(identifier) => identifier.name.as_str(),
+    _ => unreachable!(),
+  };
   super::push_expr_template_bindings(ctx, bindings);
   let result = compile_expr_arrow(
     arrow,

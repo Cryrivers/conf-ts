@@ -13,10 +13,11 @@ import ts from 'typescript';
 import {
   evaluateMacro,
   EXPR_TEMPLATE_PLACEHOLDER,
-  isExprTemplateInvocation,
+  isCompileTimeTemplateInvocation,
   isFatalMacroTransformError,
-  validateExprTemplateDefinition,
-  validateExprTemplateUsages,
+  MODIFIER_PLACEHOLDER,
+  validateCompileTimeTemplateDefinition,
+  validateCompileTimeTemplateUsages,
 } from './macro';
 import { MACRO_FUNCTION_NAME_SET } from './macro-names';
 import type {
@@ -443,7 +444,7 @@ function hasMacroBindings(bindings: MacroBindings | undefined): boolean {
   return Boolean(bindings?.named.size || bindings?.namespaces.size);
 }
 
-function hasExprTemplateInvocation(
+function hasCompileTimeTemplateInvocation(
   sourceFile: ts.SourceFile,
   checker: ts.TypeChecker,
 ): boolean {
@@ -452,7 +453,7 @@ function hasExprTemplateInvocation(
     if (found) return;
     if (ts.isCallExpression(node)) {
       try {
-        if (isExprTemplateInvocation(node, checker)) {
+        if (isCompileTimeTemplateInvocation(node, checker)) {
           found = true;
           return;
         }
@@ -510,7 +511,7 @@ function transformAnalyzedSource(
   };
   const replacements: Replacement[] = [];
   let skippedMacro = false;
-  validateExprTemplateUsages(sourceFile, state.typeChecker);
+  validateCompileTimeTemplateUsages(sourceFile, state.typeChecker);
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const macroName = importedMacroName(
@@ -519,14 +520,17 @@ function transformAnalyzedSource(
         state.typeChecker,
         bindingsByFile,
       );
-      const exprTemplateInvocation =
-        !macroName && isExprTemplateInvocation(node, state.typeChecker);
-      if (macroName || exprTemplateInvocation) {
+      const compileTimeTemplateInvocation =
+        !macroName && isCompileTimeTemplateInvocation(node, state.typeChecker);
+      if (macroName || compileTimeTemplateInvocation) {
         try {
           let replacementSource: string;
-          if (macroName === 'exprTemplate') {
-            validateExprTemplateDefinition(node, state.typeChecker);
-            replacementSource = EXPR_TEMPLATE_PLACEHOLDER;
+          if (macroName === 'exprTemplate' || macroName === 'modifier') {
+            validateCompileTimeTemplateDefinition(node, state.typeChecker);
+            replacementSource =
+              macroName === 'exprTemplate'
+                ? EXPR_TEMPLATE_PLACEHOLDER
+                : MODIFIER_PLACEHOLDER;
           } else {
             const value = evaluateMacro(
               node,
@@ -856,7 +860,7 @@ export function transformProject(
     }
     if (
       !hasMacroBindings(analysis.bindingsByFile.get(fileName)) &&
-      !hasExprTemplateInvocation(sourceFile, analysis.state.typeChecker)
+      !hasCompileTimeTemplateInvocation(sourceFile, analysis.state.typeChecker)
     ) {
       continue;
     }

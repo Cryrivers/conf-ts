@@ -708,6 +708,10 @@ function evaluateInner(
         setObjectProp(obj, name, value, preserveKeyOrder);
       } else if (ts.isShorthandPropertyAssignment(prop)) {
         const name = prop.name.getText(sourceFile);
+        if (context && Object.prototype.hasOwnProperty.call(context, name)) {
+          setObjectProp(obj, name, context[name], preserveKeyOrder);
+          return;
+        }
         const shorthandSymbol =
           typeChecker.getShorthandAssignmentValueSymbol(prop);
         if (shorthandSymbol) {

@@ -1,8 +1,82 @@
-import { describe, it } from 'vitest';
+import path from 'path';
+import { describe, expect, it } from 'vitest';
 
-import { assertMacroError, assertMacroOutput } from './test-utils';
+import {
+  assertMacroError,
+  assertMacroOutput,
+  compileJsWithMacro,
+  compileNativeWithMacro,
+} from './test-utils';
 
 describe('Macro Test', () => {
+  it('should evaluate reusable compile-time modifiers', () => {
+    assertMacroOutput('modifier');
+
+    const input = path.resolve(__dirname, 'fixtures/macros/modifier.conf.ts');
+    for (const compile of [compileJsWithMacro, compileNativeWithMacro]) {
+      const { output } = compile(input, 'json', {
+        macro: true,
+        preserveKeyOrder: true,
+      });
+      expect(
+        Object.keys(
+          (
+            JSON.parse(output) as {
+              overridden: Record<string, number>;
+            }
+          ).overridden,
+        ),
+      ).toEqual(['a', 'b']);
+    }
+  });
+
+  it('should reject invalid modifier callbacks', () => {
+    assertMacroError(
+      'modifier-invalid-callback-block',
+      'modifier callback must be a synchronous arrow function whose body is a single expression',
+    );
+    assertMacroError(
+      'modifier-invalid-callback-async',
+      'modifier callback must be a synchronous arrow function whose body is a single expression',
+    );
+  });
+
+  it('should reject dynamic modifier arguments', () => {
+    assertMacroError(
+      'modifier-invalid-dynamic',
+      'modifier arguments must be statically analyzable',
+    );
+  });
+
+  it('should reject modifier arity mismatches', () => {
+    assertMacroError(
+      'modifier-invalid-arity',
+      'modifier expected at most 1 static argument(s), but received 2',
+    );
+    assertMacroError(
+      'modifier-invalid-arity-missing',
+      'modifier expected at least 1 static argument(s), but received 0',
+    );
+  });
+
+  it('should reject modifier values escaping into runtime', () => {
+    assertMacroError(
+      'modifier-invalid-escape',
+      'modifier values are compile-time-only',
+    );
+  });
+
+  it('should reject mutable modifier aliases and nested parameter patterns', () => {
+    assertMacroError(
+      'modifier-invalid-let-alias',
+      'modifier aliases must use const declarations',
+    );
+    assertMacroError(
+      'modifier-invalid-pattern',
+      'modifier parameters must be identifiers',
+    );
+  });
+
   it('should handle type casting using String(), Number(), and Boolean() in Macro Mode', () => {
     assertMacroOutput('type-casting');
   });

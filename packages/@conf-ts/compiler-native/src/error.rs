@@ -88,44 +88,57 @@ pub fn suggestions_for_error(message: &str) -> Vec<String> {
       "Use plain identifier parameters or one level of destructuring, and remove type annotations, `async`, generators, and nested patterns.",
     ]);
   }
-  if message.contains("exprTemplate expected at least") {
+  if message.contains("exprTemplate expected at least")
+    || message.contains("modifier expected at least")
+  {
     return suggest(&[
       "Pass every required template argument, or make omitted parameters optional or defaulted.",
       "Keep optional or defaulted parameters after required parameters so the minimum arity is unambiguous.",
     ]);
   }
-  if message.contains("exprTemplate expected at most") {
+  if message.contains("exprTemplate expected at most")
+    || message.contains("modifier expected at most")
+  {
     return suggest(&[
       "Remove excess template arguments, or add a trailing rest parameter when additional arguments are intentional.",
     ]);
   }
-  if message.contains("exprTemplate parameters after the context must be") {
+  if message.contains("exprTemplate parameters after the context must be")
+    || message.contains("modifier parameters must be")
+  {
     return suggest(&[
-      "Use identifiers, optional or defaulted parameters, one level of object/array destructuring, or one trailing rest parameter after the context.",
+      "Use identifiers, optional or defaulted parameters, one level of object/array destructuring, or one trailing rest parameter in the compile-time parameter list.",
       "Remove computed keys, nested destructuring patterns, and non-trailing rest parameters.",
     ]);
   }
-  if message.contains("exprTemplate cannot destructure null or undefined") {
+  if message.contains("exprTemplate cannot destructure null or undefined")
+    || message.contains("modifier cannot destructure null or undefined")
+  {
     return suggest(&[
       "Pass a non-null object or array, or give the destructured template parameter a default value.",
     ]);
   }
   if message
     .contains("exprTemplate array destructuring requires a statically analyzable array or string")
+    || message
+      .contains("modifier array destructuring requires a statically analyzable array or string")
   {
     return suggest(&[
       "Pass a statically analyzable array or string to the destructured template parameter.",
     ]);
   }
   if message.contains("exprTemplate arguments must be statically analyzable")
+    || message.contains("modifier arguments must be statically analyzable")
     || message.contains("static argument")
   {
     return suggest(&[
       "Pass literals, imported constants, or values derived only from other static constants.",
-      "Move runtime-dependent values into the generated expression context instead of template arguments.",
+      "Keep runtime-dependent values outside compile-time template arguments; exprTemplate can read them from its runtime context.",
     ]);
   }
-  if message.contains("exprTemplate values are compile-time-only") {
+  if message.contains("exprTemplate values are compile-time-only")
+    || message.contains("modifier values are compile-time-only")
+  {
     return suggest(&[
       "Invoke the template directly, assign it to a `const` alias, or forward it through import/export.",
       "Do not place the template function itself in the generated configuration output.",

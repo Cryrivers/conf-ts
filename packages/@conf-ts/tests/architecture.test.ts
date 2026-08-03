@@ -128,6 +128,48 @@ describe('source-oriented architecture', () => {
     expect(nativeResult).toHaveProperty('map', null);
   });
 
+  it('transforms block-scoped modifier definitions in both transformers', () => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { modifier } from '@conf-ts/macro';",
+      'export function helper() {',
+      '  const increment = modifier<[number], number>(value => value + 1);',
+      '  return increment(1);',
+      '}',
+      'export default { untouched: true };',
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    const typescriptResult = macroTransformer.transform(input);
+    const nativeResult = nativeMacroTransform(input);
+
+    expect(nativeResult.code).toBe(typescriptResult.code);
+    expect(typescriptResult.code).toContain('return 2;');
+    expect(typescriptResult.code).not.toContain('@conf-ts/macro');
+  });
+
+  it('treats modifier result evaluation failures as fatal in both transformers', () => {
+    const filename = '/virtual/config.ts';
+    const code = [
+      "import { modifier } from '@conf-ts/macro';",
+      'declare function runtime(): number;',
+      'const invalid = modifier<[], number>(() => runtime());',
+      'export default { value: invalid() };',
+    ].join('\n');
+    const project = { files: { [filename]: code } };
+    const input = { filename, code, project };
+
+    for (const transform of [
+      macroTransformer.transform,
+      nativeMacroTransform,
+    ]) {
+      expect(() => transform(input)).toThrow(
+        'Unsupported call expression in macro mode',
+      );
+    }
+  });
+
   it('keeps aliases and shadowed calls binding-aware across transformers', () => {
     const filename = path.resolve(
       __dirname,

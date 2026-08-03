@@ -245,6 +245,29 @@ describe('Multi-file test', () => {
     );
   });
 
+  it('should evaluate modifier through default, namespace, and re-export bindings', () => {
+    const configPath = path.resolve(__dirname, 'fixtures/multi-file');
+    const entry = path.join(configPath, 'modifier-import.ts');
+    const js = compileJsWithMacro(entry, 'json', { macro: true });
+    const native = compileNativeWithMacro(entry, 'json', { macro: true });
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(configPath, 'modifier-import.json'), 'utf8'),
+    );
+
+    expect(JSON.parse(js.output)).toEqual(expected);
+    expect(JSON.parse(native.output)).toEqual(expected);
+    expect([...native.dependencies].sort()).toEqual(
+      [...js.dependencies].sort(),
+    );
+    expect(js.dependencies).toEqual(
+      expect.arrayContaining([
+        entry,
+        path.join(configPath, 'modifier-reexport.ts'),
+        path.join(configPath, 'modifiers.ts'),
+      ]),
+    );
+  });
+
   it('should resolve in-memory default re-exports and track the entry file', () => {
     const files = {
       '/index.ts': "export { default } from './source';",

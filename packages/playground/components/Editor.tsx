@@ -202,6 +202,7 @@ export function Editor({
             declare module '@conf-ts/macro' {
               const EXPR_CALLBACK: unique symbol;
               const EXPR_TEMPLATE: unique symbol;
+              const MODIFIER: unique symbol;
               type IsPlainObject<T> = T extends readonly unknown[]
                 ? false
                 : T extends (...args: any[]) => any
@@ -259,6 +260,16 @@ export function Editor({
               >) & {
                 readonly [EXPR_TEMPLATE]: true;
               };
+              export type ModifierCallback<
+                Parameters extends readonly unknown[],
+                Output,
+              > = (...args: Parameters) => Output;
+              export type Modifier<
+                Parameters extends readonly unknown[],
+                Output,
+              > = ((...args: Parameters) => Output) & {
+                readonly [MODIFIER]: true;
+              };
               export function expr<
                 Context = unknown,
                 ReturnType = unknown,
@@ -274,6 +285,12 @@ export function Editor({
                   Parameters
                 >,
               ): ExprTemplate<Context, ReturnType, Parameters>;
+              export function modifier<
+                Parameters extends readonly unknown[] = readonly unknown[],
+                Output = unknown,
+              >(
+                callback: ModifierCallback<Parameters, Output>,
+              ): Modifier<Parameters, Output>;
               export function String(value: any): string;
               export function Number(value: any): number;
               export function Boolean(value: any): boolean;

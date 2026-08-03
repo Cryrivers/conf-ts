@@ -8,6 +8,7 @@ export const MACRO_FUNCTION_NAMES = [
   'arrayFilter',
   'expr',
   'exprTemplate',
+  'modifier',
 ] as const;
 
 export const MACRO_FUNCTION_NAME_SET: ReadonlySet<string> = new Set(

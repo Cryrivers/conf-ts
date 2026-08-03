@@ -30,6 +30,12 @@ describe('Macro runtime helpers', () => {
     ).toThrow(notTransformedError('exprTemplate'));
   });
 
+  it('throws when modifier is called at runtime', () => {
+    expect(() => macro.modifier<[number], number>(value => value + 1)).toThrow(
+      notTransformedError('modifier'),
+    );
+  });
+
   it('throws when String/Number/Boolean are called at runtime', () => {
     expect(() => macro.String(1)).toThrow(notTransformedError('String'));
     expect(() => macro.Number('1')).toThrow(notTransformedError('Number'));

@@ -21,7 +21,7 @@ Compile TypeScript-based configs to JSON or YAML. Keep configs type-safe, compos
 
 - **Type-safe configs**: Author in TypeScript with enums, constants, spreads, and expressions.
 - **Deterministic output**: Produces JSON/YAML with no runtime TypeScript.
-- **Macro transform (opt-in)**: Compile-time helpers for casting, array transforms, env injection, and typed runtime expressions.
+- **Macro transform (opt-in)**: Compile-time helpers for casting, array transforms, reusable value modifiers, env injection, and typed runtime expressions.
 - **Multi-file + path aliases**: Works across files and honors `tsconfig.json` path aliases.
 
 ## Quick start
@@ -102,13 +102,13 @@ npx skills use Cryrivers/conf-ts@conf-ts | claude
 
 The skill lives in [`skills/conf-ts`](skills/conf-ts) and is scoped to writing config files: it deliberately leaves out the CLI, the programmatic API, and the bundler plugins, which are documented below.
 
-| File                                                                         | Covers                                                                                     |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`SKILL.md`](skills/conf-ts/SKILL.md)                                        | Mode selection, the rules that most often break a config, authoring conventions            |
+| File                                                                        | Covers                                                                                      |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`SKILL.md`](skills/conf-ts/SKILL.md)                                       | Mode selection, the rules that most often break a config, authoring conventions             |
 | [`references/config-syntax.md`](skills/conf-ts/references/config-syntax.md) | Supported and unsupported TypeScript, enums, key ordering, multi-file configs, path aliases |
-| [`references/macros.md`](skills/conf-ts/references/macros.md)               | `String`/`Number`/`Boolean`, the array macros, `env`, nesting and import rules              |
+| [`references/macros.md`](skills/conf-ts/references/macros.md)               | `String`/`Number`/`Boolean`, array macros, `modifier`, `env`, nesting and import rules      |
 | [`references/expr.md`](skills/conf-ts/references/expr.md)                   | `expr()`, `exprTemplate()`, composition, nested callbacks, `LooseExpr`, emitted grammar     |
-| [`references/errors.md`](skills/conf-ts/references/errors.md)               | Every compile error message, its cause, and the fix                                        |
+| [`references/errors.md`](skills/conf-ts/references/errors.md)               | Every compile error message, its cause, and the fix                                         |
 
 ## Packages in this monorepo
 
@@ -212,6 +212,48 @@ export default {
 };
 ```
 
+### Reusable compile-time values: `modifier(callback)`
+
+`modifier()` defines a reusable, type-safe compile-time transformation. Every
+argument and the callback result must be statically evaluable; each invocation
+is replaced with ordinary config data before JSON/YAML compilation.
+
+```ts
+import { modifier } from '@conf-ts/macro';
+
+type InputA = { a: number };
+type InputB = { b: number };
+type Output = InputA & InputB & { extraProperty: number };
+
+const addProperty = modifier<[InputA, InputB], Output>((inputA, inputB) => ({
+  ...inputA,
+  ...inputB,
+  extraProperty: 3,
+}));
+
+export default {
+  modifierTest: addProperty({ a: 1 }, { b: 2 }),
+};
+```
+
+```json
+{
+  "modifierTest": {
+    "a": 1,
+    "b": 2,
+    "extraProperty": 3
+  }
+}
+```
+
+The callback must be a synchronous arrow function with an expression body.
+Zero parameters, optional/default parameters, a trailing rest parameter, and
+one level of object/array destructuring are supported. Invocation arguments may
+use literals, enums, local/imported `const` values, static array spreads, and
+other macros or modifiers. Modifiers may be forwarded through `const` aliases
+and named/default/namespace/re-export chains, but the modifier function itself
+cannot be emitted into configuration data.
+
 ### Typed runtime expressions: `expr(ctx => expression)`
 
 Use `expr()` when a value can only be evaluated later, against data that's available at runtime — a permission check, a feature-flag rule, a pricing formula. Write it as ordinary, type-checked TypeScript; during JSON/YAML compilation the macro turns it into a portable expression string instead of running it.
@@ -301,8 +343,9 @@ const withTax = exprTemplate<Context, number, [number]>(
 const singaporeTotal = withTax(0.09);
 // "subtotal * (1 + 0.09)"
 
-const discounted: LooseExprTemplate<Context, boolean, [number]> =
-  exprTemplate((ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum);
+const discounted: LooseExprTemplate<Context, boolean, [number]> = exprTemplate(
+  (ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum,
+);
 ```
 
 Template arguments may be literals, enums, imported/local `const` values, or

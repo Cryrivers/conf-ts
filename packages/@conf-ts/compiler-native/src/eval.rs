@@ -29,6 +29,7 @@ pub const MACRO_FUNCTIONS: &[&str] = &[
   "env",
   "expr",
   "exprTemplate",
+  "modifier",
 ];
 
 /// Get source location from a byte offset.

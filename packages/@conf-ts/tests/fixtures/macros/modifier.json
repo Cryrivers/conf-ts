@@ -1,0 +1,45 @@
+{
+  "modifierTest": {
+    "a": 1,
+    "b": 2,
+    "extraProperty": 3
+  },
+  "zero": {
+    "enabled": true
+  },
+  "destructuring": {
+    "value": 26,
+    "label": "ready",
+    "rest": {
+      "extra": 9
+    }
+  },
+  "nested": {
+    "a": 1,
+    "b": 2,
+    "extraProperty": 3
+  },
+  "stringified": "42",
+  "scalar": 8,
+  "mapped": [
+    2,
+    4
+  ],
+  "nestedArrayMacro": [
+    4,
+    5
+  ],
+  "nestedExpr": "value >= 3",
+  "array": [
+    1,
+    2,
+    3
+  ],
+  "shorthand": {
+    "value": 7
+  },
+  "overridden": {
+    "b": 1,
+    "a": 2
+  }
+}

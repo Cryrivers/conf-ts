@@ -1,5 +1,6 @@
 declare const EXPR_CALLBACK: unique symbol;
 declare const EXPR_TEMPLATE: unique symbol;
+declare const MODIFIER: unique symbol;
 
 type IsPlainObject<T> = T extends readonly unknown[]
   ? false
@@ -76,4 +77,14 @@ export type LooseExprTemplate<
   Parameters extends readonly unknown[],
 > = ((...args: Parameters) => LooseExpr<Context, ReturnType>) & {
   readonly [EXPR_TEMPLATE]: true;
+};
+
+export type ModifierCallback<Parameters extends readonly unknown[], Output> = (
+  ...args: Parameters
+) => Output;
+
+export type Modifier<Parameters extends readonly unknown[], Output> = ((
+  ...args: Parameters
+) => Output) & {
+  readonly [MODIFIER]: true;
 };

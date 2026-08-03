@@ -130,6 +130,39 @@ export default {
     },
   },
   {
+    id: 'modifier',
+    title: 'Macros: Reusable Modifiers',
+    description:
+      '`modifier` defines a reusable compile-time transformation. Its static arguments are type-checked, evaluated during compilation, and replaced with ordinary config data.',
+    goal: 'Call `addProperty` with `{ a: 1 }` and `{ b: 2 }` to build `modifierTest`.',
+    initialCode: `import { modifier } from '@conf-ts/macro';
+
+type InputA = { a: number };
+type InputB = { b: number };
+type Output = InputA & InputB & { extraProperty: number };
+
+const addProperty = modifier<[InputA, InputB], Output>(
+  (inputA, inputB) => ({
+    ...inputA,
+    ...inputB,
+    extraProperty: 3,
+  }),
+);
+
+export default {
+  modifierTest: 'TODO',
+};
+`,
+    check: (output: any) => {
+      return (
+        output &&
+        output.modifierTest?.a === 1 &&
+        output.modifierTest?.b === 2 &&
+        output.modifierTest?.extraProperty === 3
+      );
+    },
+  },
+  {
     id: 'expr',
     title: 'Macros: Expressions',
     description:

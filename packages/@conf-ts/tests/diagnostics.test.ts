@@ -276,4 +276,58 @@ describe('Detailed diagnostics', () => {
       expect(nativeMessage).toContain(scenario.suggestion);
     }
   });
+
+  it('reports modifier definition errors through a re-export chain in both transformers', () => {
+    const entry = '/modifier/entry.ts';
+    const reexport = '/modifier/reexport.ts';
+    const definition = '/modifier/definition.ts';
+    const files = {
+      [entry]: [
+        "import { add } from './reexport';",
+        '',
+        'export default { value: add(1) };',
+      ].join('\n'),
+      [reexport]: "export { add } from './definition';",
+      [definition]: [
+        "import { modifier } from '@conf-ts/macro';",
+        '',
+        'export const add = modifier((value: number) => {',
+        '  return value + 1;',
+        '});',
+      ].join('\n'),
+    };
+    const project: MacroProjectSnapshot = {
+      files,
+      resolutions: {
+        [entry]: { './reexport': reexport },
+        [reexport]: { './definition': definition },
+      },
+      compilerOptions: {},
+      entryFiles: [entry],
+      dependencies: Object.keys(files),
+    };
+    const expected =
+      'modifier callback must be a synchronous arrow function whose body is a single expression';
+
+    const tsError = thrown(() =>
+      transformProjectTs({ project, files: [entry] }),
+    );
+    expect(tsError).toBeInstanceOf(ConfTSError);
+    const tsMessage = (tsError as ConfTSError).toString();
+    expect(tsMessage).toContain(expected);
+    expect(tsMessage).toContain(`at ${definition}:3:`);
+    expect(tsMessage).toContain(`referenced from ${reexport}:1:`);
+    expect(tsMessage).toContain(`referenced from ${entry}:3:`);
+    expect(tsMessage).toContain('Suggested fixes:');
+
+    const nativeError = thrown(() =>
+      transformProjectNative({ project, files: [entry] }),
+    );
+    const nativeMessage = (nativeError as Error).message;
+    expect(nativeMessage).toContain(expected);
+    expect(nativeMessage).toContain(`at ${definition}:3:`);
+    expect(nativeMessage).toContain(`referenced from ${reexport}:1:`);
+    expect(nativeMessage).toContain(`referenced from ${entry}:3:`);
+    expect(nativeMessage).toContain('Suggested fixes:');
+  });
 });
