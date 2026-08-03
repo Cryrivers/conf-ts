@@ -1,5 +1,19 @@
 use std::fmt;
 
+/// The two compile-time template kinds whose diagnostics share most of their
+/// wording, differing only in the `exprTemplate`/`modifier` name prefix.
+const TEMPLATE_KIND_NAMES: [&str; 2] = ["exprTemplate", "modifier"];
+
+/// True if `message` contains `"<kind> <suffix>"` for either compile-time
+/// template kind, e.g. `template_message_matches(msg, "expected at least")`
+/// matches both "exprTemplate expected at least ..." and "modifier expected
+/// at least ...".
+fn template_message_matches(message: &str, suffix: &str) -> bool {
+  TEMPLATE_KIND_NAMES
+    .iter()
+    .any(|kind| message.contains(&format!("{kind} {suffix}")))
+}
+
 /// Return concise, actionable fixes for common configuration failures.
 pub fn suggestions_for_error(message: &str) -> Vec<String> {
   let suggest = |values: &[&str]| values.iter().map(|value| (*value).to_string()).collect();
@@ -88,17 +102,13 @@ pub fn suggestions_for_error(message: &str) -> Vec<String> {
       "Use plain identifier parameters or one level of destructuring, and remove type annotations, `async`, generators, and nested patterns.",
     ]);
   }
-  if message.contains("exprTemplate expected at least")
-    || message.contains("modifier expected at least")
-  {
+  if template_message_matches(message, "expected at least") {
     return suggest(&[
       "Pass every required template argument, or make omitted parameters optional or defaulted.",
       "Keep optional or defaulted parameters after required parameters so the minimum arity is unambiguous.",
     ]);
   }
-  if message.contains("exprTemplate expected at most")
-    || message.contains("modifier expected at most")
-  {
+  if template_message_matches(message, "expected at most") {
     return suggest(&[
       "Remove excess template arguments, or add a trailing rest parameter when additional arguments are intentional.",
     ]);
@@ -111,34 +121,33 @@ pub fn suggestions_for_error(message: &str) -> Vec<String> {
       "Remove computed keys, nested destructuring patterns, and non-trailing rest parameters.",
     ]);
   }
-  if message.contains("exprTemplate cannot destructure null or undefined")
-    || message.contains("modifier cannot destructure null or undefined")
-  {
+  if template_message_matches(message, "cannot destructure null or undefined") {
     return suggest(&[
       "Pass a non-null object or array, or give the destructured template parameter a default value.",
     ]);
   }
-  if message
-    .contains("exprTemplate array destructuring requires a statically analyzable array or string")
-    || message
-      .contains("modifier array destructuring requires a statically analyzable array or string")
-  {
+  if template_message_matches(
+    message,
+    "array destructuring requires a statically analyzable array or string",
+  ) {
     return suggest(&[
       "Pass a statically analyzable array or string to the destructured template parameter.",
     ]);
   }
-  if message.contains("exprTemplate arguments must be statically analyzable")
-    || message.contains("modifier arguments must be statically analyzable")
+  if template_message_matches(message, "arguments must be statically analyzable")
     || message.contains("static argument")
   {
+    let runtime_hint = if message.contains("modifier arguments must be statically analyzable") {
+      "Keep runtime-dependent values outside compile-time template arguments; modifier parameters must be resolvable entirely at compile time."
+    } else {
+      "Keep runtime-dependent values outside compile-time template arguments; exprTemplate can read them from its runtime context."
+    };
     return suggest(&[
       "Pass literals, imported constants, or values derived only from other static constants.",
-      "Keep runtime-dependent values outside compile-time template arguments; exprTemplate can read them from its runtime context.",
+      runtime_hint,
     ]);
   }
-  if message.contains("exprTemplate values are compile-time-only")
-    || message.contains("modifier values are compile-time-only")
-  {
+  if template_message_matches(message, "values are compile-time-only") {
     return suggest(&[
       "Invoke the template directly, assign it to a `const` alias, or forward it through import/export.",
       "Do not place the template function itself in the generated configuration output.",

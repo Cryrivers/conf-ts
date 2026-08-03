@@ -752,7 +752,7 @@ function isImportedExprCall(
   return isImportedMacroCall(node, typeChecker, 'expr');
 }
 
-type CompileTimeTemplateKind = 'exprTemplate' | 'modifier';
+export type CompileTimeTemplateKind = 'exprTemplate' | 'modifier';
 
 type CompileTimeTemplateDefinition = {
   kind: CompileTimeTemplateKind;
@@ -962,10 +962,11 @@ export function validateCompileTimeTemplateDefinition(
   getCompileTimeTemplateCallback(node, typeChecker);
 }
 
-export const EXPR_TEMPLATE_PLACEHOLDER =
-  '(() => { throw new Error("exprTemplate is compile-time-only and must be invoked with statically analyzable arguments"); })';
-export const MODIFIER_PLACEHOLDER =
-  '(() => { throw new Error("modifier is compile-time-only and must be invoked with statically analyzable arguments"); })';
+export function compileTimeTemplatePlaceholder(
+  kind: CompileTimeTemplateKind,
+): string {
+  return `(() => { throw new Error("${kind} is compile-time-only and must be invoked with statically analyzable arguments"); })`;
+}
 
 export function validateCompileTimeTemplateUsages(
   sourceFile: ts.SourceFile,
@@ -984,6 +985,7 @@ export function validateCompileTimeTemplateUsages(
     ) {
       return;
     }
+    let selfTemplate: CompileTimeTemplateDefinition | undefined;
     if (
       (ts.isIdentifier(node) ||
         ts.isPropertyAccessExpression(node) ||
@@ -994,10 +996,10 @@ export function validateCompileTimeTemplateUsages(
         ts.isNonNullExpression(node) ||
         ts.isTypeAssertionExpression(node) ||
         ts.isParenthesizedExpression(node)) &&
-      templateDefinition(node as ts.Expression)
+      (selfTemplate = templateDefinition(node as ts.Expression))
     ) {
       if (!templateAllowed) {
-        const kind = templateDefinition(node as ts.Expression)!.kind;
+        const kind = selfTemplate.kind;
         throw compileTimeTemplateError(
           kind,
           `${kind} values are compile-time-only and may only be called, assigned to a const alias, or forwarded through import/export`,

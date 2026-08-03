@@ -83,6 +83,12 @@ pub(crate) fn record_fatal_transform_error(ctx: &EvalContext, error: ConfTSError
   *core_state(ctx).fatal_error.borrow_mut() = Some(error);
 }
 
+/// Whether a fatal error was already recorded, e.g. by a nested compile-time
+/// template call. Used to avoid re-wrapping an already-fatal error.
+pub(crate) fn has_fatal_transform_error(ctx: &EvalContext) -> bool {
+  core_state(ctx).fatal_error.borrow().is_some()
+}
+
 fn take_fatal_transform_error(ctx: &EvalContext) -> Option<ConfTSError> {
   core_state(ctx).fatal_error.borrow_mut().take()
 }
@@ -433,6 +439,14 @@ impl CompileTimeTemplateKind {
       Self::Modifier => "modifier",
     }
   }
+
+  pub(crate) fn from_name(name: &str) -> Option<Self> {
+    match name {
+      "exprTemplate" => Some(Self::ExprTemplate),
+      "modifier" => Some(Self::Modifier),
+      _ => None,
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -654,18 +668,13 @@ fn compile_time_template_definition_inner(
   dependencies: &mut Vec<String>,
 ) -> Option<CompileTimeTemplateDefinition> {
   match unwrap_expr_origin(expression) {
-    Expression::CallExpression(call)
-      if canonical_callee(call, file_ctx, ctx)
-        .is_some_and(|name| name == "exprTemplate" || name == "modifier") =>
-    {
+    Expression::CallExpression(call) => {
+      let kind = canonical_callee(call, file_ctx, ctx)
+        .as_deref()
+        .and_then(CompileTimeTemplateKind::from_name)?;
       if !dependencies.contains(&file_ctx.file_path) {
         dependencies.push(file_ctx.file_path.clone());
       }
-      let kind = if canonical_callee(call, file_ctx, ctx).as_deref() == Some("exprTemplate") {
-        CompileTimeTemplateKind::ExprTemplate
-      } else {
-        CompileTimeTemplateKind::Modifier
-      };
       Some(CompileTimeTemplateDefinition {
         kind,
         file_path: file_ctx.file_path.clone(),
@@ -932,13 +941,12 @@ impl<'a> Visit<'a> for CompileTimeTemplateEscapeUsage<'_, '_> {
         .init
         .as_ref()
         .and_then(|initializer| self.expression_template_kind(initializer));
-      if declaration.kind != VariableDeclarationKind::Const && template_kind.is_some() {
+      if let Some(kind) = template_kind
+        && declaration.kind != VariableDeclarationKind::Const
+      {
         let (line, character) = self.file_ctx.line_index.get_location(declarator.span.start);
         self.error = Some(ConfTSError::new(
-          format!(
-            "{} aliases must use const declarations",
-            template_kind.expect("checked above").name()
-          ),
+          format!("{} aliases must use const declarations", kind.name()),
           &self.file_ctx.file_path,
           line,
           character,
@@ -995,12 +1003,10 @@ impl<'a> Visit<'a> for EvaluateMacroCalls<'_, '_> {
       return;
     }
     let canonical = canonical_callee(call, self.file_ctx, self.eval_ctx);
-    if matches!(canonical.as_deref(), Some("exprTemplate" | "modifier")) {
-      let kind = if canonical.as_deref() == Some("exprTemplate") {
-        CompileTimeTemplateKind::ExprTemplate
-      } else {
-        CompileTimeTemplateKind::Modifier
-      };
+    if let Some(kind) = canonical
+      .as_deref()
+      .and_then(CompileTimeTemplateKind::from_name)
+    {
       match macro_eval::validate_compile_time_template_definition(call, self.file_ctx, kind) {
         Ok(()) => {
           self

@@ -465,17 +465,22 @@ fn evaluate_array_macro(
     _ => return Ok(Some(Value::Array(Vec::new()))),
   };
 
+  // Clone the parent context once and reuse it across items, only
+  // overwriting the loop-parameter binding each iteration, instead of
+  // deep-cloning the whole parent context per item. Outer bindings must
+  // stay in scope so nested closures (e.g. a nested arrayMap, or a
+  // reference to an enclosing modifier/exprTemplate parameter) can still
+  // resolve them.
+  let mut local = local_context.cloned().unwrap_or_default();
   let mut result = Vec::new();
   for item in items {
     match method {
       ArrayMacroMethod::Map => {
-        let mut local = local_context.cloned().unwrap_or_default();
         local.insert(param_name.clone(), item);
         let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
         result.push(val);
       }
       ArrayMacroMethod::FlatMap => {
-        let mut local = local_context.cloned().unwrap_or_default();
         local.insert(param_name.clone(), item);
         let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
         match val {
@@ -484,7 +489,6 @@ fn evaluate_array_macro(
         }
       }
       ArrayMacroMethod::Filter => {
-        let mut local = local_context.cloned().unwrap_or_default();
         local.insert(param_name.clone(), item.clone());
         let val = evaluate(body_expr, file_ctx, ctx, Some(&local), options)?;
         if val.is_truthy() {
@@ -2911,6 +2915,31 @@ fn compile_time_template_error(
   ConfTSError::new(message.into(), &file_ctx.file_path, line, character)
 }
 
+/// Wrap an error raised while evaluating a compile-time template argument,
+/// unless it was already recorded as fatal (e.g. it originated from a nested
+/// exprTemplate/modifier call, which already carries its own kind-specific
+/// message).
+fn wrap_compile_time_template_argument_error(
+  kind: super::CompileTimeTemplateKind,
+  file_ctx: &FileContext,
+  call: &CallExpression,
+  ctx: &EvalContext,
+  error: ConfTSError,
+) -> ConfTSError {
+  if super::has_fatal_transform_error(ctx) {
+    return error;
+  }
+  compile_time_template_error(
+    file_ctx,
+    call.span.start,
+    format!(
+      "{} arguments must be statically analyzable: {}",
+      kind.name(),
+      error.message
+    ),
+  )
+}
+
 fn compile_time_template_callback<'e, 'a>(
   call: &'e CallExpression<'a>,
   file_ctx: &FileContext,
@@ -3054,6 +3083,10 @@ fn binding_property_value(value: &Value, key: &str) -> Value {
   }
 }
 
+// All eight parameters are distinct and used throughout this recursive
+// pattern walk; bundling them into a context struct would need `ctx`
+// reborrowed through it at every call site for no real benefit.
+#[allow(clippy::too_many_arguments)]
 fn bind_compile_time_template_pattern(
   kind: super::CompileTimeTemplateKind,
   pattern: &BindingPattern,
@@ -3135,6 +3168,13 @@ fn bind_compile_time_template_pattern(
       Ok(())
     }
     BindingPattern::ArrayPattern(array) if allow_pattern => {
+      if matches!(value, Value::Null | Value::Undefined) {
+        return Err(compile_time_template_error(
+          file_ctx,
+          array.span.start,
+          format!("{} cannot destructure null or undefined", kind.name()),
+        ));
+      }
       let values = match value {
         Value::Array(values) => values,
         Value::String(value) => value
@@ -3230,7 +3270,14 @@ fn evaluate_compile_time_template_invocation(
   for argument in &call.arguments {
     match argument {
       Argument::SpreadElement(spread) => {
-        let value = evaluate(&spread.argument, file_ctx, ctx, local_context, options)?;
+        let value = match evaluate(&spread.argument, file_ctx, ctx, local_context, options) {
+          Ok(value) => value,
+          Err(error) => {
+            return Err(wrap_compile_time_template_argument_error(
+              kind, file_ctx, call, ctx, error,
+            ));
+          }
+        };
         let Value::Array(spread_values) = value else {
           return Err(compile_time_template_error(
             file_ctx,
@@ -3248,21 +3295,14 @@ fn evaluate_compile_time_template_invocation(
             format!("{} arguments must be statically analyzable", kind.name()),
           )
         })?;
-        let value =
-          evaluate(expression, file_ctx, ctx, local_context, options).map_err(|error| {
-            if kind == super::CompileTimeTemplateKind::Modifier {
-              compile_time_template_error(
-                file_ctx,
-                call.span.start,
-                format!(
-                  "modifier arguments must be statically analyzable: {}",
-                  error.message
-                ),
-              )
-            } else {
-              error
-            }
-          })?;
+        let value = match evaluate(expression, file_ctx, ctx, local_context, options) {
+          Ok(value) => value,
+          Err(error) => {
+            return Err(wrap_compile_time_template_argument_error(
+              kind, file_ctx, call, ctx, error,
+            ));
+          }
+        };
         values.push(value);
       }
     }

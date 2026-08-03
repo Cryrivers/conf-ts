@@ -11,11 +11,10 @@ import MagicString from 'magic-string';
 import ts from 'typescript';
 
 import {
+  compileTimeTemplatePlaceholder,
   evaluateMacro,
-  EXPR_TEMPLATE_PLACEHOLDER,
   isCompileTimeTemplateInvocation,
   isFatalMacroTransformError,
-  MODIFIER_PLACEHOLDER,
   validateCompileTimeTemplateDefinition,
   validateCompileTimeTemplateUsages,
 } from './macro';
@@ -527,10 +526,7 @@ function transformAnalyzedSource(
           let replacementSource: string;
           if (macroName === 'exprTemplate' || macroName === 'modifier') {
             validateCompileTimeTemplateDefinition(node, state.typeChecker);
-            replacementSource =
-              macroName === 'exprTemplate'
-                ? EXPR_TEMPLATE_PLACEHOLDER
-                : MODIFIER_PLACEHOLDER;
+            replacementSource = compileTimeTemplatePlaceholder(macroName);
           } else {
             const value = evaluateMacro(
               node,
