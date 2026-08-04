@@ -184,15 +184,18 @@ export default {
 };
 ```
 
-- Resolves through local `const` aliases and directly named/default imported
-  `Expr` values, at any nesting depth, across files.
+- Resolves through local `const` aliases, directly named/default imported
+  `Expr` values, and Expr values carried by statically analyzed `modifier()` or
+  `exprTemplate()` arguments (including parameter properties such as
+  `input.condition`), at any nesting depth, across files.
 - The argument must be the enclosing callback's **bare parameter identifier**
   (any name, not just `ctx`).
 - Rejected — `subExpr(ctx.child)`, `subExpr(other)`, `subExpr()`,
   `subExpr(ctx, ctx)`, `subExpr(...[ctx])`:
   `Nested Expr 'subExpr' must be called with exactly one argument: the current expr context parameter 'ctx'.`
-- Namespace properties, function-returned `Expr` values, and re-export chains are
-  **not** resolved as composed `Expr` sources.
+- Namespace properties outside a static template argument, function-returned
+  `Expr` values, and re-export chains are **not** resolved as composed `Expr`
+  sources.
 - Ordinary (non-`Expr`) functions are not subject to this validation.
 
 ### Context-less expressions

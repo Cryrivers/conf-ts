@@ -112,6 +112,14 @@ pub(crate) fn current_expr_template_bindings(ctx: &EvalContext) -> Option<HashMa
     .cloned()
 }
 
+pub(crate) fn has_current_expr_template_binding(ctx: &EvalContext, name: &str) -> bool {
+  core_state(ctx)
+    .expr_template_bindings
+    .borrow()
+    .last()
+    .is_some_and(|bindings| bindings.contains_key(name))
+}
+
 pub(crate) fn should_prune_expr_template(ctx: &EvalContext) -> bool {
   let state = core_state(ctx);
   state.prune_expr_template && !state.expr_template_bindings.borrow().is_empty()

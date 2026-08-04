@@ -30,6 +30,10 @@
     5
   ],
   "nestedExpr": "value >= 3",
+  "reusedExpr": {
+    "label": "reused",
+    "condition": "(value > 1 || value < 0) && true"
+  },
   "array": [
     1,
     2,

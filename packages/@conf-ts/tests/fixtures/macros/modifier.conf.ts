@@ -9,8 +9,13 @@ type InputA = { a: number };
 type InputB = { b: number };
 type Added = InputA & InputB & { extraProperty: number };
 type RuleContext = { value: number };
+type ConditionInput = {
+  condition: (ctx: RuleContext) => boolean;
+  label: string;
+};
 
 const EXTRA_PROPERTY = 3;
+const anotherCondition = true;
 
 const addProperty = modifier<[InputA, InputB], Added>((inputA, inputB) => ({
   ...inputA,
@@ -55,6 +60,12 @@ const addEach = modifier<[number], number[]>(amount =>
 const minimumRule = modifier<[number], string>(minimum =>
   expr<RuleContext, boolean>(ctx => ctx.value >= minimum),
 );
+const extendCondition = modifier<[ConditionInput], ConditionInput>(input => ({
+  ...input,
+  condition: expr<RuleContext, boolean>(
+    ctx => input.condition(ctx) && anotherCondition,
+  ),
+}));
 const merge = modifier<
   [Record<string, number>, Record<string, number>],
   Record<string, number>
@@ -72,6 +83,12 @@ export default {
   mapped: arrayMap([1, 2], value => double(value)),
   nestedArrayMacro: addEach(3),
   nestedExpr: minimumRule(3),
+  reusedExpr: extendCondition({
+    condition: expr<RuleContext, boolean>(
+      ctx => ctx.value > 1 || ctx.value < 0,
+    ),
+    label: 'reused',
+  }),
   array: collect(1, 2, 3),
   shorthand: shorthand(7),
   overridden: merge({ a: 1, b: 1 }, { a: 2 }),

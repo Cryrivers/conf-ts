@@ -1080,12 +1080,22 @@ fn get_member_root<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
   match expr {
     Expression::StaticMemberExpression(member) => get_member_root(&member.object),
     Expression::ComputedMemberExpression(member) => get_member_root(&member.object),
+    Expression::ParenthesizedExpression(parenthesized) => {
+      get_member_root(&parenthesized.expression)
+    }
     Expression::TSAsExpression(ts_as) => get_member_root(&ts_as.expression),
     Expression::TSSatisfiesExpression(ts_satisfies) => get_member_root(&ts_satisfies.expression),
     Expression::TSNonNullExpression(ts_non_null) => get_member_root(&ts_non_null.expression),
     Expression::TSTypeAssertion(assertion) => get_member_root(&assertion.expression),
     _ => expr,
   }
+}
+
+fn expression_rooted_in_template_binding(expr: &Expression, ctx: &EvalContext) -> bool {
+  let Expression::Identifier(identifier) = get_member_root(expr) else {
+    return false;
+  };
+  super::has_current_expr_template_binding(ctx, identifier.name.as_str())
 }
 
 const NESTED_CALLBACK_ERROR: &str = "expr callback: a nested function passed as a call argument must have parameters that are plain identifiers (optionally defaulted) or a single level of object/array destructuring (optionally defaulted, no computed keys, no nested patterns), with at most one trailing rest parameter; it must not have type annotations, must not be async or a generator, and its body must be a single expression or a single return statement";
@@ -1771,7 +1781,22 @@ fn collect_const_replacements(
     }
 
     Expression::CallExpression(call) => {
-      if super::expression_originates_from_expr(&call.callee, file_ctx, ctx) {
+      let has_source_expr_origin =
+        super::expression_originates_from_expr(&call.callee, file_ctx, ctx);
+      // Static template evaluation serializes Expr values as strings. That
+      // lets a modifier/exprTemplate parameter carry a reusable Expr even
+      // when its source here is only a parameter property such as
+      // `input.condition`, which has no expr(...) initializer to follow.
+      let template_expr_source =
+        if !has_source_expr_origin && expression_rooted_in_template_binding(&call.callee, ctx) {
+          match evaluate_expr_constant(&call.callee, file_ctx, ctx, options) {
+            Ok(Value::String(source)) => Some(source),
+            _ => None,
+          }
+        } else {
+          None
+        };
+      if has_source_expr_origin || template_expr_source.is_some() {
         let has_context = !param_name.is_empty();
         let valid_argument = if has_context {
           call.arguments.len() == 1
@@ -1805,19 +1830,24 @@ fn collect_const_replacements(
           return Err(error);
         }
 
-        let value = evaluate_expr_constant(&call.callee, file_ctx, ctx, options)?;
-        let Value::String(source) = value else {
-          let callee_name = compiler_native::eval::call_expr_callee_name(call);
-          let (line, character) = get_location(&file_ctx.line_index, call.span.start);
-          return Err(ConfTSError::new(
-            format!(
-              "Nested Expr '{}' did not evaluate to an expression string",
-              callee_name
-            ),
-            &file_ctx.file_path,
-            line,
-            character,
-          ));
+        let source = if let Some(source) = template_expr_source {
+          source
+        } else {
+          let value = evaluate_expr_constant(&call.callee, file_ctx, ctx, options)?;
+          let Value::String(source) = value else {
+            let callee_name = compiler_native::eval::call_expr_callee_name(call);
+            let (line, character) = get_location(&file_ctx.line_index, call.span.start);
+            return Err(ConfTSError::new(
+              format!(
+                "Nested Expr '{}' did not evaluate to an expression string",
+                callee_name
+              ),
+              &file_ctx.file_path,
+              line,
+              character,
+            ));
+          };
+          source
         };
         let start = expr.span().start as usize - body_start as usize;
         let end = expr.span().end as usize - body_start as usize;

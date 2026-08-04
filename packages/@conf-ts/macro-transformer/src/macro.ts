@@ -1100,12 +1100,68 @@ function expressionOriginatesFromExpr(
   return false;
 }
 
+function expressionRootedInConstantContext(
+  node: ts.Expression,
+  constantContext: { [name: string]: any } | undefined,
+): boolean {
+  if (!constantContext) return false;
+  const expression = unwrapExprSyntax(node);
+  if (ts.isIdentifier(expression)) {
+    return Object.prototype.hasOwnProperty.call(
+      constantContext,
+      expression.text,
+    );
+  }
+  if (
+    ts.isPropertyAccessExpression(expression) ||
+    ts.isElementAccessExpression(expression)
+  ) {
+    return expressionRootedInConstantContext(
+      expression.expression,
+      constantContext,
+    );
+  }
+  return false;
+}
+
 function nestedExprReplacement(
   node: ts.CallExpression,
   context: ExprReplacementContext,
 ): string | undefined {
-  if (!expressionOriginatesFromExpr(node.expression, context.typeChecker)) {
-    return undefined;
+  const hasSourceExprOrigin = expressionOriginatesFromExpr(
+    node.expression,
+    context.typeChecker,
+  );
+  let value: any;
+  if (!hasSourceExprOrigin) {
+    if (
+      !expressionRootedInConstantContext(
+        node.expression,
+        context.constantContext,
+      )
+    ) {
+      return undefined;
+    }
+    try {
+      value = evaluate(
+        node.expression,
+        context.sourceFile,
+        context.typeChecker,
+        context.enumMap,
+        context.macroImportsMap,
+        true,
+        context.evaluatedFiles,
+        context.constantContext,
+        context.options,
+      );
+    } catch {
+      return undefined;
+    }
+    // Expr values are serialized strings during static argument evaluation.
+    // A modifier/exprTemplate parameter can therefore carry a reusable Expr
+    // even though its source expression is only a parameter property such as
+    // `input.condition`, which has no resolvable expr(...) initializer.
+    if (typeof value !== 'string') return undefined;
   }
   const calleeText = node.expression.getText(context.sourceFile);
 
@@ -1141,7 +1197,7 @@ function nestedExprReplacement(
     );
   }
 
-  const value = evaluate(
+  value ??= evaluate(
     node.expression,
     context.sourceFile,
     context.typeChecker,

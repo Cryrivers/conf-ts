@@ -320,7 +320,15 @@ const subCondExpr = expr<Context, boolean>(ctx => ctx.b || ctx.c);
 const condition = expr<Context, boolean>(ctx => ctx.a && subCondExpr(ctx)); // "a && (b || c)"
 ```
 
-Composition supports local `const` aliases and directly named/default imported Expr values, at any nesting depth. The argument must be the current callback's bare parameter identifier (the identifier does not have to be named `ctx`). A confirmed Expr called with a property, another value, no argument, multiple arguments, or a spread argument is rejected during transformation. Namespace properties, function-returned Expr values, and re-export chains are not resolved as composed Expr sources.
+Composition supports local `const` aliases, directly named/default imported Expr
+values, and Expr values carried by statically analyzed `modifier()` or
+`exprTemplate()` arguments (including parameter properties such as
+`input.condition`), at any nesting depth. The argument must be the current
+callback's bare parameter identifier (the identifier does not have to be named
+`ctx`). A confirmed Expr called with a property, another value, no argument,
+multiple arguments, or a spread argument is rejected during transformation.
+Namespace properties outside a static template argument, function-returned Expr
+values, and re-export chains are not resolved as composed Expr sources.
 
 </details>
 
