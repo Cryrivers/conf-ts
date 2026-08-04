@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/compiler-native",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "description": "Oxc-backed native compiler for conf-ts.",
   "author": {
     "name": "Zhongliang Wang",
@@ -42,7 +42,7 @@
     "build:debug": "napi build --platform",
     "format": "prettier . -w && cargo fmt",
     "lint": "oxlint .",
-    "prepublishOnly": "napi prepublish -t npm -p ../../native-bindings",
+    "prepublishOnly": "napi prepublish -t npm",
     "preversion": "pnpm run build:debug && git add .",
     "version": "napi version"
   },

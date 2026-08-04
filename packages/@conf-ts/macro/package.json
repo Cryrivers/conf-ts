@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/macro",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "description": "Macros for conf-ts.",
   "type": "commonjs",
   "author": {
