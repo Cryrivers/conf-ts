@@ -254,6 +254,27 @@ other macros or modifiers. Modifiers may be forwarded through `const` aliases
 and named/default/namespace/re-export chains, but the modifier function itself
 cannot be emitted into configuration data.
 
+Expr values inside static inputs remain composable. Optional Expr properties can
+select a branch at compile time and either extend the supplied expression or
+reuse a fallback:
+
+```ts
+import { expr, modifier, type Expr } from '@conf-ts/macro';
+
+type Input = { expression?: Expr<Context, boolean> };
+
+const extend = modifier<[Input], Expr<Context, boolean>>(input =>
+  input.expression
+    ? expr(ctx => input.expression!(ctx) && anotherConditionExpr(ctx))
+    : anotherConditionExpr,
+);
+```
+
+The non-null assertion is only for TypeScript: property narrowing does not carry
+into the nested `expr()` callback. The modifier guard is still evaluated
+statically, and the transformer inlines the selected Expr with
+precedence-preserving parentheses.
+
 ### Typed runtime expressions: `expr(ctx => expression)`
 
 Use `expr()` when a value can only be evaluated later, against data that's available at runtime — a permission check, a feature-flag rule, a pricing formula. Write it as ordinary, type-checked TypeScript; during JSON/YAML compilation the macro turns it into a portable expression string instead of running it.

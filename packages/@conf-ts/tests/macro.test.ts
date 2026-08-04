@@ -30,6 +30,17 @@ describe('Macro Test', () => {
     }
   });
 
+  it('should preserve and compose Expr values across static modifier inputs', () => {
+    assertMacroOutput('modifier-expr-input');
+  });
+
+  it('should validate the context passed to Expr values from modifier inputs', () => {
+    assertMacroError(
+      'modifier-expr-input-invalid-context',
+      "Nested Expr 'input.expression' must be called with exactly one argument: the current expr context parameter 'ctx'.",
+    );
+  });
+
   it('should reject invalid modifier callbacks', () => {
     assertMacroError(
       'modifier-invalid-callback-block',

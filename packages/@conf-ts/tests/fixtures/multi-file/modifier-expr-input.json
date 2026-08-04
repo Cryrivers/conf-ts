@@ -1,0 +1,11 @@
+{
+  "importedPresent": {
+    "label": "imported-present",
+    "expression": "(imported || score > 5) && (local || score < 100)"
+  },
+  "importedAbsent": {
+    "label": "imported-absent",
+    "expression": "local || score < 100"
+  },
+  "importedDirect": "(imported || score > 5) && (local || score < 100)"
+}

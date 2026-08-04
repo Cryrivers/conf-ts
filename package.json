@@ -7,8 +7,8 @@
     "dev": "turbo run dev",
     "format": "turbo run format"
   },
-  "packageManager": "pnpm@11.17.0",
+  "packageManager": "pnpm@11.20.0",
   "devDependencies": {
-    "turbo": "^2.10.6"
+    "turbo": "^2.10.8"
   }
 }

@@ -173,6 +173,23 @@ Rules:
   call it with the new callback's current context, for example
   `expr(ctx => input.condition(ctx) && enabled)`.
 
+For an optional Expr property, branch on it in the modifier and use a non-null
+assertion inside the nested callback:
+
+```ts
+import { expr, modifier, type Expr } from '@conf-ts/macro';
+
+const extend = modifier<[Input], Expr<Context, boolean>>(input =>
+  input.expression
+    ? expr(ctx => input.expression!(ctx) && anotherConditionExpr(ctx))
+    : anotherConditionExpr,
+);
+```
+
+The `!` is needed only because TypeScript does not retain property narrowing
+inside a nested callback. The modifier condition and selected branch are still
+resolved statically.
+
 ## Nesting
 
 Macros compose freely, including inside array callbacks. The callback parameter

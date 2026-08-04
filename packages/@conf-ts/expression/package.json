@@ -48,7 +48,7 @@
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@vitest/coverage-v8": "4.1.10",
-    "oxlint": "^1.75.0",
+    "oxlint": "^1.77.0",
     "prettier": "^3.9.6",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",

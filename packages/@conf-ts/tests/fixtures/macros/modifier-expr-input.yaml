@@ -1,0 +1,34 @@
+optionalPresent:
+  label: present
+  expression: (a || b) && (c || score > 0)
+optionalAbsent:
+  label: absent
+  expression: c || score > 0
+direct: (a || b) && (c || score > 0)
+computedProperty: (a || b) && (c || score > 0)
+nestedProperty: (a || b) && (c || score > 0)
+optionalNestedPresent: (a || b) && (c || score > 0)
+optionalNestedAbsent: c || score > 0
+multipleProperties: (a || b) && (c || score > 0)
+booleanGateOn: (a || b) && (c || score > 0)
+booleanGateOff: a || b
+expressionAndNumber: (a || b) && score >= 7
+destructuredProperty: (a || b) && (c || score > 0)
+arrayElements: (a || b) && (c || score > 0)
+destructuredArray: (a || b) && (c || score > 0)
+restRules: (a || b) && (c || score > 0)
+defaultRuleOmitted: (c || score > 0) && score >= 10
+defaultRuleProvided: (a || b) && score >= 10
+nestedModifiers:
+  label: nested
+  expression: (a || b) && (c || score > 0)
+localConstArgument:
+  label: local-const
+  expression: (a || b) && (c || score > 0)
+inlineArgument:
+  label: inline
+  expression: (a || b) && (c || score > 0)
+arrayMacro:
+- (a || b) && score >= 10
+- (c || score > 0) && score >= 10
+exprTemplateArgument: (a || b) && (c || score > 0)
