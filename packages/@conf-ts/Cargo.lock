@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "compiler_native"
-version = "0.0.23"
+version = "0.0.24"
 dependencies = [
  "criterion",
  "indexmap",
@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "macro_transformer_native"
-version = "0.0.23"
+version = "0.0.24"
 dependencies = [
  "compiler_native",
  "criterion",

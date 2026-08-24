@@ -1,7 +1,7 @@
 {
   "name": "@conf-ts/playground",
   "private": true,
-  "version": "0.0.23",
+  "version": "0.0.24",
   "author": {
     "name": "Zhongliang Wang",
     "email": "hello@zhongliang.wang",
