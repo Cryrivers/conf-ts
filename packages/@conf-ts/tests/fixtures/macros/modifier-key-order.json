@@ -1,0 +1,40 @@
+{
+  "inputArgument": {
+    "a": 1,
+    "c": 3,
+    "b": 99
+  },
+  "returnedObject": {
+    "a": 1,
+    "c": 3,
+    "b": 200,
+    "e": 5
+  },
+  "directMerge": {
+    "c": 3,
+    "b": 20,
+    "d": 4,
+    "a": 10
+  },
+  "nestedModifier": {
+    "c": 3,
+    "d": 4,
+    "a": 10,
+    "b": 200,
+    "e": 5
+  },
+  "nestedObject": {
+    "outer": {
+      "x": 0,
+      "a": 1,
+      "c": 3,
+      "b": 200,
+      "y": 9
+    },
+    "sibling": {
+      "b": 2,
+      "c": 3,
+      "a": 100
+    }
+  }
+}

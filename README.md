@@ -252,7 +252,10 @@ one level of object/array destructuring are supported. Invocation arguments may
 use literals, enums, local/imported `const` values, static array spreads, and
 other macros or modifiers. Modifiers may be forwarded through `const` aliases
 and named/default/namespace/re-export chains, but the modifier function itself
-cannot be emitted into configuration data.
+cannot be emitted into configuration data. `preserveKeyOrder` also applies while
+modifier arguments and results are evaluated, including nested modifiers and
+object spreads; when using the transformer and compiler as separate APIs, pass
+the same setting to both stages.
 
 Expr values inside static inputs remain composable. Optional Expr properties can
 select a branch at compile time and either extend the supplied expression or

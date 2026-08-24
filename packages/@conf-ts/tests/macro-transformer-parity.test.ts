@@ -117,4 +117,51 @@ describe('macro-transformer / macro-transformer-native parity', () => {
       ).code,
     ).toBe(nativeResult.code);
   });
+
+  it('preserves modifier key order identically in single and batch transforms', () => {
+    const inputFile = path.join(MACRO_DIR, 'modifier-key-order.conf.ts');
+    const code = fs.readFileSync(inputFile, 'utf8');
+    const project = createMacroProjectSnapshot([inputFile]);
+    const options: MacroTransformOptions = { preserveKeyOrder: true };
+    const input = { filename: inputFile, code, project };
+
+    const jsResult = transformMacrosJs(input, options);
+    const nativeResult = transformMacrosNative(input, options);
+    const jsBatch = transformProjectJs(
+      { project, files: [inputFile] },
+      options,
+    );
+    const nativeBatch = transformProjectNative(
+      { project, files: [inputFile] },
+      options,
+    );
+
+    expect(nativeResult.code).toBe(jsResult.code);
+    expect(jsBatch.transformed[inputFile].code).toBe(jsResult.code);
+    expect(nativeBatch.transformed[inputFile].code).toBe(jsResult.code);
+
+    const { output } = compile(
+      { filename: inputFile, code: jsResult.code, project },
+      'json',
+      { preserveKeyOrder: true },
+    );
+    const result = JSON.parse(output) as {
+      nestedModifier: Record<string, number>;
+      nestedObject: { outer: Record<string, number> };
+    };
+    expect(Object.keys(result.nestedModifier)).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+      'e',
+    ]);
+    expect(Object.keys(result.nestedObject.outer)).toEqual([
+      'x',
+      'a',
+      'b',
+      'c',
+      'y',
+    ]);
+  });
 });

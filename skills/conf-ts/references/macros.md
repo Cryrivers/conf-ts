@@ -169,6 +169,9 @@ Rules:
   value.
 - The return value may be any value accepted by the ordinary conf-ts constant
   evaluator, not only an object.
+- `preserveKeyOrder` applies to modifier arguments, callback results, nested
+  modifiers, and object spreads. When calling transform and compile separately,
+  pass the same value to both stages.
 - An Expr passed in a static argument remains reusable inside a new `expr()`;
   call it with the new callback's current context, for example
   `expr(ctx => input.condition(ctx) && enabled)`.

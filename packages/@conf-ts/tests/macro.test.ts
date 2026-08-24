@@ -1,5 +1,6 @@
 import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import {
   assertMacroError,
@@ -27,6 +28,63 @@ describe('Macro Test', () => {
           ).overridden,
         ),
       ).toEqual(['a', 'b']);
+    }
+  });
+
+  it('should apply preserveKeyOrder throughout modifier evaluation', () => {
+    assertMacroOutput('modifier-key-order');
+
+    const input = path.resolve(
+      __dirname,
+      'fixtures/macros/modifier-key-order.conf.ts',
+    );
+    const expectedOrders = {
+      inputArgument: ['a', 'b', 'c'],
+      returnedObject: ['a', 'b', 'c', 'e'],
+      directMerge: ['a', 'b', 'c', 'd'],
+      nestedModifier: ['a', 'b', 'c', 'd', 'e'],
+      nestedOuter: ['x', 'a', 'b', 'c', 'y'],
+      nestedSibling: ['a', 'b', 'c'],
+    };
+
+    for (const compile of [compileJsWithMacro, compileNativeWithMacro]) {
+      for (const format of ['json', 'yaml'] as const) {
+        const { output } = compile(input, format, {
+          macro: true,
+          preserveKeyOrder: true,
+        });
+        const result = (
+          format === 'json' ? JSON.parse(output) : parseYaml(output)
+        ) as {
+          inputArgument: Record<string, unknown>;
+          returnedObject: Record<string, unknown>;
+          directMerge: Record<string, unknown>;
+          nestedModifier: Record<string, unknown>;
+          nestedObject: {
+            outer: Record<string, unknown>;
+            sibling: Record<string, unknown>;
+          };
+        };
+
+        expect(Object.keys(result.inputArgument)).toEqual(
+          expectedOrders.inputArgument,
+        );
+        expect(Object.keys(result.returnedObject)).toEqual(
+          expectedOrders.returnedObject,
+        );
+        expect(Object.keys(result.directMerge)).toEqual(
+          expectedOrders.directMerge,
+        );
+        expect(Object.keys(result.nestedModifier)).toEqual(
+          expectedOrders.nestedModifier,
+        );
+        expect(Object.keys(result.nestedObject.outer)).toEqual(
+          expectedOrders.nestedOuter,
+        );
+        expect(Object.keys(result.nestedObject.sibling)).toEqual(
+          expectedOrders.nestedSibling,
+        );
+      }
     }
   });
 
