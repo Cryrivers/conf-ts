@@ -1,6 +1,3 @@
-import a from './a';
-import b from './b';
-import c from './c';
 import {
   arrayFilter,
   arrayFlatMap,
@@ -8,10 +5,14 @@ import {
   Boolean,
   env,
   expr,
+  looseExpr,
   Number,
   String,
-  type LooseExpr,
 } from '@conf-ts/macro';
+
+import a from './a';
+import b from './b';
+import c from './c';
 
 const services = [
   { name: 'api', replicas: 3, enabled: true },
@@ -29,8 +30,8 @@ type RequestContext = {
   fallback: string;
 };
 
-const x: { a: LooseExpr<RequestContext, string> } = {
-  a: expr<RequestContext, string>(ctx => ctx.user?.score.toString() ?? '0'),
+const x = {
+  a: looseExpr<RequestContext, string>(ctx => (ctx.user.score ?? 0).toString()),
 };
 
 export const d = c.value + 1;
@@ -47,9 +48,7 @@ export default {
       service => `${service.name}:${String(service.replicas)}`,
     ),
     replicaSlots: arrayFlatMap(services, service =>
-      service.enabled
-        ? [service.name, `${service.name}-backup`]
-        : [],
+      service.enabled ? [service.name, `${service.name}-backup`] : [],
     ),
     casts: {
       number: Number('42'),

@@ -52,11 +52,12 @@ The two macro-mode symptoms that look confusing:
 | `modifier aliases must use const declarations`                                             | A modifier was assigned through `let`/`var`                          | Change the alias to `const`                                        |
 | `modifier values are compile-time-only`                                                    | The modifier function escaped into generated data                    | Invoke it, or forward it only through const/import/export bindings |
 
-## `expr()`
+## `expr()` / `looseExpr()`
 
 All structural rejections share one message:
 `Unsupported call expression: expr` (TypeScript) /
 `Function "expr" is only allowed in macro mode` (native).
+For `looseExpr()`, the function name in those diagnostics is `looseExpr`.
 
 Triggers:
 
@@ -65,7 +66,7 @@ Triggers:
 - `async` arrow: `expr(async ctx => ctx.a)`
 - Direct context use: `expr(ctx => ctx)`
 - Syntax outside the runtime grammar: `expr(ctx => (ctx.a = 2))`
-- `expr` not imported from `@conf-ts/macro`
+- `expr` / `looseExpr` not imported from `@conf-ts/macro`
 - A macro call inside `expr()` referencing an identifier that is neither a
   constant nor sourced from the context
 - A cast macro called with the wrong arity: `String(ctx.a, 'extra')`
@@ -81,7 +82,9 @@ Specific messages:
 | `Nested Expr 'subExpr' must be called with exactly one argument: the current expr context parameter 'ctx'.`                   | Call it as `subExpr(ctx)` with the bare parameter — not a property, another value, zero args, multiple args, or a spread |
 | `Nested Expr 'always' must be called with no arguments because the enclosing expr callback doesn't take a context parameter.` | Drop the argument: `always()`                                                                                            |
 
-## `exprTemplate()`
+## `exprTemplate()` / `looseExprTemplate()`
+
+Both macros share the existing `exprTemplate` diagnostic wording.
 
 | Message                                                                                                            | Cause                                                                           | Fix                                                          |
 | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------ |

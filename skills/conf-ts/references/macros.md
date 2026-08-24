@@ -18,7 +18,7 @@ import * as macros from '@conf-ts/macro'; // macros.String(42)
 The transform is binding-aware:
 
 - A **locally declared** `String` is left completely untouched.
-- An **unimported** `String(1)` / `modifier(...)` / `expr(...)` is left untouched, and then the
+- An **unimported** `String(1)` / `modifier(...)` / `expr(...)` / `looseExpr(...)` is left untouched, and then the
   compiler rejects it as an unevaluatable call.
 - A parameter that shadows a macro name inside a function body is untouched.
 - Only macro specifiers are stripped from a mixed import; `import { String, type PreservedType }`
@@ -244,7 +244,7 @@ export const eagerlyTransformed = String(42); // → "42"
 export default { untouched: true };
 ```
 
-## `expr()` and `exprTemplate()`
+## Expression macros
 
 These are macros too, but large enough to have their own file — see
 `expr.md`.

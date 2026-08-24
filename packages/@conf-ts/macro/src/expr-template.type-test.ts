@@ -1,6 +1,8 @@
 import {
   expr,
   exprTemplate,
+  looseExpr,
+  looseExprTemplate,
   type Expr,
   type ExprTemplate,
   type LooseExpr,
@@ -22,10 +24,17 @@ const add = exprTemplate<Context, number, [number]>(
 const addType: ExprTemplate<Context, number, [number]> = add;
 const resultType: Expr<Context, number> = addType(1);
 
-const loose: LooseExprTemplate<Context, boolean, [number]> = exprTemplate(
+const loose = looseExprTemplate<Context, boolean, [number]>(
   (ctx, minimum) => (ctx.optional.deep.value ?? 0) > minimum,
 );
+const looseType: LooseExprTemplate<Context, boolean, [number]> = loose;
 const looseResult: LooseExpr<Context, boolean> = loose(1);
+
+const looseExpression = looseExpr<Context, number | boolean>(
+  ctx => ctx.optional.deep.value || true,
+);
+const looseExpressionType: LooseExpr<Context, number | boolean> =
+  looseExpression;
 
 // @ts-expect-error the first callback parameter is always Context
 exprTemplate<Context, number, [number]>((ctx: string, amount) => amount);
@@ -39,3 +48,5 @@ add('1');
 void expr;
 void resultType;
 void looseResult;
+void looseType;
+void looseExpressionType;

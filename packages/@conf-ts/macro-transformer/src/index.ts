@@ -524,9 +524,15 @@ function transformAnalyzedSource(
       if (macroName || compileTimeTemplateInvocation) {
         try {
           let replacementSource: string;
-          if (macroName === 'exprTemplate' || macroName === 'modifier') {
+          if (
+            macroName === 'exprTemplate' ||
+            macroName === 'looseExprTemplate' ||
+            macroName === 'modifier'
+          ) {
             validateCompileTimeTemplateDefinition(node, state.typeChecker);
-            replacementSource = compileTimeTemplatePlaceholder(macroName);
+            replacementSource = compileTimeTemplatePlaceholder(
+              macroName === 'looseExprTemplate' ? 'exprTemplate' : macroName,
+            );
           } else {
             const value = evaluateMacro(
               node,

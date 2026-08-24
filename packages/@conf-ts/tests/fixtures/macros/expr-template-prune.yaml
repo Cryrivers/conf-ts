@@ -14,4 +14,5 @@ defaultedExplicitUndefined: expressionA
 unsupportedStatic: 'typeof [1, 2].includes(2) === "boolean" ? expressionA : expressionB'
 dynamic: "enabled ? expressionA + 4 : expressionB + 4"
 deadBranch: expressionA
+loosePruned: optional.a
 ordinaryExpr: "true ? expressionA : expressionB"

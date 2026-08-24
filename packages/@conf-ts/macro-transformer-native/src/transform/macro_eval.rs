@@ -110,17 +110,18 @@ fn expect_expression_argument<'a>(
   })
 }
 
-// A call to one of the macro functions in compiler_native::eval::MACRO_FUNCTIONS is
-// inlineable inside an expr() callback body — except `expr` itself, since a
-// nested `expr(...)` call isn't a value expression — and only when it
-// doesn't touch the context parameter, since it must be resolvable entirely
-// at compile time.
+// A call to one of the macro functions in compiler_native::eval::MACRO_FUNCTIONS
+// is inlineable inside an expression callback body — except `expr` and
+// `looseExpr` themselves, since a nested expression macro call isn't a value
+// expression — and only when it doesn't touch the context parameter, since it
+// must be resolvable entirely at compile time.
 fn is_inlineable_macro_call(
   call: &CallExpression,
   file_ctx: &FileContext,
   ctx: &EvalContext,
 ) -> bool {
-  super::canonical_callee(call, file_ctx, ctx).is_some_and(|name| name != "expr")
+  super::canonical_callee(call, file_ctx, ctx)
+    .is_some_and(|name| name != "expr" && name != "looseExpr")
 }
 
 // Type-casting macros have a direct runtime equivalent in the expr DSL, so
@@ -526,10 +527,10 @@ fn get_arrow_body_expr<'a>(
   file_ctx: &FileContext,
   macro_name: &str,
 ) -> Result<&'a Expression<'a>, ConfTSError> {
-  if arrow.expression {
-    if let Some(Statement::ExpressionStatement(expr_stmt)) = arrow.body.statements.first() {
-      return Ok(&expr_stmt.expression);
-    }
+  if let Some(expression) = arrow.get_expression() {
+    return Ok(expression);
+  }
+  let Some(body) = arrow.get_function_body() else {
     let (line, character) = get_location(&file_ctx.line_index, arrow.span.start);
     return Err(ConfTSError::new(
       format!(
@@ -540,10 +541,10 @@ fn get_arrow_body_expr<'a>(
       line,
       character,
     ));
-  }
+  };
 
-  if arrow.body.statements.len() != 1 {
-    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+  if body.statements.len() != 1 {
+    let (line, character) = get_location(&file_ctx.line_index, body.span.start);
     return Err(ConfTSError::new(
       format!(
         "{}: callback body must be a single return statement",
@@ -554,11 +555,11 @@ fn get_arrow_body_expr<'a>(
       character,
     ));
   }
-  match &arrow.body.statements[0] {
+  match &body.statements[0] {
     Statement::ReturnStatement(ret) => match &ret.argument {
       Some(expr) => Ok(expr),
       None => {
-        let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+        let (line, character) = get_location(&file_ctx.line_index, body.span.start);
         Err(ConfTSError::new(
           format!(
             "{}: callback body must be a single return statement",
@@ -571,7 +572,7 @@ fn get_arrow_body_expr<'a>(
       }
     },
     _ => {
-      let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+      let (line, character) = get_location(&file_ctx.line_index, body.span.start);
       Err(ConfTSError::new(
         format!(
           "{}: callback body must be a single return statement",
@@ -1115,20 +1116,23 @@ fn invalid_nested_callback_error(file_ctx: &FileContext, span_start: u32) -> Con
 // None as "nothing to recurse into".
 fn nested_callback_body_expr_unchecked<'e, 'a>(
   body: &'e FunctionBody<'a>,
-  is_concise: bool,
 ) -> Option<&'e Expression<'a>> {
-  if is_concise {
-    return match body.statements.first() {
-      Some(Statement::ExpressionStatement(expr_stmt)) => Some(&expr_stmt.expression),
-      _ => None,
-    };
-  }
   if body.statements.len() == 1
     && let Statement::ReturnStatement(ret) = &body.statements[0]
   {
     return ret.argument.as_ref();
   }
   None
+}
+
+fn nested_arrow_body_expr_unchecked<'e, 'a>(
+  arrow: &'e ArrowFunctionExpression<'a>,
+) -> Option<&'e Expression<'a>> {
+  arrow.get_expression().or_else(|| {
+    arrow
+      .get_function_body()
+      .and_then(nested_callback_body_expr_unchecked)
+  })
 }
 
 // Dispatches nested_callback_body_expr_unchecked over whichever of the two
@@ -1141,25 +1145,30 @@ fn nested_callback_recursion_target<'e, 'a>(
   expr: &'e Expression<'a>,
 ) -> Option<&'e Expression<'a>> {
   match expr {
-    Expression::ArrowFunctionExpression(arrow) => {
-      nested_callback_body_expr_unchecked(&arrow.body, arrow.expression)
-    }
+    Expression::ArrowFunctionExpression(arrow) => nested_arrow_body_expr_unchecked(arrow),
     Expression::FunctionExpression(func) => func
       .body
       .as_ref()
-      .and_then(|body| nested_callback_body_expr_unchecked(body, false)),
+      .and_then(|body| nested_callback_body_expr_unchecked(body)),
     _ => None,
   }
 }
 
 fn nested_callback_body_expr<'e, 'a>(
   body: &'e FunctionBody<'a>,
-  is_concise: bool,
   file_ctx: &FileContext,
   error_span_start: u32,
 ) -> Result<&'e Expression<'a>, ConfTSError> {
-  nested_callback_body_expr_unchecked(body, is_concise)
+  nested_callback_body_expr_unchecked(body)
     .ok_or_else(|| invalid_nested_callback_error(file_ctx, error_span_start))
+}
+
+fn nested_arrow_body_expr<'e, 'a>(
+  arrow: &'e ArrowFunctionExpression<'a>,
+  file_ctx: &FileContext,
+) -> Result<&'e Expression<'a>, ConfTSError> {
+  nested_arrow_body_expr_unchecked(arrow)
+    .ok_or_else(|| invalid_nested_callback_error(file_ctx, arrow.span.start))
 }
 
 fn shadow_error(
@@ -1726,8 +1735,7 @@ fn collect_const_replacements(
       }
       let (params, default_expressions) =
         collect_nested_callback_params(&arrow.params, param_name, file_ctx)?;
-      let body_expr =
-        nested_callback_body_expr(&arrow.body, arrow.expression, file_ctx, arrow.span.start)?;
+      let body_expr = nested_arrow_body_expr(arrow, file_ctx)?;
       let is_simple_single_param = is_simple_single_identifier_params(&arrow.params);
       handle_nested_callback(
         expr,
@@ -1735,7 +1743,7 @@ fn collect_const_replacements(
         &params,
         &default_expressions,
         is_simple_single_param,
-        !arrow.expression,
+        arrow.get_function_body().is_some(),
         last_param_end(&arrow.params),
         param_name,
         bound_names,
@@ -1760,7 +1768,7 @@ fn collect_const_replacements(
       };
       let (params, default_expressions) =
         collect_nested_callback_params(&func.params, param_name, file_ctx)?;
-      let body_expr = nested_callback_body_expr(body, false, file_ctx, func.span.start)?;
+      let body_expr = nested_callback_body_expr(body, file_ctx, func.span.start)?;
       let is_simple_single_param = is_simple_single_identifier_params(&func.params);
       handle_nested_callback(
         expr,
@@ -3003,7 +3011,7 @@ fn compile_time_template_callback<'e, 'a>(
         arrow.params.items[0].pattern,
         BindingPattern::BindingIdentifier(_)
       ));
-  if arrow.r#async || !arrow.expression || invalid_context {
+  if arrow.r#async || !arrow.is_expression() || invalid_context {
     return Err(compile_time_template_error(
       file_ctx,
       arrow.span.start,
@@ -3405,12 +3413,12 @@ fn evaluate_compile_time_template_invocation(
     );
   }
 
-  let body_expr = match arrow.body.statements.first() {
-    Some(Statement::ExpressionStatement(statement)) => &statement.expression,
-    _ => {
+  let body_expr = match arrow.get_expression() {
+    Some(expression) => expression,
+    None => {
       return Err(compile_time_template_error(
         &definition_ctx,
-        arrow.body.span.start,
+        arrow.body.span().start,
         compile_time_template_callback_error(kind),
       ));
     }
@@ -3508,7 +3516,7 @@ fn evaluate_expr(
   ctx: &mut EvalContext,
   options: &CompileOptions,
 ) -> Result<Option<Value>, ConfTSError> {
-  if callee != "expr" {
+  if callee != "expr" && callee != "looseExpr" {
     return Ok(None);
   }
 
@@ -3559,8 +3567,8 @@ fn evaluate_expr(
     ));
   }
 
-  if !arrow.expression {
-    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+  if !arrow.is_expression() {
+    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span().start);
     return Err(ConfTSError::new(
       EXPR_CALLBACK_ERROR,
       &file_ctx.file_path,
@@ -3589,10 +3597,10 @@ fn evaluate_expr(
     },
   };
 
-  let body_expr = match arrow.body.statements.first() {
-    Some(Statement::ExpressionStatement(expr_stmt)) => &expr_stmt.expression,
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+  let body_expr = match arrow.get_expression() {
+    Some(expression) => expression,
+    None => {
+      let (line, character) = get_location(&file_ctx.line_index, arrow.body.span().start);
       return Err(ConfTSError::new(
         EXPR_CALLBACK_ERROR,
         &file_ctx.file_path,

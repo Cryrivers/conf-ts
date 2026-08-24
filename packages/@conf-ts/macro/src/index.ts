@@ -2,6 +2,10 @@ import {
   Expr,
   ExprTemplate,
   ExprTemplateCallback,
+  LooseExpr,
+  LooseExprCallback,
+  LooseExprTemplate,
+  LooseExprTemplateCallback,
   Modifier,
   ModifierCallback,
 } from './types';
@@ -15,7 +19,9 @@ export type {
   ExprTemplate,
   ExprTemplateCallback,
   LooseExpr,
+  LooseExprCallback,
   LooseExprTemplate,
+  LooseExprTemplateCallback,
   Modifier,
   ModifierCallback,
 } from './types';
@@ -32,6 +38,12 @@ export function expr<Context = unknown, ReturnType = unknown>(
   return macroNotTransformed('expr');
 }
 
+export function looseExpr<Context = unknown, ReturnType = unknown>(
+  _callback: LooseExprCallback<Context, ReturnType>,
+): LooseExpr<Context, ReturnType> {
+  return macroNotTransformed('looseExpr');
+}
+
 export function exprTemplate<
   Context = unknown,
   ReturnType = unknown,
@@ -40,6 +52,16 @@ export function exprTemplate<
   _callback: ExprTemplateCallback<Context, ReturnType, Parameters>,
 ): ExprTemplate<Context, ReturnType, Parameters> {
   return macroNotTransformed('exprTemplate');
+}
+
+export function looseExprTemplate<
+  Context = unknown,
+  ReturnType = unknown,
+  Parameters extends readonly unknown[] = readonly unknown[],
+>(
+  _callback: LooseExprTemplateCallback<Context, ReturnType, Parameters>,
+): LooseExprTemplate<Context, ReturnType, Parameters> {
+  return macroNotTransformed('looseExprTemplate');
 }
 
 export function modifier<

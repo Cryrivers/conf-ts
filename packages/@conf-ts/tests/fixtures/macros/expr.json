@@ -1,5 +1,7 @@
 {
   "simple": "a > b",
   "nested": "user.age >= limit",
-  "computed": "a"
+  "computed": "a",
+  "loose": "user.age || true",
+  "looseComposed": "(user.age || true) === true"
 }

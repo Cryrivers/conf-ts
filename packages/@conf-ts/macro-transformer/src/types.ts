@@ -37,7 +37,7 @@ export interface MacroTransformOptions {
   env?: Record<string, string>;
   /** Merge `process.env` into `env`. Defaults to true. */
   inheritProcessEnv?: boolean;
-  /** Prune exprTemplate branches whose conditions are statically decidable. Defaults to false. */
+  /** Prune expression-template branches whose conditions are statically decidable. Defaults to false. */
   pruneExprTemplate?: boolean;
   quote?: QuoteStyle;
   preserveKeyOrder?: boolean;

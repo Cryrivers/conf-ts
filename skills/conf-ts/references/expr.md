@@ -1,11 +1,12 @@
-# `expr()`, `exprTemplate()`, and the runtime evaluator
+# Expression macros and the runtime evaluator
 
 Use `expr()` when a value can only be resolved later, against data available at
 runtime — a permission check, a feature-flag rule, a pricing formula. Write it as
 ordinary type-checked TypeScript; during compilation the macro turns it into a
 portable **expression string** instead of running it.
 
-Requires macro mode and `import { expr } from '@conf-ts/macro'`.
+Requires macro mode and importing the expression macro being used from
+`@conf-ts/macro`.
 
 ## Basics
 
@@ -72,22 +73,28 @@ produce the type you actually want:
   //                                                                   ~~~ error here
   ```
 
-- **`LooseExpr` / `LooseExprTemplate`.** The loosened context type isn't
-  something you can spell yourself — annotate the *binding* instead of the
-  parameter, and let it flow into the call:
+- **`LooseExpr`.** Use the dedicated `looseExpr()` macro so the call directly
+  infers a `LooseExpr` result. Supply the complete type argument pair because
+  the loosened callback context isn't something you can spell as a parameter
+  annotation:
 
   ```ts
-  const check: LooseExpr<Context, number | boolean> =
-    expr(ctx => ctx.a.b.c || true);
+  const check = looseExpr<Context, number | boolean>(
+    ctx => ctx.a.b.c || true,
+  );
   ```
+
+- **`LooseExprTemplate`.** Use `looseExprTemplate()` with the complete three
+  type arguments for the same direct inference when defining a reusable loose
+  template.
 
   The same "annotate the binding, not the call" trick works for plain
   `Expr`/`ExprTemplate` too, whenever you already have a named type to reuse
   across sibling declarations instead of repeating a call-site type argument
   list on each one.
 
-**Never write a partial type argument list.** `expr<Context>(ctx => ...)`
-compiles without error, but it does *not* infer `ReturnType` from the
+**Never write a partial type argument list.** `expr<Context>(ctx => ...)` or
+`looseExpr<Context>(ctx => ...)` compiles without error, but it does *not* infer `ReturnType` from the
 callback — it silently defaults to `unknown`, discarding return-type safety
 with no diagnostic to warn you. The same applies to `exprTemplate<Context>(...)`
 or `exprTemplate<Context, ReturnType>(...)`: every type parameter after the
@@ -271,10 +278,10 @@ expr((ctx: Context) => ctx.items.map(item => ({ item, doubled: item * 2 })));
 Shorthand referencing an outer constant folds to a literal; shorthand
 referencing a callback's own parameter stays as runtime shorthand.
 
-## `exprTemplate()`: reusable parameterized expressions
+## `exprTemplate()` / `looseExprTemplate()`: reusable parameterized expressions
 
 The callback's first parameter is always the runtime context; every parameter
-after it is supplied at instantiation and folded into the emitted `Expr`. The
+after it is supplied at instantiation and folded into the emitted expression. The
 same typing preference from "Typing the callback" above applies here:
 annotate `ctx` and every later parameter inline and
 `ReturnType`/`Parameters` both infer — don't write
@@ -283,10 +290,12 @@ needs its shape checked against a declared type. Because there are three type
 parameters instead of two, a partial list is an even easier mistake to make
 here — `exprTemplate<Context>(...)` and `exprTemplate<Context, number>(...)`
 both silently default the parameters after the ones given, which then breaks
-type-checking for correctly-annotated later parameters.
+type-checking for correctly-annotated later parameters. For a loose context,
+use the complete `looseExprTemplate<Context, ReturnType, Parameters>(...)`
+argument list so the macro directly supplies the loosened callback type.
 
 ```ts
-import { exprTemplate, type LooseExprTemplate } from '@conf-ts/macro';
+import { exprTemplate, looseExprTemplate } from '@conf-ts/macro';
 
 type Context = { subtotal: number; customer?: { discount?: number } };
 
@@ -296,8 +305,9 @@ const withTax = exprTemplate(
 
 const singaporeTotal = withTax(0.09);   // "subtotal * (1 + 0.09)"
 
-const discounted: LooseExprTemplate<Context, boolean, [number]> =
-  exprTemplate((ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum);
+const discounted = looseExprTemplate<Context, boolean, [number]>(
+  (ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum,
+);
 ```
 
 Rules:
@@ -312,8 +322,8 @@ Rules:
 - Arguments must be statically analyzable: literals, enums, imported/local
   `const` values, `undefined`, `null`, finite numbers, strings, booleans,
   arrays, plain objects, and static array spreads.
-- A specialized result is an ordinary `Expr` and can take part in `subExpr(ctx)`
-  composition.
+- `exprTemplate()` specializes to `Expr`; `looseExprTemplate()` specializes to
+  `LooseExpr`. Both can take part in `subExpr(ctx)` composition.
 - With the macro transform option `pruneExprTemplate: true`, ternary conditions
   that depend only on template arguments and other static values are replaced
   by their selected branch during specialization. `typeof`, unary,
@@ -348,16 +358,16 @@ undecidable condition is retained instead of producing a pruning error.
 
 ## `LooseExpr`: skipping `?.` for deeply optional contexts
 
-`LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr`. It
-presents the callback with a deeply-required view of `Context` so the body reads
-naturally:
+`looseExpr()` returns `LooseExpr<Context, ReturnType>` and presents the callback
+with a deeply-required view of `Context` so the body reads naturally. The macro
+function determines the result type without a binding annotation:
 
 ```ts
-import { expr, type LooseExpr } from '@conf-ts/macro';
+import { looseExpr } from '@conf-ts/macro';
 
 type Context = { a?: { b?: { c?: number } } };
 
-const check: LooseExpr<Context, number | boolean> = expr(ctx => ctx.a.b.c || true);
+const check = looseExpr<Context, number | boolean>(ctx => ctx.a.b.c || true);
 ```
 
 Only container types (nested objects, arrays, including object types inside
@@ -366,7 +376,7 @@ that crossed an optional level is still unioned with `undefined`: for
 `{ a?: { b?: { c?: { d: string } } } }`, `ctx.a.b.c.d` type-checks with no `?.`
 but has type `string | undefined`. Tuple element positions are not preserved.
 
-Compile-time behavior is identical to `Expr`. **`LooseExpr` values must be
+Compile-time output is identical to `expr()`. **`LooseExpr` values must be
 evaluated with `optionalMemberAccess: true` (or `loose: true`)** — `expression()`
 only accepts a `LooseExpr` argument when one of those options is set.
 

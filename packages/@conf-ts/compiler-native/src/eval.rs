@@ -28,7 +28,9 @@ pub const MACRO_FUNCTIONS: &[&str] = &[
   "arrayFlatMap",
   "env",
   "expr",
+  "looseExpr",
   "exprTemplate",
+  "looseExprTemplate",
   "modifier",
 ];
 
@@ -1142,15 +1144,15 @@ fn resolve_declared_in_file(
           return Ok(Some(result));
         }
       }
-      Statement::ExportNamedDeclaration(export_decl) => match &export_decl.declaration {
-        Some(Declaration::VariableDeclaration(var_decl)) => {
+      Statement::ExportDeclaration(export_decl) => match &export_decl.declaration {
+        Declaration::VariableDeclaration(var_decl) => {
           if let Some(result) =
             check_var_decl(name, var_decl, file_ctx, ctx, local_context, options)?
           {
             return Ok(Some(result));
           }
         }
-        Some(Declaration::TSEnumDeclaration(enum_decl)) if enum_decl.id.name.as_str() == name => {
+        Declaration::TSEnumDeclaration(enum_decl) if enum_decl.id.name.as_str() == name => {
           return Ok(Some(enum_object_from_decl(
             enum_decl.as_ref(),
             &file_ctx.file_path,
@@ -1224,12 +1226,20 @@ fn resolve_in_file_inner(
             continue;
           }
           let original_name = module_export_name_to_string(&specifier.local);
-          if let Some(src) = &named_export.source {
-            if let Some(imported_ctx) = resolve_imported_file(src.value.as_str(), file_ctx, ctx) {
-              return resolve_in_file(original_name, &imported_ctx, ctx, None, options);
-            }
-          } else {
-            return resolve_declared_in_file(original_name, file_ctx, ctx, local_context, options);
+          return resolve_declared_in_file(original_name, file_ctx, ctx, local_context, options);
+        }
+      }
+      Statement::ExportFromDeclaration(named_export) => {
+        for specifier in &named_export.specifiers {
+          let exported_name = module_export_name_to_string(&specifier.exported);
+          if exported_name != name {
+            continue;
+          }
+          let original_name = module_export_name_to_string(&specifier.local);
+          if let Some(imported_ctx) =
+            resolve_imported_file(named_export.source.value.as_str(), file_ctx, ctx)
+          {
+            return resolve_in_file(original_name, &imported_ctx, ctx, None, options);
           }
         }
       }
@@ -1272,36 +1282,47 @@ fn exported_values(
           );
         }
       }
-      Statement::ExportNamedDeclaration(export_decl) => {
-        match &export_decl.declaration {
-          Some(Declaration::VariableDeclaration(var_decl)) => {
-            for decl in &var_decl.declarations {
-              if let BindingPattern::BindingIdentifier(ident) = &decl.id {
-                let name = ident.name.as_str().to_string();
-                if let Some(val) = resolve_declared_in_file(&name, file_ctx, ctx, None, options)? {
-                  set_object_prop(&mut exports, name, val, options.preserve_key_order);
-                }
+      Statement::ExportDeclaration(export_decl) => match &export_decl.declaration {
+        Declaration::VariableDeclaration(var_decl) => {
+          for decl in &var_decl.declarations {
+            if let BindingPattern::BindingIdentifier(ident) = &decl.id {
+              let name = ident.name.as_str().to_string();
+              if let Some(val) = resolve_declared_in_file(&name, file_ctx, ctx, None, options)? {
+                set_object_prop(&mut exports, name, val, options.preserve_key_order);
               }
             }
           }
-          Some(Declaration::TSEnumDeclaration(enum_decl)) => {
-            let name = enum_decl.id.name.as_str().to_string();
-            let val = enum_object_from_decl(enum_decl.as_ref(), &file_ctx.file_path, ctx);
-            set_object_prop(&mut exports, name, val, options.preserve_key_order);
-          }
-          _ => {}
         }
+        Declaration::TSEnumDeclaration(enum_decl) => {
+          let name = enum_decl.id.name.as_str().to_string();
+          let val = enum_object_from_decl(enum_decl.as_ref(), &file_ctx.file_path, ctx);
+          set_object_prop(&mut exports, name, val, options.preserve_key_order);
+        }
+        _ => {}
+      },
+      Statement::ExportNamedDeclaration(export_decl) => {
         for specifier in &export_decl.specifiers {
           let original_name = module_export_name_to_string(&specifier.local);
           let exported_name = module_export_name_to_string(&specifier.exported);
-          let val = if let Some(src) = &export_decl.source {
-            resolve_imported_file(src.value.as_str(), file_ctx, ctx)
-              .map(|imported_ctx| resolve_in_file(original_name, &imported_ctx, ctx, None, options))
-              .transpose()?
-              .flatten()
-          } else {
-            resolve_declared_in_file(original_name, file_ctx, ctx, None, options)?
-          };
+          if let Some(val) = resolve_declared_in_file(original_name, file_ctx, ctx, None, options)?
+          {
+            set_object_prop(
+              &mut exports,
+              exported_name.to_string(),
+              val,
+              options.preserve_key_order,
+            );
+          }
+        }
+      }
+      Statement::ExportFromDeclaration(export_decl) => {
+        for specifier in &export_decl.specifiers {
+          let original_name = module_export_name_to_string(&specifier.local);
+          let exported_name = module_export_name_to_string(&specifier.exported);
+          let val = resolve_imported_file(export_decl.source.value.as_str(), file_ctx, ctx)
+            .map(|imported_ctx| resolve_in_file(original_name, &imported_ctx, ctx, None, options))
+            .transpose()?
+            .flatten();
           if let Some(val) = val {
             set_object_prop(
               &mut exports,
@@ -1702,18 +1723,16 @@ pub fn collect_imports(program: &Program) -> HashMap<String, ImportInfo> {
           }
         }
       }
-      Statement::ExportNamedDeclaration(named_export) => {
-        if let Some(src) = &named_export.source {
-          imports.insert(
-            format!("__conf_ts_export_source_{}", export_source_index),
-            ImportInfo {
-              source: src.value.as_str().to_string(),
-              original_name: None,
-              span_start: src.span.start,
-            },
-          );
-          export_source_index += 1;
-        }
+      Statement::ExportFromDeclaration(named_export) => {
+        imports.insert(
+          format!("__conf_ts_export_source_{}", export_source_index),
+          ImportInfo {
+            source: named_export.source.value.as_str().to_string(),
+            original_name: None,
+            span_start: named_export.source.span.start,
+          },
+        );
+        export_source_index += 1;
       }
       Statement::ExportAllDeclaration(export_all) => {
         imports.insert(
@@ -1777,8 +1796,8 @@ fn is_strictly_nullish_expr(expr: &Expression, file_ctx: &FileContext) -> bool {
     Expression::Identifier(ident) => {
       for stmt in &file_ctx.program().body {
         match stmt {
-          Statement::ExportNamedDeclaration(export_decl) => {
-            if let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration {
+          Statement::ExportDeclaration(export_decl) => {
+            if let Declaration::VariableDeclaration(var_decl) = &export_decl.declaration {
               if let Some(type_ann) = find_type_ann_in_var_decl(ident.name.as_str(), var_decl) {
                 return is_nullish_type(type_ann);
               }
@@ -1873,22 +1892,29 @@ pub fn find_default_export(
             continue;
           }
           eval_ctx.evaluated_files.insert(entry_ctx.file_path.clone());
-          let target_ctx = match &named_export.source {
-            Some(src) => {
-              let resolved = eval_ctx
-                .resolver
-                .as_ref()
-                .and_then(|r| r(src.value.as_str(), &entry_ctx.file_path));
-              resolved.and_then(|path| eval_ctx.file_contexts.get(&path).cloned())
-            }
-            None => Some(entry_ctx.clone()),
-          };
-          if let Some(target_ctx) = target_ctx {
-            if let Some(value) =
+          if let Some(value) = resolve_in_file(original_name, entry_ctx, eval_ctx, None, options)? {
+            return Ok(value);
+          }
+        }
+      }
+      Statement::ExportFromDeclaration(named_export) => {
+        for specifier in &named_export.specifiers {
+          let original_name = module_export_name_to_string(&specifier.local);
+          let exported_name = module_export_name_to_string(&specifier.exported);
+          if exported_name != "default" {
+            continue;
+          }
+          eval_ctx.evaluated_files.insert(entry_ctx.file_path.clone());
+          let resolved = eval_ctx
+            .resolver
+            .as_ref()
+            .and_then(|r| r(named_export.source.value.as_str(), &entry_ctx.file_path));
+          if let Some(target_ctx) =
+            resolved.and_then(|path| eval_ctx.file_contexts.get(&path).cloned())
+            && let Some(value) =
               resolve_in_file(original_name, &target_ctx, eval_ctx, None, options)?
-            {
-              return Ok(value);
-            }
+          {
+            return Ok(value);
           }
         }
       }

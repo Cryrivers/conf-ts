@@ -4,13 +4,19 @@ import expression from '../src';
 import * as expressionModule from '../src';
 import type { Expr, LooseExpr } from '../src';
 
-// Mirrors @conf-ts/macro's `expr()` type signature without depending on that
-// package (the macro-transformer replaces expr(cb) with a compiled string;
-// here we only need the identity behavior to exercise the type surface).
+// Mirrors @conf-ts/macro's expression macro signatures (the transformer
+// replaces these calls with compiled strings; here we only need identity
+// behavior to exercise the evaluator's type surface).
 function fakeExpr<Context = unknown, ReturnType = unknown>(
   callback: (ctx: Context) => ReturnType,
 ): Expr<Context, ReturnType> {
   return callback as unknown as Expr<Context, ReturnType>;
+}
+
+function fakeLooseExpr<Context = unknown, ReturnType = unknown>(
+  callback: (ctx: Parameters<LooseExpr<Context, ReturnType>>[0]) => ReturnType,
+): LooseExpr<Context, ReturnType> {
+  return callback as unknown as LooseExpr<Context, ReturnType>;
 }
 
 type DeeplyOptionalContext = { a?: { b?: { c?: number } } };
@@ -132,15 +138,16 @@ describe('loose alias', () => {
 
 describe('LooseExpr type', () => {
   it('lets a callback skip `?.` on deeply optional context', () => {
-    const looseExpr: LooseExpr<DeeplyOptionalContext, number | boolean> =
-      fakeExpr(ctx => ctx.a.b.c || true);
+    const looseExpr = fakeLooseExpr<DeeplyOptionalContext, number | boolean>(
+      ctx => ctx.a.b.c || true,
+    );
 
     expect(typeof looseExpr).toBe('function');
   });
 
   it('still requires `?.` when annotated as the strict Expr type', () => {
-    // @ts-expect-error `ctx.a` is possibly undefined without LooseExpr
     const strictExpr: Expr<DeeplyOptionalContext, number | boolean> = fakeExpr(
+      // @ts-expect-error `ctx.a` is possibly undefined without LooseExpr
       ctx => ctx.a.b.c || true,
     );
 
@@ -148,8 +155,9 @@ describe('LooseExpr type', () => {
   });
 
   it('expression() accepts a LooseExpr once optionalMemberAccess/loose is enabled', () => {
-    const looseExpr: LooseExpr<DeeplyOptionalContext, number | boolean> =
-      fakeExpr(ctx => ctx.a.b.c || true);
+    const looseExpr = fakeLooseExpr<DeeplyOptionalContext, number | boolean>(
+      ctx => ctx.a.b.c || true,
+    );
 
     expect(() => {
       const viaOption = expression(looseExpr, { optionalMemberAccess: true });
@@ -160,8 +168,9 @@ describe('LooseExpr type', () => {
   });
 
   it('falls back to a deeply-required Compiled signature without the option', () => {
-    const looseExpr: LooseExpr<DeeplyOptionalContext, number | boolean> =
-      fakeExpr(ctx => ctx.a.b.c || true);
+    const looseExpr = fakeLooseExpr<DeeplyOptionalContext, number | boolean>(
+      ctx => ctx.a.b.c || true,
+    );
 
     expect(() => {
       const compiledStrict = expression(looseExpr);
@@ -175,13 +184,15 @@ describe('LooseExpr type', () => {
     // so at runtime `ctx.a.b.c.d` short-circuits to undefined whenever any of
     // them is missing — the type must reflect that even though `d: string`
     // has no `?` of its own.
-    const looseExpr: LooseExpr<OptionalAncestorRequiredLeafContext, string> =
-      fakeExpr(ctx => {
-        const d = ctx.a.b.c.d;
-        // @ts-expect-error `d` is `string | undefined` here, not a bare `string`
-        const asString: string = d;
-        return asString;
-      });
+    const looseExpr = fakeLooseExpr<
+      OptionalAncestorRequiredLeafContext,
+      string
+    >(ctx => {
+      const d = ctx.a.b.c.d;
+      // @ts-expect-error `d` is `string | undefined` here, not a bare `string`
+      const asString: string = d;
+      return asString;
+    });
 
     expect(typeof looseExpr).toBe('function');
   });
@@ -190,15 +201,16 @@ describe('LooseExpr type', () => {
     // ctx.a[0].b.c needs `b` to be non-optional on the array element to read
     // `.c` off it without `?.` — this exercises LooseContext recursing into
     // array element types, not just top-level object properties.
-    const looseExpr: LooseExpr<ArrayOptionalContext, number | boolean> =
-      fakeExpr(ctx => ctx.a[0].b.c || true);
+    const looseExpr = fakeLooseExpr<ArrayOptionalContext, number | boolean>(
+      ctx => ctx.a[0].b.c || true,
+    );
 
     expect(typeof looseExpr).toBe('function');
   });
 
   it('still requires `?.` through arrays when annotated as the strict Expr type', () => {
-    // @ts-expect-error `ctx.a` is possibly undefined without LooseExpr
     const strictExpr: Expr<ArrayOptionalContext, number | boolean> = fakeExpr(
+      // @ts-expect-error `ctx.a` is possibly undefined without LooseExpr
       ctx => ctx.a[0].b.c || true,
     );
 
@@ -206,8 +218,9 @@ describe('LooseExpr type', () => {
   });
 
   it('falls back to a deeply-required array shape without the option', () => {
-    const looseExpr: LooseExpr<ArrayOptionalContext, number | boolean> =
-      fakeExpr(ctx => ctx.a[0].b.c || true);
+    const looseExpr = fakeLooseExpr<ArrayOptionalContext, number | boolean>(
+      ctx => ctx.a[0].b.c || true,
+    );
 
     expect(() => {
       const viaOption = expression(looseExpr, { optionalMemberAccess: true });
