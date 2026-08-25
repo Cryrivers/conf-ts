@@ -1,6 +1,6 @@
 {
   "name": "@conf-ts/tests",
-  "version": "0.0.24",
+  "version": "0.0.25",
   "private": true,
   "description": "Shared tests and fixtures for conf-ts compilers",
   "author": {
