@@ -526,24 +526,21 @@ fn get_arrow_body_expr<'a>(
   file_ctx: &FileContext,
   macro_name: &str,
 ) -> Result<&'a Expression<'a>, ConfTSError> {
-  if arrow.expression {
-    if let Some(Statement::ExpressionStatement(expr_stmt)) = arrow.body.statements.first() {
-      return Ok(&expr_stmt.expression);
-    }
+  if let Some(expression) = arrow.get_expression() {
+    return Ok(expression);
+  }
+
+  let Some(body) = arrow.get_function_body() else {
     let (line, character) = get_location(&file_ctx.line_index, arrow.span.start);
     return Err(ConfTSError::new(
-      format!(
-        "{}: callback body must be a single expression or return statement",
-        macro_name
-      ),
+      format!("{}: callback body must be a single expression", macro_name),
       &file_ctx.file_path,
       line,
       character,
     ));
-  }
-
-  if arrow.body.statements.len() != 1 {
-    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+  };
+  if body.statements.len() != 1 {
+    let (line, character) = get_location(&file_ctx.line_index, body.span.start);
     return Err(ConfTSError::new(
       format!(
         "{}: callback body must be a single return statement",
@@ -554,11 +551,11 @@ fn get_arrow_body_expr<'a>(
       character,
     ));
   }
-  match &arrow.body.statements[0] {
+  match &body.statements[0] {
     Statement::ReturnStatement(ret) => match &ret.argument {
       Some(expr) => Ok(expr),
       None => {
-        let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+        let (line, character) = get_location(&file_ctx.line_index, body.span.start);
         Err(ConfTSError::new(
           format!(
             "{}: callback body must be a single return statement",
@@ -571,7 +568,7 @@ fn get_arrow_body_expr<'a>(
       }
     },
     _ => {
-      let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+      let (line, character) = get_location(&file_ctx.line_index, body.span.start);
       Err(ConfTSError::new(
         format!(
           "{}: callback body must be a single return statement",
@@ -1115,14 +1112,7 @@ fn invalid_nested_callback_error(file_ctx: &FileContext, span_start: u32) -> Con
 // None as "nothing to recurse into".
 fn nested_callback_body_expr_unchecked<'e, 'a>(
   body: &'e FunctionBody<'a>,
-  is_concise: bool,
 ) -> Option<&'e Expression<'a>> {
-  if is_concise {
-    return match body.statements.first() {
-      Some(Statement::ExpressionStatement(expr_stmt)) => Some(&expr_stmt.expression),
-      _ => None,
-    };
-  }
   if body.statements.len() == 1
     && let Statement::ReturnStatement(ret) = &body.statements[0]
   {
@@ -1141,25 +1131,40 @@ fn nested_callback_recursion_target<'e, 'a>(
   expr: &'e Expression<'a>,
 ) -> Option<&'e Expression<'a>> {
   match expr {
-    Expression::ArrowFunctionExpression(arrow) => {
-      nested_callback_body_expr_unchecked(&arrow.body, arrow.expression)
-    }
+    Expression::ArrowFunctionExpression(arrow) => arrow.get_expression().or_else(|| {
+      arrow
+        .get_function_body()
+        .and_then(nested_callback_body_expr_unchecked)
+    }),
     Expression::FunctionExpression(func) => func
       .body
       .as_ref()
-      .and_then(|body| nested_callback_body_expr_unchecked(body, false)),
+      .and_then(|body| nested_callback_body_expr_unchecked(body)),
     _ => None,
   }
 }
 
 fn nested_callback_body_expr<'e, 'a>(
   body: &'e FunctionBody<'a>,
-  is_concise: bool,
   file_ctx: &FileContext,
   error_span_start: u32,
 ) -> Result<&'e Expression<'a>, ConfTSError> {
-  nested_callback_body_expr_unchecked(body, is_concise)
+  nested_callback_body_expr_unchecked(body)
     .ok_or_else(|| invalid_nested_callback_error(file_ctx, error_span_start))
+}
+
+fn nested_callback_arrow_body_expr<'e, 'a>(
+  arrow: &'e ArrowFunctionExpression<'a>,
+  file_ctx: &FileContext,
+) -> Result<&'e Expression<'a>, ConfTSError> {
+  arrow
+    .get_expression()
+    .or_else(|| {
+      arrow
+        .get_function_body()
+        .and_then(nested_callback_body_expr_unchecked)
+    })
+    .ok_or_else(|| invalid_nested_callback_error(file_ctx, arrow.span.start))
 }
 
 fn shadow_error(
@@ -1726,8 +1731,7 @@ fn collect_const_replacements(
       }
       let (params, default_expressions) =
         collect_nested_callback_params(&arrow.params, param_name, file_ctx)?;
-      let body_expr =
-        nested_callback_body_expr(&arrow.body, arrow.expression, file_ctx, arrow.span.start)?;
+      let body_expr = nested_callback_arrow_body_expr(arrow, file_ctx)?;
       let is_simple_single_param = is_simple_single_identifier_params(&arrow.params);
       handle_nested_callback(
         expr,
@@ -1735,7 +1739,7 @@ fn collect_const_replacements(
         &params,
         &default_expressions,
         is_simple_single_param,
-        !arrow.expression,
+        !arrow.is_expression(),
         last_param_end(&arrow.params),
         param_name,
         bound_names,
@@ -1760,7 +1764,7 @@ fn collect_const_replacements(
       };
       let (params, default_expressions) =
         collect_nested_callback_params(&func.params, param_name, file_ctx)?;
-      let body_expr = nested_callback_body_expr(body, false, file_ctx, func.span.start)?;
+      let body_expr = nested_callback_body_expr(body, file_ctx, func.span.start)?;
       let is_simple_single_param = is_simple_single_identifier_params(&func.params);
       handle_nested_callback(
         expr,
@@ -3003,7 +3007,7 @@ fn compile_time_template_callback<'e, 'a>(
         arrow.params.items[0].pattern,
         BindingPattern::BindingIdentifier(_)
       ));
-  if arrow.r#async || !arrow.expression || invalid_context {
+  if arrow.r#async || !arrow.is_expression() || invalid_context {
     return Err(compile_time_template_error(
       file_ctx,
       arrow.span.start,
@@ -3405,16 +3409,13 @@ fn evaluate_compile_time_template_invocation(
     );
   }
 
-  let body_expr = match arrow.body.statements.first() {
-    Some(Statement::ExpressionStatement(statement)) => &statement.expression,
-    _ => {
-      return Err(compile_time_template_error(
-        &definition_ctx,
-        arrow.body.span.start,
-        compile_time_template_callback_error(kind),
-      ));
-    }
-  };
+  let body_expr = arrow.get_expression().ok_or_else(|| {
+    compile_time_template_error(
+      &definition_ctx,
+      arrow.body.span().start,
+      compile_time_template_callback_error(kind),
+    )
+  })?;
 
   if kind == super::CompileTimeTemplateKind::Modifier {
     let mut expr_bindings = super::current_expr_template_bindings(ctx).unwrap_or_default();
@@ -3559,8 +3560,8 @@ fn evaluate_expr(
     ));
   }
 
-  if !arrow.expression {
-    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
+  if !arrow.is_expression() {
+    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span().start);
     return Err(ConfTSError::new(
       EXPR_CALLBACK_ERROR,
       &file_ctx.file_path,
@@ -3589,18 +3590,10 @@ fn evaluate_expr(
     },
   };
 
-  let body_expr = match arrow.body.statements.first() {
-    Some(Statement::ExpressionStatement(expr_stmt)) => &expr_stmt.expression,
-    _ => {
-      let (line, character) = get_location(&file_ctx.line_index, arrow.body.span.start);
-      return Err(ConfTSError::new(
-        EXPR_CALLBACK_ERROR,
-        &file_ctx.file_path,
-        line,
-        character,
-      ));
-    }
-  };
+  let body_expr = arrow.get_expression().ok_or_else(|| {
+    let (line, character) = get_location(&file_ctx.line_index, arrow.body.span().start);
+    ConfTSError::new(EXPR_CALLBACK_ERROR, &file_ctx.file_path, line, character)
+  })?;
 
   compile_expr_arrow(arrow, &param_name, body_expr, file_ctx, ctx, options).map(Some)
 }

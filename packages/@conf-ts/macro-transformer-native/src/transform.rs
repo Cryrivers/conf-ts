@@ -283,8 +283,8 @@ fn const_initializer_by_name<'a>(
           return Some(initializer);
         }
       }
-      Statement::ExportNamedDeclaration(export) => {
-        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+      Statement::ExportDeclaration(export) => {
+        if let Declaration::VariableDeclaration(declaration) = &export.declaration
           && let Some(initializer) = from_declaration(declaration, name, symbol)
         {
           return Some(initializer);
@@ -337,11 +337,8 @@ fn exported_expr_origin(
 ) -> bool {
   for statement in &file_ctx.program().body {
     match statement {
-      Statement::ExportNamedDeclaration(export) => {
-        if export.source.is_some() {
-          continue;
-        }
-        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+      Statement::ExportDeclaration(export) => {
+        if let Declaration::VariableDeclaration(declaration) = &export.declaration
           && declaration.kind == VariableDeclarationKind::Const
         {
           for declarator in &declaration.declarations {
@@ -355,6 +352,8 @@ fn exported_expr_origin(
             }
           }
         }
+      }
+      Statement::ExportNamedDeclaration(export) => {
         for specifier in &export.specifiers {
           if module_export_name(&specifier.exported) == export_name {
             let local_name = module_export_name(&specifier.local);
@@ -497,8 +496,8 @@ fn exported_compile_time_template_definition(
 
   for statement in &file_ctx.program().body {
     match statement {
-      Statement::ExportNamedDeclaration(export) => {
-        if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+      Statement::ExportDeclaration(export) => {
+        if let Declaration::VariableDeclaration(declaration) = &export.declaration
           && declaration.kind == VariableDeclarationKind::Const
         {
           for declarator in &declaration.declarations {
@@ -519,24 +518,14 @@ fn exported_compile_time_template_definition(
             }
           }
         }
-
+      }
+      Statement::ExportNamedDeclaration(export) => {
         for specifier in &export.specifiers {
           if module_export_name(&specifier.exported) != export_name {
             continue;
           }
           let local_name = module_export_name(&specifier.local);
-          if let Some(source) = &export.source {
-            let imported_ctx = resolved_file_context(source.value.as_str(), file_ctx, ctx)?;
-            if let Some(definition) = exported_compile_time_template_definition(
-              &local_name,
-              &imported_ctx,
-              ctx,
-              visited,
-              dependencies,
-            ) {
-              return Some(definition);
-            }
-          } else if let Some(initializer) =
+          if let Some(initializer) =
             const_initializer_by_name(file_ctx.program(), &local_name, None)
             && let Some(definition) = compile_time_template_definition_inner(
               initializer,
@@ -546,6 +535,24 @@ fn exported_compile_time_template_definition(
               dependencies,
             )
           {
+            return Some(definition);
+          }
+        }
+      }
+      Statement::ExportFromDeclaration(export) => {
+        for specifier in &export.specifiers {
+          if module_export_name(&specifier.exported) != export_name {
+            continue;
+          }
+          let local_name = module_export_name(&specifier.local);
+          let imported_ctx = resolved_file_context(export.source.value.as_str(), file_ctx, ctx)?;
+          if let Some(definition) = exported_compile_time_template_definition(
+            &local_name,
+            &imported_ctx,
+            ctx,
+            visited,
+            dependencies,
+          ) {
             return Some(definition);
           }
         }
@@ -641,14 +648,7 @@ fn exported_namespace_context(
             continue;
           }
           let local_name = module_export_name(&specifier.local);
-          if let Some(source) = &export.source {
-            let imported_ctx = resolved_file_context(source.value.as_str(), file_ctx, ctx)?;
-            if let Some(namespace_ctx) =
-              exported_namespace_context(&local_name, &imported_ctx, ctx, visited, dependencies)
-            {
-              return Some(namespace_ctx);
-            }
-          } else if let Some(import) = file_ctx.imports.get(&local_name) {
+          if let Some(import) = file_ctx.imports.get(&local_name) {
             let imported_ctx = resolved_file_context(&import.source, file_ctx, ctx)?;
             if import.original_name.as_deref() == Some("*") {
               return Some(imported_ctx);
@@ -659,6 +659,20 @@ fn exported_namespace_context(
             {
               return Some(namespace_ctx);
             }
+          }
+        }
+      }
+      Statement::ExportFromDeclaration(export) => {
+        for specifier in &export.specifiers {
+          if module_export_name(&specifier.exported) != export_name {
+            continue;
+          }
+          let local_name = module_export_name(&specifier.local);
+          let imported_ctx = resolved_file_context(export.source.value.as_str(), file_ctx, ctx)?;
+          if let Some(namespace_ctx) =
+            exported_namespace_context(&local_name, &imported_ctx, ctx, visited, dependencies)
+          {
+            return Some(namespace_ctx);
           }
         }
       }
