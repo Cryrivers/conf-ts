@@ -1,10 +1,9 @@
-import { expr, exprTemplate, looseExprTemplate } from '@conf-ts/macro';
+import { expr, exprTemplate } from '@conf-ts/macro';
 
 type Context = {
   expressionA: number;
   expressionB: number;
   enabled: boolean;
-  optional?: { a?: number; b?: number };
 };
 
 const optional = exprTemplate<Context, number, [number, number?]>(
@@ -67,9 +66,6 @@ const NON_FINITE = 1 / 0;
 const deadBranch = exprTemplate<Context, number, [boolean]>((ctx, enabled) =>
   enabled ? ctx.expressionA : NON_FINITE,
 );
-const loosePruned = looseExprTemplate<Context, number | undefined, [boolean]>(
-  (ctx, enabled) => (enabled ? ctx.optional.a : ctx.optional.b),
-);
 
 export default {
   optionalMissing: optional(2),
@@ -88,7 +84,6 @@ export default {
   unsupportedStatic: unsupportedStatic([1, 2], 2),
   dynamic: dynamic(4),
   deadBranch: deadBranch(true),
-  loosePruned: loosePruned(true),
   ordinaryExpr: expr<Context, number>(ctx =>
     true ? ctx.expressionA : ctx.expressionB,
   ),

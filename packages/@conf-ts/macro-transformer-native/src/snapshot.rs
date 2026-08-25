@@ -199,8 +199,10 @@ fn referenced_module_names(filename: &str, source: &str) -> Result<Vec<String>, 
       Statement::ImportDeclaration(declaration) => {
         names.push(declaration.source.value.as_str().to_string());
       }
-      Statement::ExportFromDeclaration(declaration) => {
-        names.push(declaration.source.value.as_str().to_string());
+      Statement::ExportNamedDeclaration(declaration) => {
+        if let Some(source) = &declaration.source {
+          names.push(source.value.as_str().to_string());
+        }
       }
       Statement::ExportAllDeclaration(declaration) => {
         names.push(declaration.source.value.as_str().to_string());

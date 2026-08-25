@@ -22,30 +22,12 @@ describe('Macro runtime helpers', () => {
     ).toThrow(notTransformedError('expr'));
   });
 
-  it('throws when looseExpr is called at runtime instead of being macro-expanded', () => {
-    expect(() =>
-      macro.looseExpr<{ user?: { age?: number } }, number | boolean>(
-        ctx => ctx.user.age || true,
-      ),
-    ).toThrow(notTransformedError('looseExpr'));
-  });
-
   it('throws when exprTemplate is called at runtime', () => {
     expect(() =>
       macro.exprTemplate<{ a: number }, number, [number]>(
         (ctx, value) => ctx.a + value,
       ),
     ).toThrow(notTransformedError('exprTemplate'));
-  });
-
-  it('throws when looseExprTemplate is called at runtime', () => {
-    expect(() =>
-      macro.looseExprTemplate<
-        { optional?: { value?: number } },
-        boolean,
-        [number]
-      >((ctx, minimum) => (ctx.optional.value ?? 0) > minimum),
-    ).toThrow(notTransformedError('looseExprTemplate'));
   });
 
   it('throws when modifier is called at runtime', () => {

@@ -107,7 +107,7 @@ The skill lives in [`skills/conf-ts`](skills/conf-ts) and is scoped to writing c
 | [`SKILL.md`](skills/conf-ts/SKILL.md)                                       | Mode selection, the rules that most often break a config, authoring conventions             |
 | [`references/config-syntax.md`](skills/conf-ts/references/config-syntax.md) | Supported and unsupported TypeScript, enums, key ordering, multi-file configs, path aliases |
 | [`references/macros.md`](skills/conf-ts/references/macros.md)               | `String`/`Number`/`Boolean`, array macros, `modifier`, `env`, nesting and import rules      |
-| [`references/expr.md`](skills/conf-ts/references/expr.md)                   | Expression macros, composition, nested callbacks, loose contexts, emitted grammar           |
+| [`references/expr.md`](skills/conf-ts/references/expr.md)                   | `expr()`, `exprTemplate()`, composition, nested callbacks, `LooseExpr`, emitted grammar     |
 | [`references/errors.md`](skills/conf-ts/references/errors.md)               | Every compile error message, its cause, and the fix                                         |
 
 ## Packages in this monorepo
@@ -356,15 +356,15 @@ values, and re-export chains are not resolved as composed Expr sources.
 
 </details>
 
-#### Reusable expression templates
+#### Reusable `Expr` templates
 
-`exprTemplate()` and `looseExprTemplate()` define reusable expression templates with statically
+`exprTemplate()` defines a reusable expression template with statically
 analyzable parameters. The callback's first parameter is always the runtime
 context; every parameter after it is supplied when the template is instantiated
-and is folded into the emitted expression:
+and is folded into the emitted `Expr`:
 
 ```ts
-import { exprTemplate, looseExprTemplate } from '@conf-ts/macro';
+import { exprTemplate, type LooseExprTemplate } from '@conf-ts/macro';
 
 type Context = { subtotal: number; customer?: { discount?: number } };
 
@@ -375,7 +375,7 @@ const withTax = exprTemplate<Context, number, [number]>(
 const singaporeTotal = withTax(0.09);
 // "subtotal * (1 + 0.09)"
 
-const discounted = looseExprTemplate<Context, boolean, [number]>(
+const discounted: LooseExprTemplate<Context, boolean, [number]> = exprTemplate(
   (ctx, minimum) => (ctx.customer.discount ?? 0) >= minimum,
 );
 ```
@@ -394,10 +394,9 @@ values are evaluated in declaration order and may refer to earlier template
 parameters or outer constants.
 
 Templates can be forwarded through `const` aliases, named/default/namespace
-imports, and named/default/star re-export chains. A specialized `exprTemplate()`
-result is an `Expr`; a specialized `looseExprTemplate()` result is a `LooseExpr`.
-Both can participate in `subExpr(ctx)` composition. The template itself cannot
-escape into runtime data or be invoked dynamically; it may only
+imports, and named/default/star re-export chains. A specialized result is an
+ordinary `Expr` and can participate in `subExpr(ctx)` composition. The template
+itself cannot escape into runtime data or be invoked dynamically; it may only
 be called or forwarded through those compile-time bindings.
 
 With the macro transform option `pruneExprTemplate: true`, ternary conditions
@@ -432,22 +431,24 @@ Not supported inside a nested callback: `async`/generator functions, type annota
 <details>
 <summary>Expand</summary>
 
-`looseExpr()` is the loose counterpart to `expr()`. It returns `LooseExpr<Context, ReturnType>` and presents the callback with a deeply-required view of `Context`, so a body using a context with nested optional properties can be written without `?.` at every level. The macro call itself determines the returned expression type; no binding annotation is needed:
+`LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr<Context, ReturnType>`. When a `Context` has nested optional properties (e.g. `{ a?: { b?: { c?: number } } }`), annotating an `expr(...)` result as `LooseExpr` presents the callback with a deeply-required view of `Context`, so the body can be written without `?.` at every level:
 
 ```ts
-import { looseExpr } from '@conf-ts/macro';
+import { expr, type LooseExpr } from '@conf-ts/macro';
 
 type Context = { a?: { b?: { c?: number } } };
 
-// Inferred as LooseExpr<Context, number | boolean>.
-const check = looseExpr<Context, number | boolean>(ctx => ctx.a.b.c || true);
+// No `?.` needed: LooseExpr contextually types `ctx` as deeply required.
+const check: LooseExpr<Context, number | boolean> = expr(
+  ctx => ctx.a.b.c || true,
+);
 ```
 
 Only container types (nested objects, arrays) are made non-optional so that navigation type-checks without `?.`; the value ultimately read at the end of a path is still unioned with `undefined` whenever that path crossed an optional level, even if the leaf field itself isn't declared optional. For `{ a?: { b?: { c?: { d: string } } } }`, `ctx.a.b.c.d` type-checks without any `?.`, but its type is `string | undefined` (not `string`), since `a`/`b`/`c` being missing at runtime makes `d`'s read short-circuit to `undefined` too.
 
 `LooseContext` also recurses into array element types, so indexed access through an array of optional-field objects (`ctx.a[0].b.c`) works the same way — both at the type level and at runtime, since `optionalMemberAccess`/`loose: true` already short-circuits `a[b][c]`-style bracket access exactly like `a.b.c` (bracket vs. dot access aren't distinguished). Tuple element positions aren't preserved through `LooseContext`, since indexed access can't recover which tuple slot was read anyway.
 
-`looseExpr()` has the same compile-time output as `expr()` — both macros treat `ctx.a.b.c` as a plain property chain. `LooseExpr` values must therefore be evaluated with `optionalMemberAccess: true` (or `loose: true`); `expression()` only accepts the original optional context shape when one of those is set, and otherwise falls back to a `Compiled` function that requires the deeply-required shape (matching the fact that, without the option, a missing property really does throw):
+`expr()`'s compile-time behavior is unchanged — the macro already treats `ctx.a.b.c` as a plain property chain, which is exactly what `optionalMemberAccess`/`loose: true` needs at runtime. Because of that, `LooseExpr` values must be evaluated with `optionalMemberAccess: true` (or `loose: true`); `expression()` only accepts a `LooseExpr` argument when one of those is set, and otherwise falls back to a `Compiled` function that requires the deeply-required shape (matching the fact that, without the option, a missing property really does throw):
 
 ```ts
 import expression from '@conf-ts/expression';
@@ -460,7 +461,7 @@ compiled({}); // fine: `a` is optional in the original Context
 
 ## Runtime expression evaluator
 
-Install [`@conf-ts/expression`](packages/@conf-ts/expression) when an application needs to evaluate expressions emitted by `expr()` / `looseExpr()` or expressions supplied as strings:
+Install [`@conf-ts/expression`](packages/@conf-ts/expression) when an application needs to evaluate expressions emitted by `expr()` or expressions supplied as strings:
 
 ```bash
 pnpm add @conf-ts/expression
@@ -625,7 +626,7 @@ Object.assign(
 `createMacroProjectSnapshot`, `transformProject`, and `transform` are also exported by `@conf-ts/macro-transformer-native` with the same project and result shapes. The native snapshot builder scans and resolves the TypeScript project in Rust, so native-only callers do not need to load the TypeScript transformer. Its `transformed` record is sparse, and each file reports only itself and files actually used during macro evaluation. The compiler only receives ordinary TypeScript and never expands macros.
 
 `pruneExprTemplate` is an opt-in macro transform option and defaults to
-`false`. When enabled, an `exprTemplate()` / `looseExprTemplate()` instantiation evaluates a ternary
+`false`. When enabled, an `exprTemplate()` instantiation evaluates a ternary
 condition at build time when it depends only on template arguments and other
 statically analyzable values, then emits only the selected branch. Leaving the
 option disabled preserves the original expression text and avoids the extra

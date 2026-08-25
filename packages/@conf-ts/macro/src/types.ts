@@ -48,33 +48,20 @@ export type Expr<Context, ReturnType> = ((ctx: Context) => ReturnType) &
     readonly [EXPR_CALLBACK]: true;
   };
 
-// Presents a deeply-required view of Context to the looseExpr(...) callback for
+// Presents a deeply-required view of Context to the expr(...) callback for
 // type-checking only; the compiled output is identical to Expr and must be
 // evaluated with optionalMemberAccess/loose: true for the loosened types to
 // match runtime behavior.
-export type LooseExprCallback<Context, ReturnType> = (
-  ctx: LooseContext<Context>,
-) => ReturnType;
-
-export type LooseExpr<Context, ReturnType> = LooseExprCallback<
-  Context,
+export type LooseExpr<Context, ReturnType> = Expr<
+  LooseContext<Context>,
   ReturnType
-> &
-  string & {
-    readonly [EXPR_CALLBACK]: true;
-  };
+>;
 
 export type ExprTemplateCallback<
   Context,
   ReturnType,
   Parameters extends readonly unknown[],
 > = (ctx: Context, ...args: Parameters) => ReturnType;
-
-export type LooseExprTemplateCallback<
-  Context,
-  ReturnType,
-  Parameters extends readonly unknown[],
-> = (ctx: LooseContext<Context>, ...args: Parameters) => ReturnType;
 
 export type ExprTemplate<
   Context,

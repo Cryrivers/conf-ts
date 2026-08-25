@@ -234,27 +234,15 @@ export function Editor({
                 string & {
                   readonly [EXPR_CALLBACK]: true;
                 };
-              export type LooseExprCallback<Context, ReturnType> = (
-                ctx: LooseContext<Context>
-              ) => ReturnType;
-              export type LooseExpr<Context, ReturnType> =
-                LooseExprCallback<Context, ReturnType> &
-                  string & {
-                    readonly [EXPR_CALLBACK]: true;
-                  };
+              export type LooseExpr<Context, ReturnType> = Expr<
+                LooseContext<Context>,
+                ReturnType
+              >;
               export type ExprTemplateCallback<
                 Context,
                 ReturnType,
                 Parameters extends readonly unknown[],
               > = (ctx: Context, ...args: Parameters) => ReturnType;
-              export type LooseExprTemplateCallback<
-                Context,
-                ReturnType,
-                Parameters extends readonly unknown[],
-              > = (
-                ctx: LooseContext<Context>,
-                ...args: Parameters
-              ) => ReturnType;
               export type ExprTemplate<
                 Context,
                 ReturnType,
@@ -286,12 +274,6 @@ export function Editor({
                 Context = unknown,
                 ReturnType = unknown,
               >(callback: (ctx: Context) => ReturnType): Expr<Context, ReturnType>;
-              export function looseExpr<
-                Context = unknown,
-                ReturnType = unknown,
-              >(
-                callback: LooseExprCallback<Context, ReturnType>,
-              ): LooseExpr<Context, ReturnType>;
               export function exprTemplate<
                 Context = unknown,
                 ReturnType = unknown,
@@ -303,17 +285,6 @@ export function Editor({
                   Parameters
                 >,
               ): ExprTemplate<Context, ReturnType, Parameters>;
-              export function looseExprTemplate<
-                Context = unknown,
-                ReturnType = unknown,
-                Parameters extends readonly unknown[] = readonly unknown[],
-              >(
-                callback: LooseExprTemplateCallback<
-                  Context,
-                  ReturnType,
-                  Parameters
-                >,
-              ): LooseExprTemplate<Context, ReturnType, Parameters>;
               export function modifier<
                 Parameters extends readonly unknown[] = readonly unknown[],
                 Output = unknown,

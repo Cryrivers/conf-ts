@@ -4,7 +4,6 @@ objectProperty: a + 5
 arrayLiteral: "[1, 2, 3].includes(a)"
 destructuring: '{value: (a + 3 + 1 + 4 + 5) * 2, label: "ready", rest:{"extra": 9}}'
 composition: a > 10 && enabled
-looseTemplate: (optional.deep.value ?? 0) > 2
 directStaticString: '"42"'
 aliasStaticString: '"42"'
 namespaceStaticString: '"42"'

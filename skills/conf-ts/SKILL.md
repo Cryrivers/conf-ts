@@ -1,6 +1,6 @@
 ---
 name: conf-ts
-description: Write conf-ts config files - TypeScript that compiles to plain JSON/YAML. Use when authoring or reviewing .conf.ts files, deciding which TypeScript is allowed inside a config, using @conf-ts/macro (String/Number/Boolean, arrayMap/arrayFilter/arrayFlatMap, modifier, env, expr, looseExpr, exprTemplate, looseExprTemplate), configuring opt-in exprTemplate branch pruning, or interpreting a conf-ts compile error.
+description: Write conf-ts config files - TypeScript that compiles to plain JSON/YAML. Use when authoring or reviewing .conf.ts files, deciding which TypeScript is allowed inside a config, using @conf-ts/macro (String/Number/Boolean, arrayMap/arrayFilter/arrayFlatMap, modifier, env, expr, exprTemplate), configuring opt-in exprTemplate branch pruning, or interpreting a conf-ts compile error.
 ---
 
 # Writing conf-ts configs
@@ -21,7 +21,7 @@ build invokes conf-ts.
 | --------------------------------------------------------------------- | ------------------------------------------------- |
 | Literals, constants, enums, spreads, arithmetic, imports across files | Plain TypeScript — no macro imports               |
 | Casts, array transforms, value modifiers, build-time env injection    | `@conf-ts/macro` imports (requires macro mode)    |
-| A rule or formula that can only be resolved against runtime data      | `expr()` / `looseExpr()` / `exprTemplate()` / `looseExprTemplate()` |
+| A rule or formula that can only be resolved against runtime data      | `expr()` / `exprTemplate()` from `@conf-ts/macro` |
 
 Macro mode is a **source transform that runs before compilation**, not a
 compiler mode. If macro mode is off, macro calls are never expanded and the
@@ -52,7 +52,7 @@ that the build compiles in plain mode.
    must be static. Optional/default parameters, trailing rest, and one level of
    destructuring are supported. Invoke it at the config use site — never emit
    the modifier function itself.
-7. **Expression-template branch pruning is opt-in.** Set
+7. **`exprTemplate()` branch pruning is opt-in.** Set
    `pruneExprTemplate: true` on `transform`/`transformProject`,
    `TypeScriptMacroTransformPlugin`, or `NativeMacroTransformPlugin` to replace
    a ternary whose condition depends only on template arguments and static
@@ -81,18 +81,16 @@ that the build compiles in plain mode.
 - **Reference constants instead of repeating literals.** They fold to the same
   output, and inside `expr()` they fold into the emitted expression string, so
   there is no cost to naming a threshold.
-- **Prefer letting TypeScript infer `expr()`/`looseExpr()`/`exprTemplate()`/`looseExprTemplate()` types; only fall
+- **Prefer letting TypeScript infer `expr()`/`exprTemplate()` types; only fall
   back to explicit `expr<Context, Result>(...)` when inference can't produce
   the right type.** Annotate the callback's own `ctx` parameter —
   `expr((ctx: UserContext) => ...)` — and `ReturnType` (and, for
   `exprTemplate`, later parameter types) infer correctly with nothing else
   written. Write the full explicit type argument list only when the return
   value needs its shape checked against a declared type that inference alone
-  won't enforce (typically an object/array literal). Use
-  `looseExpr<Context, Result>(...)` when the context needs loose member access;
-  its return type is inferred as `LooseExpr` directly from the macro. Use
-  `looseExprTemplate<Context, Result, Parameters>(...)` for reusable loose
-  templates. Never write a _partial_ type argument
+  won't enforce (typically an object/array literal), or when using
+  `LooseExpr`/`LooseExprTemplate`, whose loosened context type can only be
+  reached by annotating the binding. Never write a _partial_ type argument
   list such as `expr<UserContext>(...)` — it silently defaults the remaining
   type parameters to `unknown` instead of inferring them, which type-checks
   but throws away return-type safety.
@@ -112,5 +110,5 @@ Read the file that matches the task; each is self-contained.
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `references/config-syntax.md` | Every supported/unsupported TypeScript construct, enum semantics, key ordering, JS serialization, multi-file and path aliases |
 | `references/macros.md`        | `String`/`Number`/`Boolean`, `arrayMap`/`arrayFilter`/`arrayFlatMap`, `modifier`, `env`, nesting rules, import handling       |
-| `references/expr.md`          | Expression macros, optional/default parameters, opt-in branch pruning, composition, quoting, and emitted grammar             |
+| `references/expr.md`          | `expr()`, `exprTemplate()`, optional/default parameters, opt-in branch pruning, composition, quoting, and emitted grammar     |
 | `references/errors.md`        | Error message → cause → fix                                                                                                   |

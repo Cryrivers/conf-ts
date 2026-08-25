@@ -1,16 +1,14 @@
 import {
   expr,
   exprTemplate,
-  looseExprTemplate,
-  String as macroString,
   String,
+  String as macroString,
 } from '@conf-ts/macro';
 import * as macros from '@conf-ts/macro';
 
 type Context = {
   a: number;
   enabled: boolean;
-  optional?: { deep?: { value?: number } };
 };
 
 enum Offset {
@@ -55,9 +53,6 @@ const destructured = exprTemplate<
 const above = exprTemplate<Context, boolean, [number]>(
   (ctx, minimum) => ctx.a > minimum,
 );
-const looseAbove = looseExprTemplate<Context, boolean, [number]>(
-  (ctx, minimum) => (ctx.optional.deep.value ?? 0) > minimum,
-);
 const directStaticString = exprTemplate<Context, string, [number]>(
   (ctx, value) => String(value),
 );
@@ -90,7 +85,6 @@ export default {
     ...spreadArgs,
   ),
   composition: expr<Context, boolean>(ctx => aboveTen(ctx) && ctx.enabled),
-  looseTemplate: looseAbove(2),
   directStaticString: directStaticString(42),
   aliasStaticString: aliasStaticString(42),
   namespaceStaticString: namespaceStaticString(42),

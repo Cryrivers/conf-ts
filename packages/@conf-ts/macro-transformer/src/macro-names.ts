@@ -7,9 +7,7 @@ export const MACRO_FUNCTION_NAMES = [
   'arrayFlatMap',
   'arrayFilter',
   'expr',
-  'looseExpr',
   'exprTemplate',
-  'looseExprTemplate',
   'modifier',
 ] as const;
 

@@ -165,8 +165,8 @@ pub fn collect_enums(
   for stmt in &program.body {
     let decl = match stmt {
       Statement::TSEnumDeclaration(e) => Some(e.as_ref()),
-      Statement::ExportDeclaration(export) => {
-        if let Declaration::TSEnumDeclaration(e) = &export.declaration {
+      Statement::ExportNamedDeclaration(export) => {
+        if let Some(Declaration::TSEnumDeclaration(e)) = &export.declaration {
           Some(e.as_ref())
         } else {
           None

@@ -14,12 +14,12 @@ import {
 import { MACRO_FUNCTION_NAMES } from './macro-names';
 import type { MacroEvaluationOptions, QuoteStyle } from './types';
 
-// Macro functions (other than `expr`/`looseExpr` themselves) that can be
-// called inside an expression callback body. A call to one of these is only
-// inlineable when it doesn't touch the context parameter, since it must be
-// resolvable entirely at compile time.
+// Macro functions (other than `expr` itself) that can be called inside an
+// expr() callback body. A call to one of these is only inlineable when it
+// doesn't touch the context parameter, since it must be resolvable entirely
+// at compile time.
 const EXPR_INLINEABLE_MACROS = new Set<string>(
-  MACRO_FUNCTION_NAMES.filter(name => name !== 'expr' && name !== 'looseExpr'),
+  MACRO_FUNCTION_NAMES.filter(name => name !== 'expr'),
 );
 
 function sourceLocation(
@@ -749,10 +749,7 @@ function isImportedExprCall(
   node: ts.CallExpression,
   typeChecker: ts.TypeChecker,
 ): boolean {
-  return (
-    isImportedMacroCall(node, typeChecker, 'expr') ||
-    isImportedMacroCall(node, typeChecker, 'looseExpr')
-  );
+  return isImportedMacroCall(node, typeChecker, 'expr');
 }
 
 export type CompileTimeTemplateKind = 'exprTemplate' | 'modifier';
@@ -785,10 +782,7 @@ function importedCompileTimeTemplateKind(
   call: ts.CallExpression,
   typeChecker: ts.TypeChecker,
 ): CompileTimeTemplateKind | undefined {
-  if (
-    isImportedMacroCall(call, typeChecker, 'exprTemplate') ||
-    isImportedMacroCall(call, typeChecker, 'looseExprTemplate')
-  ) {
+  if (isImportedMacroCall(call, typeChecker, 'exprTemplate')) {
     return 'exprTemplate';
   }
   if (isImportedMacroCall(call, typeChecker, 'modifier')) {
@@ -2065,7 +2059,7 @@ function evaluateExpr(
   context?: { [name: string]: any },
   options?: MacroOptions,
 ): string | undefined {
-  if (callee !== 'expr' && callee !== 'looseExpr') {
+  if (callee !== 'expr') {
     return undefined;
   }
 
