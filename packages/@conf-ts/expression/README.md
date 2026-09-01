@@ -1,6 +1,6 @@
 ## @conf-ts/expression
 
-A JavaScript-like runtime expression evaluator. It turns a serialized expression string — typically emitted by `expr()` from [`@conf-ts/macro`](../macro) — into a reusable function that evaluates against a plain data object, or passes a callback-form `Expr` value straight through so its closure keeps working.
+A JavaScript-like runtime expression evaluator and ahead-of-time compiler. It turns a serialized expression string — typically emitted by `expr()` from [`@conf-ts/macro`](../macro) — into a reusable function that evaluates against a plain data object.
 
 ## Installation
 
@@ -18,11 +18,29 @@ const calculate = expression('subtotal * (1 + taxRate)');
 calculate({ subtotal: 100, taxRate: 0.08 }); // 108
 ```
 
-Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional this way: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
+Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional this way: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error.
 
-Parsed string expressions are cached in a 1,000-entry LRU cache keyed by source and option mode, so parsing the same source repeatedly returns the same function. Callback expressions preserve their original identity. The package's public API is intentionally evaluation-only — it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import [`@conf-ts/expr-core`](../expr-core) instead.
+Interpreted and successfully compiled expressions use separate 1,000-entry LRU caches keyed by source and option mode, so asking for the same path repeatedly returns the same function. A CSP fallback is intentionally not cached, allowing a later call to compile after policy or runtime conditions change. Tooling that needs lexer/parser primitives should import [`@conf-ts/expr-core`](../expr-core) instead.
 
 `LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr<Context, ReturnType>` for `Context` types with nested optional properties, letting an `expr()` callback body skip `?.` at every level while `@conf-ts/expression` still enforces `optionalMemberAccess`/`loose: true` at evaluation time. See the [root README](../../../README.md#runtime-expression-evaluator) for the full type-level explanation.
+
+## Ahead-of-time compilation
+
+`compile()` walks the parsed AST once and emits a specialized JavaScript function. The generated code removes the interpreter's per-node dispatch on hot evaluation paths while preserving the same expression semantics.
+
+```ts
+import { compile } from '@conf-ts/expression';
+
+const calculate = compile('subtotal * (1 + taxRate)', { strict: true });
+
+calculate({ subtotal: 100, taxRate: 0.08 }); // 108
+```
+
+Compilation is explicit because it uses `new Function`. If the runtime or Content Security Policy rejects dynamic code generation, `compile(source)` returns an interpreter-backed function. Pass `{ strict: true }` to throw `ExpressionCompileError` instead, which is useful for tests and for confirming that a known hot path really compiled.
+
+The compiler never evaluates or interpolates the raw source as JavaScript. It parses with `@conf-ts/expr-core`, emits only whitelisted operators and generated variable names, JSON-encodes every source-derived string, and keeps root identifier resolution behind the same own-property-only lookup as the interpreter. The expression can still use capabilities deliberately supplied through its environment; neither execution mode is a complete security sandbox.
+
+Compile only reusable hot expressions. Parsing plus code generation costs more than building an interpreter closure, so one-off evaluations do not amortize the cold-start cost.
 
 ## Supported syntax
 
@@ -57,6 +75,45 @@ Within the supported grammar, serialized expressions follow JavaScript semantics
 - Errors from runtime callbacks and serialized compiler output are expected to agree by error type and timing; engine-specific message text is not part of the contract.
 
 This package is an evaluator, not a full security sandbox on its own: expressions can still read objects and invoke functions exposed through the environment. Do not expose capabilities that untrusted expressions must not access.
+
+## Benchmark
+
+Run the reproducible benchmark with:
+
+```bash
+pnpm --filter @conf-ts/expression bench
+```
+
+The benchmark checks result parity first, warms both paths, interleaves interpreter and compiler measurements, and retains the best of eight rounds to reduce scheduler and thermal noise. A representative run on Node 24.18.0, macOS arm64:
+
+| Case                               | Interpreter |    Compiled | Speedup |
+| ---------------------------------- | ----------: | ----------: | ------: |
+| Arithmetic                         | 118.8 ns/op |  46.1 ns/op |   2.58x |
+| Deep member access                 | 244.6 ns/op |  81.7 ns/op |   2.99x |
+| Wide expression (20 values)        | 795.2 ns/op | 323.2 ns/op |   2.46x |
+| `filter`/`map`/`reduce` callbacks  | 10.72 µs/op |  1.88 µs/op |   5.70x |
+| Object/array/template construction | 541.2 ns/op | 416.8 ns/op |   1.30x |
+
+Cold construction was about 1.35 µs per interpreter closure versus 9.08 µs per generated function in the same run. Absolute timings vary by machine; the benchmark script is the source of truth.
+
+### Memory benchmark
+
+Run the memory benchmark separately:
+
+```bash
+pnpm --filter @conf-ts/expression bench:memory
+```
+
+Every retained-memory sample runs in a fresh `--expose-gc` process, starts from an equally warmed baseline, creates and retains 1,000 unique expressions, forces several full GC passes, and takes snapshots both before and after evaluating each function once. The following is a representative median-of-seven run on the same Node 24.18.0 macOS arm64 machine:
+
+| Mode        | Heap after construction | Heap after first evaluation | Heap ratio | V8 code + metadata | V8 bytecode + metadata | RSS delta | Peak construction heap |
+| ----------- | ----------------------: | --------------------------: | ---------: | -----------------: | ---------------------: | --------: | ---------------------: |
+| Interpreter |              655 B/expr |                  683 B/expr |      1.00x |         129 B/expr |               0 B/expr |  6.00 MiB |               1.87 MiB |
+| Compiled    |           1.00 KiB/expr |               1.29 KiB/expr |      1.93x |         126 B/expr |             168 B/expr |  5.17 MiB |               2.35 MiB |
+
+The script also estimates temporary heap allocation over 1,000 hot `filter`/`map`/`reduce` evaluations without forcing GC inside the measured batch. The median was 522 B/evaluation for the interpreter and 804 B/evaluation for compiled code (1.54x). This is allocation churn, not retained memory; in the CPU benchmark the same callback-heavy case was about 5.7x faster when compiled.
+
+Treat RSS as page-granular process noise, especially for deltas this small. V8's code and bytecode counters overlap process/heap memory, so they are diagnostic columns and must not be added to heap or RSS. Absolute values depend on the Node/V8 build; rerun the script on the deployment runtime when memory limits matter.
 
 ## Comparison with `expr-parser`
 

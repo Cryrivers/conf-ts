@@ -225,8 +225,12 @@ describe('LooseExpr type', () => {
 });
 
 describe('public API', () => {
-  it('only exposes the evaluation entrypoint at runtime', () => {
-    expect(Object.keys(expressionModule).sort()).toEqual(['default']);
+  it('exposes evaluation and compilation without parser internals', () => {
+    expect(Object.keys(expressionModule).sort()).toEqual([
+      'ExpressionCompileError',
+      'compile',
+      'default',
+    ]);
     expect(expressionModule).not.toHaveProperty('parse');
     expect(expressionModule).not.toHaveProperty('tokenize');
     expect(expressionModule).not.toHaveProperty('encodeStringLiteral');

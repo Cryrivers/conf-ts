@@ -1,26 +1,13 @@
-import {
-  formatInvalid,
-  formatParseError,
-  parse,
-  tokenize,
-  type ASTNode,
-} from '@conf-ts/expr-core';
+import { formatInvalid } from '@conf-ts/expr-core';
 import type { Expr, LooseExpr } from '@conf-ts/macro';
 
+import { compile, ExpressionCompileError } from './compile';
 import { evaluate, type EvalOptions } from './eval';
-
-type ExpressionOptions = {
-  optionalMemberAccess?: boolean;
-  /** Alias for `optionalMemberAccess`. */
-  loose?: boolean;
-};
-
-type Compiled<Context = unknown, ReturnType = unknown> = (
-  env: Context,
-) => ReturnType;
+import { parseSource } from './parse';
+import type { Compiled, CompileOptions, ExpressionOptions } from './types';
 
 /**
- * LRU Cache for compiled expressions.
+ * LRU cache for interpreter-backed expressions.
  * Prevents unbounded memory growth in long-running applications.
  */
 const MAX_CACHE_SIZE = 1000;
@@ -77,37 +64,19 @@ function expression<Context = unknown, ReturnType = unknown>(
     return cached as Compiled<Context, ReturnType>;
   }
 
-  let ast: ASTNode | null = null;
-  try {
-    const tokens = tokenize(expr);
-    // special case: leading ']'
-    if (
-      tokens.length > 0 &&
-      tokens[0].kind === 'punct' &&
-      tokens[0].value === ']'
-    ) {
-      const fn: Compiled<Context, ReturnType> = () => undefined as ReturnType;
-      cacheSet(cacheKey, fn);
-      return fn;
-    }
-    ast = parse(tokens, expr);
-  } catch (err) {
-    if (err instanceof Error) {
-      throw err;
-    }
-    throw new Error(formatInvalid(expr));
-  }
-
-  if (!ast) {
-    // grammar error
-    throw new Error(formatParseError(expr));
+  const ast = parseSource(expr);
+  if (ast === null) {
+    const fn: Compiled<Context, ReturnType> = () => undefined as ReturnType;
+    cacheSet(cacheKey, fn);
+    return fn;
   }
 
   const fn: Compiled<Context, ReturnType> = (env: Context) =>
-    evaluate(ast, env, evalOptions) as ReturnType;
+    evaluate(ast, env as Record<string, unknown>, evalOptions) as ReturnType;
   cacheSet(cacheKey, fn);
   return fn;
 }
 
 export default expression;
-export type { Expr, ExpressionOptions, LooseExpr };
+export { compile, ExpressionCompileError };
+export type { Compiled, CompileOptions, Expr, ExpressionOptions, LooseExpr };

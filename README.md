@@ -468,14 +468,18 @@ pnpm add @conf-ts/expression
 ```
 
 ```ts
-import expression from '@conf-ts/expression';
+import expression, { compile } from '@conf-ts/expression';
 
 const calculate = expression('subtotal * (1 + taxRate)');
+const calculateFast = compile('subtotal * (1 + taxRate)', { strict: true });
 
 calculate({ subtotal: 100, taxRate: 0.08 }); // 108
+calculateFast({ subtotal: 100, taxRate: 0.08 }); // 108
 ```
 
-The default export accepts either a serialized expression string or an `Expr` callback and returns a reusable function. String expressions are parsed; callback expressions are returned directly so their closures remain available. The function receives a plain environment object whose properties become the serialized expression's root identifiers.
+The default export parses a serialized expression and evaluates its AST through the runtime interpreter. `compile()` instead emits a specialized JavaScript function for reusable hot paths. Both functions receive a plain environment object whose properties become the serialized expression's root identifiers. Values emitted by the `expr()` macro are serialized strings at runtime even though the `Expr` type also carries the callback signature for authoring-time inference.
+
+`compile()` uses `new Function`; when dynamic code generation is blocked it falls back to the interpreter unless `{ strict: true }` is set. Source text is never evaluated directly: code generation starts from the validated AST, emits only supported operators, JSON-encodes source-derived strings, and retains own-property-only root lookup. See the [package benchmark and implementation notes](packages/@conf-ts/expression/README.md#ahead-of-time-compilation).
 
 ### Runtime expression syntax
 
@@ -499,9 +503,9 @@ The parser applies JavaScript-style precedence to the supported operators, inclu
 <details>
 <summary>Options, caching, safety, and <code>LooseExpr</code> evaluation</summary>
 
-Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error. Callback-form `Expr` values ignore this option.
+Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. The same options work with `compile()`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error.
 
-Parsed string expressions are cached in a 1,000-entry LRU cache by source and option mode, so parsing the same source repeatedly returns the same function for the same mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Callback expressions preserve their original identity. The package public API is intentionally evaluation-only: it exports the default `expression()` function and evaluation-facing TypeScript types. Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
+Interpreted and compiled expressions have separate 1,000-entry LRU caches by source and option mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
 
 Within the supported grammar, serialized expressions follow JavaScript semantics:
 
