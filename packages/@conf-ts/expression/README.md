@@ -26,7 +26,7 @@ Interpreted and successfully compiled expressions use separate 1,000-entry LRU c
 
 ## Ahead-of-time compilation
 
-`compile()` walks the parsed AST once and emits a specialized JavaScript function. The generated code removes the interpreter's per-node dispatch on hot evaluation paths while preserving the same expression semantics.
+`compile()` walks the parsed AST once and emits a specialized JavaScript function. The generated code removes the interpreter's per-node dispatch on hot evaluation paths while preserving the same expression semantics: member chains and calls become native property reads and calls behind tiny guards that V8 inlines, object/array/template literals become native literals, and arrow callbacks become real closures whose parameters are local variables rather than per-call copies of the environment.
 
 ```ts
 import { compile } from '@conf-ts/expression';
@@ -73,6 +73,7 @@ Within the supported grammar, serialized expressions follow JavaScript semantics
 - A computed object key (`{ [expr]: value }`) coerces its key the same way computed member access does: a `symbol` value is used as-is, anything else is coerced via `String(...)`.
 - Array spread (`[...a, b]`) consumes `a` through its iterator protocol like native `[...a]`, so a non-iterable or nullish source throws `TypeError`. Object spread (`{ ...a }`) instead copies `a`'s own enumerable properties and silently no-ops for a non-object/nullish source, matching native `{...a}`.
 - Errors from runtime callbacks and serialized compiler output are expected to agree by error type and timing; engine-specific message text is not part of the contract.
+- Each arrow callback call sees the environment as it was when that call started, in both modes. The interpreter gets there by copying the whole environment per call; compiled callbacks read only the outer names they reference. Values are identical, but only the interpreter invokes getters (or Proxy traps) of environment properties a callback never reads.
 
 This package is an evaluator, not a full security sandbox on its own: expressions can still read objects and invoke functions exposed through the environment. Do not expose capabilities that untrusted expressions must not access.
 
@@ -88,13 +89,13 @@ The benchmark checks result parity first, warms both paths, interleaves interpre
 
 | Case                               | Interpreter |    Compiled | Speedup |
 | ---------------------------------- | ----------: | ----------: | ------: |
-| Arithmetic                         | 118.8 ns/op |  46.1 ns/op |   2.58x |
-| Deep member access                 | 244.6 ns/op |  81.7 ns/op |   2.99x |
-| Wide expression (20 values)        | 795.2 ns/op | 323.2 ns/op |   2.46x |
-| `filter`/`map`/`reduce` callbacks  | 10.72 µs/op |  1.88 µs/op |   5.70x |
-| Object/array/template construction | 541.2 ns/op | 416.8 ns/op |   1.30x |
+| Arithmetic                         | 117.4 ns/op |  26.1 ns/op |   4.50x |
+| Deep member access                 | 242.8 ns/op |  23.1 ns/op |  10.53x |
+| Wide expression (20 values)        | 783.8 ns/op | 175.7 ns/op |   4.46x |
+| `filter`/`map`/`reduce` callbacks  | 10.61 µs/op | 375.8 ns/op |  28.23x |
+| Object/array/template construction | 528.6 ns/op | 130.2 ns/op |   4.06x |
 
-Cold construction was about 1.35 µs per interpreter closure versus 9.08 µs per generated function in the same run. Absolute timings vary by machine; the benchmark script is the source of truth.
+Cold construction was about 1.50 µs per interpreter closure versus 11.39 µs per generated function in the same run; nearly all of the latter is V8 compiling the generated source in `new Function`. Root identifier lookups dominate what remains of compiled evaluation time, because each one keeps the own-property check described under [Semantics and safety](#semantics-and-safety). Absolute timings vary by machine; the benchmark script is the source of truth.
 
 ### Memory benchmark
 
@@ -108,10 +109,10 @@ Every retained-memory sample runs in a fresh `--expose-gc` process, starts from 
 
 | Mode        | Heap after construction | Heap after first evaluation | Heap ratio | V8 code + metadata | V8 bytecode + metadata | RSS delta | Peak construction heap |
 | ----------- | ----------------------: | --------------------------: | ---------: | -----------------: | ---------------------: | --------: | ---------------------: |
-| Interpreter |              655 B/expr |                  683 B/expr |      1.00x |         129 B/expr |               0 B/expr |  6.00 MiB |               1.87 MiB |
-| Compiled    |           1.00 KiB/expr |               1.29 KiB/expr |      1.93x |         126 B/expr |             168 B/expr |  5.17 MiB |               2.35 MiB |
+| Interpreter |              655 B/expr |                  683 B/expr |      1.00x |         129 B/expr |               0 B/expr |  6.06 MiB |               1.93 MiB |
+| Compiled    |           1.03 KiB/expr |               1.33 KiB/expr |      2.00x |         137 B/expr |             184 B/expr |  5.19 MiB |               2.71 MiB |
 
-The script also estimates temporary heap allocation over 1,000 hot `filter`/`map`/`reduce` evaluations without forcing GC inside the measured batch. The median was 522 B/evaluation for the interpreter and 804 B/evaluation for compiled code (1.54x). This is allocation churn, not retained memory; in the CPU benchmark the same callback-heavy case was about 5.7x faster when compiled.
+The script also estimates temporary heap allocation over 1,000 hot `filter`/`map`/`reduce` evaluations without forcing GC inside the measured batch. The median was 522 B/evaluation for the interpreter and 555 B/evaluation for compiled code (1.06x). This is allocation churn, not retained memory; in the CPU benchmark the same callback-heavy case was about 28x faster when compiled.
 
 Treat RSS as page-granular process noise, especially for deltas this small. V8's code and bytecode counters overlap process/heap memory, so they are diagnostic columns and must not be added to heap or RSS. Absolute values depend on the Node/V8 build; rerun the script on the deployment runtime when memory limits matter.
 
