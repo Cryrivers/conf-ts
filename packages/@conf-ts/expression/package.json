@@ -49,11 +49,11 @@
   "devDependencies": {
     "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@vitest/coverage-v8": "4.1.11",
-    "oxlint": "^1.79.0",
-    "prettier": "^3.9.6",
-    "tsdown": "^0.22.14",
+    "@vitest/coverage-v8": "5.0.4",
+    "oxlint": "^1.88.0",
+    "prettier": "^3.9.10",
+    "tsdown": "^0.23.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.4"
   }
 }
