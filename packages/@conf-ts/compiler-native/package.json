@@ -42,7 +42,7 @@
     "build:debug": "napi build --platform",
     "format": "prettier . -w && cargo fmt",
     "lint": "oxlint .",
-    "prepublishOnly": "napi prepublish -t npm",
+    "prepublishOnly": "napi prepublish -t npm --skip-optional-publish",
     "preversion": "pnpm run build:debug && git add .",
     "version": "napi version"
   },

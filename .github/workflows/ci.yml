@@ -17,6 +17,8 @@ on:
       - docs/**
   pull_request:
     types: [opened, synchronize]
+  # Manually (re-)run a release from main, e.g. to finish a partially failed publish.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -189,7 +191,7 @@ jobs:
       id-token: write
     # needs: [native-lint, test-macOS-windows-binding, test-linux-binding]
     needs: [build, native-lint, native-build]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     steps:
       - uses: actions/checkout@v6
 
@@ -249,10 +251,16 @@ jobs:
       - name: Determine publish tag
         id: tag
         run: |
-          if git log -1 --pretty=%B | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$"; then
+          # Pushes release only from version commits; manual runs release the current package version.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            release=$(node -p "require('./packages/@conf-ts/compiler/package.json').version")
+          else
+            release=$(git log -1 --pretty=%B)
+          fi
+          if echo "$release" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$"; then
             echo "tag=" >> $GITHUB_OUTPUT
             echo "reason=stable release"
-          elif git log -1 --pretty=%B | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+"; then
+          elif echo "$release" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+"; then
             echo "tag=--tag next" >> $GITHUB_OUTPUT
             echo "reason=pre-release"
           else
