@@ -119,7 +119,7 @@ The skill lives in [`skills/conf-ts`](skills/conf-ts) and is scoped to writing c
 | `@conf-ts/compiler-native`          | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
 | `@conf-ts/expr-core`                | Shared expression lexer, parser, AST types, and parse errors              |
 | `@conf-ts/expression`               | JavaScript-like runtime expression evaluator                              |
-| `@conf-ts/macro`                    | Macro functions consumed by the transform                                 |
+| `@conf-ts/macro`                    | Macro functions consumed by the transform; Zod schemas for `Expr` values  |
 | `@conf-ts/macro-transformer`        | TypeScript source transformer for macros                                  |
 | `@conf-ts/macro-transformer-native` | Oxc-backed native source transformer                                      |
 | `@conf-ts/webpack-plugin`           | Webpack plugin that emits generated JSON/YAML files                       |
@@ -456,6 +456,74 @@ import expression from '@conf-ts/expression';
 const compiled = expression(check, { loose: true });
 compiled({}); // fine: `a` is optional in the original Context
 ```
+
+</details>
+
+#### Validating `Expr` values with Zod
+
+`@conf-ts/macro/zod` provides [Zod](https://zod.dev) 4 schemas for `Expr` and `LooseExpr` values. Zod is an optional peer dependency, needed only when you import this entry point, which (unlike `@conf-ts/macro` itself) is meant for runtime code.
+
+```ts
+// config.schema.ts
+import { exprSchema, looseExprSchema } from '@conf-ts/macro/zod';
+import * as z from 'zod';
+
+const UserContext = z.object({
+  user: z.object({
+    age: z.number(),
+    status: z.enum(['active', 'banned']),
+    profile: z.object({ verified: z.boolean() }).optional(),
+  }),
+});
+
+export const Config = z.object({
+  canEnter: exprSchema({ context: UserContext, returns: z.boolean() }),
+  verified: looseExprSchema({
+    context: UserContext,
+    returns: z.boolean().optional(),
+  }),
+});
+
+// { canEnter: Expr<{ user: ... }, boolean>;
+//   verified: LooseExpr<{ user: ... }, boolean | undefined> }
+export type Config = z.infer<typeof Config>;
+```
+
+`z.infer` carries the `context` and `returns` output types into `Expr`/`LooseExpr`, so the same schema types the config source, and `expr()` callbacks need no type arguments:
+
+```ts
+// config.conf.ts
+import { expr } from '@conf-ts/macro';
+
+import type { Config } from './config.schema';
+
+export default {
+  canEnter: expr(ctx => ctx.user.age >= 18 && ctx.user.status === 'active'),
+  verified: expr(ctx => ctx.user.profile.verified), // LooseExpr: no `?.`
+} satisfies Config;
+```
+
+At runtime, parsing the compiled output checks every expression before it is evaluated:
+
+```ts
+import expression from '@conf-ts/expression';
+
+import raw from './config.generated.json';
+import { Config } from './config.schema';
+
+const config = Config.parse(raw);
+const canEnter = expression(config.canEnter); // Compiled<{ user: ... }, boolean>
+const verified = expression(config.verified, { loose: true });
+```
+
+<details>
+<summary>What the schemas check</summary>
+
+- **Syntax.** The value must be a string that `@conf-ts/expression` can parse.
+- **Context.** With `context`, each root identifier must be a property of the context schema (or the runtime builtin `String`, `Number`, or `Boolean`), and statically known property paths must exist: `user.agee` fails with `Property "agee" does not exist on "user" (did you mean "age"?)`. Optional, nullable, default, pipe, lazy, union, intersection, record, array, and tuple schemas are followed, and members of strings, numbers, arrays, and other built-ins are checked against their prototypes. A union member is enough for a property to exist, and nullability isn't enforced, because guards such as `a && a.b` aren't followed. Values typed `any`, `unknown`, `z.custom()`, or by a transform aren't checked further, nor are callback parameters.
+- **Result.** With `returns`, the result type is inferred where it is certain (literals, operators, templates, `String()`/`Number()`/`Boolean()` calls, and context paths) and must overlap the schema's: `user.age` fails `returns: z.boolean()`. When every possible result is a literal, including each branch of a conditional, each one is parsed with the schema, so `user.age >= 18 ? "adult" : "adlut"` fails `z.enum(['adult', 'minor'])`. Calls and other results that can't be inferred are accepted.
+
+Problems are regular Zod issues at the config path: `invalid_type` for a non-string, otherwise `custom` with `params.reason` set to `syntax`, `unknown_context_property`, `unknown_property`, or `return_type`. Without schemas, `exprSchema<Context, ReturnType>()` still infers the given types but only checks syntax. `context` and `returns` also accept Zod Mini schemas. `looseExprSchema()` checks the same things while accounting for loose access yielding `undefined`; evaluate its values with `loose: true`.
 
 </details>
 

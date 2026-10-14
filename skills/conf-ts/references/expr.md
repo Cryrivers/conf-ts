@@ -86,6 +86,20 @@ produce the type you actually want:
   across sibling declarations instead of repeating a call-site type argument
   list on each one.
 
+- **The project already has a config type, e.g. from Zod.** Schemas built with
+  `exprSchema()`/`looseExprSchema()` from `@conf-ts/macro/zod` make `z.infer`
+  produce `Expr`/`LooseExpr` with the right context and return types. Import
+  that type with `import type` and end the default export with `satisfies` —
+  every callback is then typed without type arguments or annotations:
+
+  ```ts
+  import type { Config } from './config.schema'; // z.infer<typeof Config>
+
+  export default {
+    canEnter: expr(ctx => ctx.user.age >= 18),
+  } satisfies Config;
+  ```
+
 **Never write a partial type argument list.** `expr<Context>(ctx => ...)`
 compiles without error, but it does *not* infer `ReturnType` from the
 callback — it silently defaults to `unknown`, discarding return-type safety

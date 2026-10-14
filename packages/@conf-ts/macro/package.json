@@ -28,11 +28,32 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./zod": {
+      "import": {
+        "types": "./dist/zod.d.mts",
+        "default": "./dist/zod.mjs"
+      },
+      "require": {
+        "types": "./dist/zod.d.cts",
+        "default": "./dist/zod.cjs"
+      }
     }
   },
   "scripts": {
     "build": "tsdown",
     "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@conf-ts/expr-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
@@ -40,6 +61,7 @@
     "@types/webpack-env": "^1.18.8",
     "prettier": "^3.9.10",
     "tsdown": "^0.23.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "zod": "^4.6.7"
   }
 }

@@ -1,0 +1,3 @@
+canEnter: user.age >= minimumAge && user.roles.length >= 1
+tier: 'user.roles.includes("admin") ? "staff" : "member"'
+verified: user.profile.verified

@@ -133,13 +133,15 @@ const evaluateCall = (
 // can't be folded to a compile-time constant. An env value of the same name
 // always takes precedence.
 //
-// This must stay in sync with its two counterparts, since nothing enforces
+// This must stay in sync with its counterparts, since nothing enforces
 // agreement across the package boundary between them (@conf-ts/expression
-// has no dependency on the macro transformer packages):
+// has no dependency on the macro packages):
 //   - macro-transformer/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
 //   - macro-transformer-native/src/transform.rs: runtime fallback macro matching
-// If a name is added to those two but not here, the compiler emits runtime
-// call text for it that this evaluator can't resolve, and it throws
+//   - macro/src/expr-check.ts: BUILTIN_RESULTS, the names @conf-ts/macro/zod
+//     accepts in an expression even when its context schema lacks them
+// If a name is added to the transformers but not here, the compiler emits
+// runtime call text for it that this evaluator can't resolve, and it throws
 // "Expression value is not callable" at request time instead of compile time.
 const GLOBAL_BUILTINS: Env = {
   String,
