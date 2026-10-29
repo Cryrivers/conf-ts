@@ -134,11 +134,11 @@ const evaluateCall = (
 // always takes precedence.
 //
 // This must stay in sync with its counterparts, since nothing enforces
-// agreement across the package boundary between them (@conf-ts/expression
-// has no dependency on the macro packages):
+// agreement between them (@conf-ts/expression has no dependency on the macro
+// transformer packages):
 //   - macro-transformer/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
 //   - macro-transformer-native/src/transform.rs: runtime fallback macro matching
-//   - macro/src/expr-check.ts: BUILTIN_RESULTS, the names @conf-ts/macro/zod
+//   - expr-check.ts: BUILTIN_RESULTS, the names @conf-ts/expression/zod
 //     accepts in an expression even when its context schema lacks them
 // If a name is added to the transformers but not here, the compiler emits
 // runtime call text for it that this evaluator can't resolve, and it throws

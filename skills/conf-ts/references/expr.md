@@ -87,10 +87,11 @@ produce the type you actually want:
   list on each one.
 
 - **The project already has a config type, e.g. from Zod.** Schemas built with
-  `exprSchema()`/`looseExprSchema()` from `@conf-ts/macro/zod` make `z.infer`
-  produce `Expr`/`LooseExpr` with the right context and return types. Import
-  that type with `import type` and end the default export with `satisfies` —
-  every callback is then typed without type arguments or annotations:
+  `ExprSchema()`/`LooseExprSchema()` from `@conf-ts/expression/zod` make
+  `z.infer` produce `Expr`/`LooseExpr` with the right context and return types.
+  Import that type with `import type` and end the default export with
+  `satisfies` — every callback is then typed without type arguments or
+  annotations:
 
   ```ts
   import type { Config } from './config.schema'; // z.infer<typeof Config>

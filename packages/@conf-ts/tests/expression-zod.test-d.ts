@@ -1,10 +1,5 @@
+import { ExprSchema, LooseExprSchema } from '@conf-ts/expression/zod';
 import { expr, type Expr, type LooseExpr } from '@conf-ts/macro';
-import {
-  exprSchema,
-  looseExprSchema,
-  type ExprSchema,
-  type LooseExprSchema,
-} from '@conf-ts/macro/zod';
 import { describe, expectTypeOf, it } from 'vitest';
 import * as z from 'zod';
 import * as zm from 'zod/mini';
@@ -17,9 +12,9 @@ const UserContext = z.object({
 });
 type UserContext = z.infer<typeof UserContext>;
 
-describe('exprSchema() types', () => {
+describe('ExprSchema() types', () => {
   it('infers Context and ReturnType from the context and returns schemas', () => {
-    const canEnter = exprSchema({ context: UserContext, returns: z.boolean() });
+    const canEnter = ExprSchema({ context: UserContext, returns: z.boolean() });
     expectTypeOf(canEnter).toEqualTypeOf<ExprSchema<UserContext, boolean>>();
     expectTypeOf<z.infer<typeof canEnter>>().toEqualTypeOf<
       Expr<UserContext, boolean>
@@ -28,7 +23,7 @@ describe('exprSchema() types', () => {
       Expr<UserContext, boolean>
     >();
 
-    const score = looseExprSchema({
+    const score = LooseExprSchema({
       context: UserContext,
       returns: z.number().optional(),
     });
@@ -44,21 +39,21 @@ describe('exprSchema() types', () => {
     expectTypeOf<z.infer<ExprSchema<UserContext, number>>>().toEqualTypeOf<
       Expr<UserContext, number>
     >();
-    expectTypeOf(exprSchema<UserContext, number>()).toEqualTypeOf<
+    expectTypeOf(ExprSchema<UserContext, number>()).toEqualTypeOf<
       ExprSchema<UserContext, number>
     >();
-    expectTypeOf(exprSchema()).toEqualTypeOf<ExprSchema<unknown, unknown>>();
-    expectTypeOf(exprSchema({ context: UserContext })).toEqualTypeOf<
+    expectTypeOf(ExprSchema()).toEqualTypeOf<ExprSchema<unknown, unknown>>();
+    expectTypeOf(ExprSchema({ context: UserContext })).toEqualTypeOf<
       ExprSchema<UserContext, unknown>
     >();
-    expectTypeOf(exprSchema({ returns: z.string() })).toEqualTypeOf<
+    expectTypeOf(ExprSchema({ returns: z.string() })).toEqualTypeOf<
       ExprSchema<unknown, string>
     >();
   });
 
   it('infers from schema outputs, not inputs', () => {
     expectTypeOf(
-      exprSchema({
+      ExprSchema({
         context: z.object({ count: z.string().transform(Number) }),
         returns: z.enum(['a', 'b']).default('a'),
       }),
@@ -67,7 +62,7 @@ describe('exprSchema() types', () => {
 
   it('accepts Zod Mini schemas', () => {
     expectTypeOf(
-      exprSchema({
+      ExprSchema({
         context: zm.object({ a: zm.number() }),
         returns: zm.boolean(),
       }),
@@ -75,24 +70,24 @@ describe('exprSchema() types', () => {
   });
 
   it('checks schemas against explicit type arguments', () => {
-    exprSchema<UserContext, boolean>({
+    ExprSchema<UserContext, boolean>({
       context: UserContext,
       returns: z.boolean(),
     });
     // @ts-expect-error the context schema must produce the declared Context
-    exprSchema<{ user: string }, boolean>({ context: UserContext });
+    ExprSchema<{ user: string }, boolean>({ context: UserContext });
     // @ts-expect-error the return schema must produce the declared ReturnType
-    exprSchema<UserContext, boolean>({ returns: z.number() });
+    ExprSchema<UserContext, boolean>({ returns: z.number() });
     // @ts-expect-error options must be Zod schemas
-    exprSchema({ context: { user: z.string() } });
+    ExprSchema({ context: { user: z.string() } });
   });
 });
 
 describe('zod-inferred config types', () => {
   const Config = z.object({
-    canEnter: exprSchema({ context: UserContext, returns: z.boolean() }),
-    score: looseExprSchema({ context: UserContext, returns: z.number() }),
-    label: exprSchema({
+    canEnter: ExprSchema({ context: UserContext, returns: z.boolean() }),
+    score: LooseExprSchema({ context: UserContext, returns: z.number() }),
+    label: ExprSchema({
       context: UserContext,
       returns: z.enum(['adult', 'minor']),
     }).optional(),

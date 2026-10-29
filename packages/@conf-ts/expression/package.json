@@ -28,6 +28,16 @@
         "types": "./dist/require.d.cts",
         "default": "./dist/require.cjs"
       }
+    },
+    "./zod": {
+      "import": {
+        "types": "./dist/zod.d.mts",
+        "default": "./dist/zod.mjs"
+      },
+      "require": {
+        "types": "./dist/zod.d.cts",
+        "default": "./dist/zod.cjs"
+      }
     }
   },
   "scripts": {
@@ -44,16 +54,21 @@
     "@conf-ts/expr-core": "workspace:*"
   },
   "peerDependencies": {
-    "@conf-ts/macro": "workspace:*"
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@conf-ts/macro": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
     "@vitest/coverage-v8": "5.0.5",
     "oxlint": "^1.90.0",
     "prettier": "^3.9.10",
     "tsdown": "^0.23.4",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "zod": "^4.6.7"
   }
 }

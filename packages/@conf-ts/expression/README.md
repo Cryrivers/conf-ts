@@ -24,6 +24,8 @@ Interpreted and successfully compiled expressions use separate 1,000-entry LRU c
 
 `LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr<Context, ReturnType>` for `Context` types with nested optional properties, letting an `expr()` callback body skip `?.` at every level while `@conf-ts/expression` still enforces `optionalMemberAccess`/`loose: true` at evaluation time. See the [root README](../../../README.md#runtime-expression-evaluator) for the full type-level explanation.
 
+`@conf-ts/expression/zod` exports `ExprSchema()` and `LooseExprSchema()`, [Zod](https://zod.dev) 4 schemas that check serialized `Expr`/`LooseExpr` values against context and return schemas before they are evaluated. Zod is an optional peer dependency, needed only when you import this entry point. See the [root README](../../../README.md#validating-expr-values-with-zod) for what the schemas check.
+
 ## Ahead-of-time compilation
 
 `compile()` walks the parsed AST once and emits a specialized JavaScript function. The generated code removes the interpreter's per-node dispatch on hot evaluation paths while preserving the same expression semantics: member chains and calls become native property reads and calls behind tiny guards that V8 inlines, object/array/template literals become native literals, and arrow callbacks become real closures whose parameters are local variables rather than per-call copies of the environment.

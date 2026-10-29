@@ -117,9 +117,9 @@ The skill lives in [`skills/conf-ts`](skills/conf-ts) and is scoped to writing c
 | `@conf-ts/cli`                      | CLI to compile `.ts`/`.conf.ts` to JSON/YAML                              |
 | `@conf-ts/compiler`                 | Core compiler APIs (`compile`, `compileInMemory`)                         |
 | `@conf-ts/compiler-native`          | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
-| `@conf-ts/expr-core`                | Shared expression lexer, parser, AST types, and parse errors              |
-| `@conf-ts/expression`               | JavaScript-like runtime expression evaluator                              |
-| `@conf-ts/macro`                    | Macro functions consumed by the transform; Zod schemas for `Expr` values  |
+| `@conf-ts/expr-core`                | Shared expression lexer, parser, AST and `Expr` types, and parse errors   |
+| `@conf-ts/expression`               | Runtime expression evaluator; Zod schemas for `Expr` values               |
+| `@conf-ts/macro`                    | Macro functions consumed by the transform                                 |
 | `@conf-ts/macro-transformer`        | TypeScript source transformer for macros                                  |
 | `@conf-ts/macro-transformer-native` | Oxc-backed native source transformer                                      |
 | `@conf-ts/webpack-plugin`           | Webpack plugin that emits generated JSON/YAML files                       |
@@ -461,11 +461,11 @@ compiled({}); // fine: `a` is optional in the original Context
 
 #### Validating `Expr` values with Zod
 
-`@conf-ts/macro/zod` provides [Zod](https://zod.dev) 4 schemas for `Expr` and `LooseExpr` values. Zod is an optional peer dependency, needed only when you import this entry point, which (unlike `@conf-ts/macro` itself) is meant for runtime code.
+`@conf-ts/expression/zod` provides [Zod](https://zod.dev) 4 schemas for `Expr` and `LooseExpr` values. Zod is an optional peer dependency of `@conf-ts/expression`, needed only when you import this entry point.
 
 ```ts
 // config.schema.ts
-import { exprSchema, looseExprSchema } from '@conf-ts/macro/zod';
+import { ExprSchema, LooseExprSchema } from '@conf-ts/expression/zod';
 import * as z from 'zod';
 
 const UserContext = z.object({
@@ -477,8 +477,8 @@ const UserContext = z.object({
 });
 
 export const Config = z.object({
-  canEnter: exprSchema({ context: UserContext, returns: z.boolean() }),
-  verified: looseExprSchema({
+  canEnter: ExprSchema({ context: UserContext, returns: z.boolean() }),
+  verified: LooseExprSchema({
     context: UserContext,
     returns: z.boolean().optional(),
   }),
@@ -523,7 +523,7 @@ const verified = expression(config.verified, { loose: true });
 - **Context.** With `context`, each root identifier must be a property of the context schema (or the runtime builtin `String`, `Number`, or `Boolean`), and statically known property paths must exist: `user.agee` fails with `Property "agee" does not exist on "user" (did you mean "age"?)`. Optional, nullable, default, pipe, lazy, union, intersection, record, array, and tuple schemas are followed, and members of strings, numbers, arrays, and other built-ins are checked against their prototypes. A union member is enough for a property to exist, and nullability isn't enforced, because guards such as `a && a.b` aren't followed. Values typed `any`, `unknown`, `z.custom()`, or by a transform aren't checked further, nor are callback parameters.
 - **Result.** With `returns`, the result type is inferred where it is certain (literals, operators, templates, `String()`/`Number()`/`Boolean()` calls, and context paths) and must overlap the schema's: `user.age` fails `returns: z.boolean()`. When every possible result is a literal, including each branch of a conditional, each one is parsed with the schema, so `user.age >= 18 ? "adult" : "adlut"` fails `z.enum(['adult', 'minor'])`. Calls and other results that can't be inferred are accepted.
 
-Problems are regular Zod issues at the config path: `invalid_type` for a non-string, otherwise `custom` with `params.reason` set to `syntax`, `unknown_context_property`, `unknown_property`, or `return_type`. Without schemas, `exprSchema<Context, ReturnType>()` still infers the given types but only checks syntax. `context` and `returns` also accept Zod Mini schemas. `looseExprSchema()` checks the same things while accounting for loose access yielding `undefined`; evaluate its values with `loose: true`.
+Problems are regular Zod issues at the config path: `invalid_type` for a non-string, otherwise `custom` with `params.reason` set to `syntax`, `unknown_context_property`, `unknown_property`, or `return_type`. Without schemas, `ExprSchema<Context, ReturnType>()` still infers the given types but only checks syntax. `context` and `returns` also accept Zod Mini schemas. `LooseExprSchema()` checks the same things while accounting for loose access yielding `undefined`; evaluate its values with `loose: true`.
 
 </details>
 

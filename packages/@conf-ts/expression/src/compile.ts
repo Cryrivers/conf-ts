@@ -4,12 +4,13 @@ import {
   type ArrowParam,
   type ASTNode,
   type CallNode,
+  type Expr,
   type IdentifierParam,
+  type LooseExpr,
   type MemberNode,
   type ObjectNode,
   type TaggedTemplateNode,
 } from '@conf-ts/expr-core';
-import type { Expr, LooseExpr } from '@conf-ts/macro';
 
 import { evaluate, type EvalOptions } from './eval';
 import { parseSource } from './parse';

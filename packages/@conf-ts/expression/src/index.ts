@@ -1,5 +1,4 @@
-import { formatInvalid } from '@conf-ts/expr-core';
-import type { Expr, LooseExpr } from '@conf-ts/macro';
+import { formatInvalid, type Expr, type LooseExpr } from '@conf-ts/expr-core';
 
 import { compile, ExpressionCompileError } from './compile';
 import { evaluate, type EvalOptions } from './eval';

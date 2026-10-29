@@ -1,3 +1,4 @@
+import type { Expr, LooseExpr } from '@conf-ts/expr-core';
 import * as z from 'zod';
 
 import {
@@ -10,7 +11,6 @@ import {
   type ReturnModel,
   type ValueKind,
 } from './expr-check';
-import type { Expr, LooseExpr } from './types';
 
 type Schema = z.core.$ZodType;
 
@@ -451,19 +451,19 @@ function createExprSchema<Output>(
  * schemas, to only read existing context properties and to evaluate to an
  * acceptable type. `z.infer` yields `Expr<Context, ReturnType>`.
  */
-export function exprSchema<Context = unknown, ReturnType = unknown>(
+export function ExprSchema<Context = unknown, ReturnType = unknown>(
   options?: ExprSchemaOptions<Context, ReturnType>,
 ): ExprSchema<Context, ReturnType> {
-  return createExprSchema('exprSchema', options, false);
+  return createExprSchema('ExprSchema', options, false);
 }
 
 /**
- * Zod schema for a serialized `LooseExpr`: validated like `exprSchema()`, for
+ * Zod schema for a serialized `LooseExpr`: validated like `ExprSchema()`, for
  * expressions evaluated with `loose: true`, so `z.infer` yields
  * `LooseExpr<Context, ReturnType>`.
  */
-export function looseExprSchema<Context = unknown, ReturnType = unknown>(
+export function LooseExprSchema<Context = unknown, ReturnType = unknown>(
   options?: ExprSchemaOptions<Context, ReturnType>,
 ): LooseExprSchema<Context, ReturnType> {
-  return createExprSchema('looseExprSchema', options, true);
+  return createExprSchema('LooseExprSchema', options, true);
 }

@@ -1,4 +1,4 @@
-import { exprSchema, looseExprSchema } from '@conf-ts/macro/zod';
+import { ExprSchema, LooseExprSchema } from '@conf-ts/expression/zod';
 import * as z from 'zod';
 
 export const AccessContext = z.object({
@@ -11,12 +11,12 @@ export const AccessContext = z.object({
 });
 
 export const AccessConfig = z.object({
-  canEnter: exprSchema({ context: AccessContext, returns: z.boolean() }),
-  tier: exprSchema({
+  canEnter: ExprSchema({ context: AccessContext, returns: z.boolean() }),
+  tier: ExprSchema({
     context: AccessContext,
     returns: z.enum(['staff', 'member']),
   }),
-  verified: looseExprSchema({
+  verified: LooseExprSchema({
     context: AccessContext,
     returns: z.boolean().optional(),
   }),

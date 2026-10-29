@@ -67,7 +67,7 @@ export interface CheckOptions<Type> {
 }
 
 // Globals the runtime evaluator resolves when the context doesn't define the
-// name. Keep in sync with GLOBAL_BUILTINS in @conf-ts/expression's eval.ts.
+// name. Keep in sync with GLOBAL_BUILTINS in eval.ts.
 const BUILTIN_RESULTS: Readonly<Record<string, ValueKind>> = {
   String: 'string',
   Number: 'number',

@@ -2,10 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import expression from '@conf-ts/expression';
 import {
-  exprSchema,
-  looseExprSchema,
+  ExprSchema,
+  LooseExprSchema,
   type ExprIssueParams,
-} from '@conf-ts/macro/zod';
+} from '@conf-ts/expression/zod';
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import * as zm from 'zod/mini';
@@ -51,15 +51,15 @@ const Context = z.object({
   isAdmin: z.function(),
 });
 
-describe('exprSchema()', () => {
+describe('ExprSchema()', () => {
   it('accepts expression strings and keeps them unchanged', () => {
-    const schema = exprSchema();
+    const schema = ExprSchema();
     expect(schema.parse('a + b * 2')).toBe('a + b * 2');
     expect(z.object({ when: schema.optional() }).parse({})).toEqual({});
   });
 
   it('rejects values that are not strings', () => {
-    const schema = exprSchema();
+    const schema = ExprSchema();
     for (const input of [1, null, undefined, {}, () => 'a']) {
       expect(issuesOf(schema, input)).toMatchObject([
         { code: 'invalid_type', expected: 'string' },
@@ -68,7 +68,7 @@ describe('exprSchema()', () => {
   });
 
   it('rejects expressions the runtime evaluator cannot parse', () => {
-    const schema = exprSchema();
+    const schema = ExprSchema();
     for (const source of [
       '',
       ' ',
@@ -87,28 +87,28 @@ describe('exprSchema()', () => {
   });
 
   it('reports issues at the path of the expression property', () => {
-    const schema = z.object({ rules: z.array(exprSchema()) });
+    const schema = z.object({ rules: z.array(ExprSchema()) });
     expect(issuesOf(schema, { rules: ['a', 'b +'] })).toMatchObject([
       { code: 'custom', path: ['rules', 1], params: { reason: 'syntax' } },
     ]);
   });
 
   it('accepts any identifier when no context schema is given', () => {
-    expectValid(exprSchema(), 'anything.goes(here) && String(x)');
+    expectValid(ExprSchema(), 'anything.goes(here) && String(x)');
   });
 
   it('throws for options that are not Zod schemas', () => {
-    expect(() => exprSchema({ context: {} as z.ZodType })).toThrow(
-      'exprSchema(): `context` must be a Zod 4 schema',
+    expect(() => ExprSchema({ context: {} as z.ZodType })).toThrow(
+      'ExprSchema(): `context` must be a Zod 4 schema',
     );
-    expect(() => looseExprSchema({ returns: 1 as never })).toThrow(
-      'looseExprSchema(): `returns` must be a Zod 4 schema',
+    expect(() => LooseExprSchema({ returns: 1 as never })).toThrow(
+      'LooseExprSchema(): `returns` must be a Zod 4 schema',
     );
   });
 });
 
 describe('context validation', () => {
-  const schema = exprSchema({ context: Context });
+  const schema = ExprSchema({ context: Context });
 
   it('accepts expressions that read existing context properties', () => {
     expectValid(
@@ -183,7 +183,7 @@ describe('context validation', () => {
 
   it('resolves the evaluator builtins unless the context defines them', () => {
     expectValid(schema, 'String(user.age) + Number("1") + Boolean(threshold)');
-    const shadowed = exprSchema({
+    const shadowed = ExprSchema({
       context: z.object({ String: z.object({ raw: z.string() }) }),
     });
     expectValid(shadowed, 'String.raw');
@@ -228,15 +228,15 @@ describe('context validation', () => {
     const loose = z.looseObject({ known: z.object({ a: z.number() }) });
     const strict = z.strictObject({ known: z.number() });
     const catchall = z.object({}).catchall(z.object({ a: z.number() }));
-    expectValid(exprSchema({ context: loose }), 'unknown.deep.path');
-    expect(reasonsOf(exprSchema({ context: loose }), 'known.b')).toEqual([
+    expectValid(ExprSchema({ context: loose }), 'unknown.deep.path');
+    expect(reasonsOf(ExprSchema({ context: loose }), 'known.b')).toEqual([
       'unknown_property',
     ]);
-    expect(reasonsOf(exprSchema({ context: strict }), 'other')).toEqual([
+    expect(reasonsOf(ExprSchema({ context: strict }), 'other')).toEqual([
       'unknown_context_property',
     ]);
-    expectValid(exprSchema({ context: catchall }), 'anything.a');
-    expect(reasonsOf(exprSchema({ context: catchall }), 'anything.b')).toEqual([
+    expectValid(ExprSchema({ context: catchall }), 'anything.a');
+    expect(reasonsOf(ExprSchema({ context: catchall }), 'anything.b')).toEqual([
       'unknown_property',
     ]);
   });
@@ -246,7 +246,7 @@ describe('context validation', () => {
       z.object({ kind: z.literal('circle'), radius: z.number() }),
       z.object({ kind: z.literal('square'), size: z.number() }),
     ]);
-    const shapes = exprSchema({ context: z.object({ shape: Shape }) });
+    const shapes = ExprSchema({ context: z.object({ shape: Shape }) });
     expectValid(
       shapes,
       'shape.kind === "circle" ? shape.radius : shape.size',
@@ -254,7 +254,7 @@ describe('context validation', () => {
     );
     expect(reasonsOf(shapes, 'shape.width')).toEqual(['unknown_property']);
 
-    const mixed = exprSchema({
+    const mixed = ExprSchema({
       context: z.object({
         value: z.union([z.string(), z.object({ a: z.number() })]),
       }),
@@ -264,7 +264,7 @@ describe('context validation', () => {
   });
 
   it('merges the members of an intersection', () => {
-    const both = exprSchema({
+    const both = ExprSchema({
       context: z.intersection(
         z.object({ a: z.number() }),
         z.object({ b: z.string() }),
@@ -284,7 +284,7 @@ describe('context validation', () => {
         return Category.optional();
       },
     });
-    const wrapped = exprSchema({
+    const wrapped = ExprSchema({
       context: z.object({
         node: Node,
         category: Category,
@@ -310,7 +310,7 @@ describe('context validation', () => {
   });
 
   it('does not check values whose schema cannot be described statically', () => {
-    const opaque = exprSchema({
+    const opaque = ExprSchema({
       context: z.object({
         any: z.any(),
         unknown: z.unknown(),
@@ -325,11 +325,11 @@ describe('context validation', () => {
       'custom.b',
       'transformed.value.length',
     );
-    expectValid(exprSchema({ context: z.any() }), 'anything');
+    expectValid(ExprSchema({ context: z.any() }), 'anything');
   });
 
   it('accepts Zod Mini schemas', () => {
-    const schema = exprSchema({
+    const schema = ExprSchema({
       context: zm.object({ user: zm.object({ age: zm.number() }) }),
       returns: zm.boolean(),
     });
@@ -339,7 +339,7 @@ describe('context validation', () => {
   });
 
   it('resolves schemas lazily, on first validation', () => {
-    const schema = exprSchema({ context: z.lazy(() => Later) });
+    const schema = ExprSchema({ context: z.lazy(() => Later) });
     const Later = z.object({ ready: z.boolean() });
     expectValid(schema, 'ready');
     expect(reasonsOf(schema, 'redy')).toEqual(['unknown_context_property']);
@@ -348,7 +348,7 @@ describe('context validation', () => {
 
 describe('return validation', () => {
   it('rejects results of a type the return schema does not accept', () => {
-    const schema = exprSchema({ context: Context, returns: z.boolean() });
+    const schema = ExprSchema({ context: Context, returns: z.boolean() });
     expectValid(
       schema,
       'user.age > threshold',
@@ -378,7 +378,7 @@ describe('return validation', () => {
   });
 
   it('accepts results whose type cannot be determined statically', () => {
-    const schema = exprSchema({ context: Context, returns: z.boolean() });
+    const schema = ExprSchema({ context: Context, returns: z.boolean() });
     expectValid(
       schema,
       'isAdmin(user)',
@@ -390,7 +390,7 @@ describe('return validation', () => {
   });
 
   it('checks statically known results against the schema itself', () => {
-    const schema = exprSchema({
+    const schema = ExprSchema({
       context: Context,
       returns: z.enum(['adult', 'minor']),
     });
@@ -402,7 +402,7 @@ describe('return validation', () => {
       'Expression evaluates to "teen", which the return schema rejects: Invalid option: expected one of "adult"|"minor"',
     ]);
 
-    const count = exprSchema({ returns: z.number().int().nonnegative() });
+    const count = ExprSchema({ returns: z.number().int().nonnegative() });
     expectValid(count, '1', '+"2"', 'x ? 1 : 2', 'x && 1 || 2');
     expect(reasonsOf(count, '-1')).toEqual(['return_type']);
     expect(reasonsOf(count, '1.5')).toEqual(['return_type']);
@@ -410,29 +410,29 @@ describe('return validation', () => {
     expect(reasonsOf(count, 'true || x')).toEqual(['return_type']);
     expect(reasonsOf(count, 'null ?? 1')).toEqual([]);
     expect(
-      reasonsOf(exprSchema({ returns: z.string() }), '`a${1 + 1}`'),
+      reasonsOf(ExprSchema({ returns: z.string() }), '`a${1 + 1}`'),
     ).toEqual([]);
     expect(
-      reasonsOf(exprSchema({ returns: z.literal('a2') }), '`a${2}`'),
+      reasonsOf(ExprSchema({ returns: z.literal('a2') }), '`a${2}`'),
     ).toEqual([]);
   });
 
   it('accepts optional and nullable results', () => {
-    const optional = exprSchema({
+    const optional = ExprSchema({
       context: Context,
       returns: z.number().optional(),
     });
     expectValid(optional, 'user.profile?.score', 'undefined', 'void 0');
     expect(reasonsOf(optional, 'null')).toEqual(['return_type']);
     expectValid(
-      exprSchema({ context: Context, returns: z.string().nullable() }),
+      ExprSchema({ context: Context, returns: z.string().nullable() }),
       'user.profile.nickname',
       'null',
     );
   });
 
   it('accepts never-typed results, which fit any return type', () => {
-    const schema = exprSchema({
+    const schema = ExprSchema({
       context: z.object({ fail: z.never() }),
       returns: z.string(),
     });
@@ -440,9 +440,9 @@ describe('return validation', () => {
   });
 });
 
-describe('looseExprSchema()', () => {
-  it('validates context paths like exprSchema()', () => {
-    const schema = looseExprSchema({ context: Context, returns: z.number() });
+describe('LooseExprSchema()', () => {
+  it('validates context paths like ExprSchema()', () => {
+    const schema = LooseExprSchema({ context: Context, returns: z.number() });
     expectValid(schema, 'user.profile.score', 'user.tags[0].length');
     expect(reasonsOf(schema, 'user.profile.scor')).toEqual([
       'unknown_property',
@@ -453,7 +453,7 @@ describe('looseExprSchema()', () => {
   });
 
   it('accounts for loose access short-circuiting to undefined', () => {
-    const schema = looseExprSchema({
+    const schema = LooseExprSchema({
       context: Context,
       returns: z.undefined(),
     });
@@ -576,7 +576,7 @@ const ParityContext = z.object({
 });
 
 const parity = <Returns extends z.ZodType>(returns: Returns) =>
-  exprSchema({ context: ParityContext, returns });
+  ExprSchema({ context: ParityContext, returns });
 
 // Return schemas mirror the `ReturnType` each parity fixture entry declares.
 const ParityConfig = z.strictObject({
@@ -623,7 +623,7 @@ const ParityConfig = z.strictObject({
   parenthesizedNullishComparison: parity(z.boolean()),
 });
 
-describe('@conf-ts/macro/zod with macro transformer output', () => {
+describe('@conf-ts/expression/zod with macro transformer output', () => {
   it('accepts every expression emitted by the expr fixtures', () => {
     const fixtures = fs
       .readdirSync(MACRO_DIR)
@@ -632,7 +632,7 @@ describe('@conf-ts/macro/zod with macro transformer output', () => {
     expect(fixtures.length).toBeGreaterThan(10);
 
     for (const fixture of fixtures) {
-      const schema = exprSchema({ context: FIXTURE_CONTEXTS[fixture] });
+      const schema = ExprSchema({ context: FIXTURE_CONTEXTS[fixture] });
       for (const source of stringsIn(readFixtureOutput(fixture))) {
         expect(issuesOf(schema, source), `${fixture}: ${source}`).toEqual([]);
       }
