@@ -49,13 +49,13 @@
   "devDependencies": {
     "@conf-ts/compiler": "workspace:*",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
-    "@napi-rs/cli": "^3.10.8",
-    "@types/node": "^26.6.5",
-    "oxlint": "^1.88.0",
+    "@napi-rs/cli": "^3.10.9",
+    "@types/node": "^26.6.6",
+    "oxlint": "^1.90.0",
     "prettier": "^3.9.10",
     "tinybench": "^6.2.2",
     "tsx": "^4.23.15",
-    "vitest": "^5.0.4",
+    "vitest": "^5.0.5",
     "yaml": "^2.9.1"
   },
   "optionalDependencies": {
