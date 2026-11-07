@@ -1,5 +1,6 @@
 import {
   forEachChild,
+  forEachParamBinding,
   formatInvalid,
   type ArrowFunctionNode,
   type ArrowParam,
@@ -13,31 +14,25 @@ import {
   type TaggedTemplateNode,
 } from '@conf-ts/expr-core';
 
-import { evaluate, type EvalOptions } from './eval';
+import { ExpressionCache, isOptionalMemberAccess } from './cache';
+import {
+  copySpread,
+  destructureError,
+  GLOBAL_BUILTINS,
+  hasOwn,
+  interpret,
+  isNullish,
+  nonCallableError,
+  nullishMemberError,
+  templateStrings,
+  toKey,
+} from './eval';
 import { parseSource } from './parse';
 import type { Compiled, CompileOptions } from './types';
 
-const MAX_CACHE_SIZE = 1000;
-const cache = new Map<string, Compiled>();
-
-const cacheSet = (key: string, value: Compiled<any, any>): void => {
-  if (cache.size >= MAX_CACHE_SIZE) {
-    const firstKey = cache.keys().next().value;
-    if (firstKey !== undefined) {
-      cache.delete(firstKey);
-    }
-  }
-  cache.set(key, value);
-};
-
-const cacheGet = (key: string): Compiled | undefined => {
-  const value = cache.get(key);
-  if (value !== undefined) {
-    cache.delete(key);
-    cache.set(key, value);
-  }
-  return value;
-};
+// Successfully compiled functions; a fallback to the interpreter is not
+// cached, so a later call can compile once code generation is allowed.
+const cache = new ExpressionCache();
 
 export class ExpressionCompileError extends Error {
   constructor(message: string) {
@@ -45,44 +40,6 @@ export class ExpressionCompileError extends Error {
     this.name = 'ExpressionCompileError';
   }
 }
-
-const GLOBAL_BUILTINS: Record<string, unknown> = {
-  String,
-  Number,
-  Boolean,
-};
-
-const hasOwn = (object: object, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(object, key);
-
-const copySpread = (target: object, source: unknown): void => {
-  if (source === null || source === undefined) {
-    return;
-  }
-  const boxed = Object(source);
-  for (const key of Reflect.ownKeys(boxed)) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(boxed, key);
-    if (!descriptor?.enumerable) {
-      continue;
-    }
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: true,
-      value: Reflect.get(boxed, key),
-      writable: true,
-    });
-  }
-};
-
-const template = (
-  quasis: string[],
-  rawQuasis: string[],
-): TemplateStringsArray => {
-  const raw = Object.freeze([...rawQuasis]);
-  const strings = [...quasis] as string[] & { raw: readonly string[] };
-  Object.defineProperty(strings, 'raw', { value: raw });
-  return Object.freeze(strings) as unknown as TemplateStringsArray;
-};
 
 // Values generated functions close over. The keys double as the factory's
 // parameter names, so generated code calls them as plain local identifiers
@@ -102,30 +59,28 @@ const HELPERS = {
   C: Function.prototype.call.bind(Function.prototype.call),
   G: GLOBAL_BUILTINS,
   S: String,
-  K: (key: unknown): PropertyKey =>
-    typeof key === 'symbol' ? key : String(key),
+  K: toKey,
   // Chain guards, small enough for TurboFan to inline: N passes a value whose
   // properties can be read, F a value that can be called, U tests for nullish.
   // Passing values through keeps the generated code short, which matters
-  // because `new Function` cost grows with every token.
+  // because `new Function` cost grows with every token. They throw the
+  // interpreter's errors.
   N: <Value>(value: Value): Value => {
-    if (value === null || value === undefined) {
-      throw new TypeError('Cannot read properties of null or undefined');
+    if (isNullish(value)) {
+      nullishMemberError();
     }
     return value;
   },
   F: <Value>(value: Value): Value => {
     if (typeof value !== 'function') {
-      throw new TypeError('Expression value is not callable');
+      nonCallableError();
     }
     return value;
   },
-  U: (value: unknown): boolean => value === null || value === undefined,
-  DE: (): never => {
-    throw new TypeError('Cannot destructure null or undefined');
-  },
+  U: isNullish,
+  DE: destructureError,
   CS: copySpread,
-  T: template,
+  T: templateStrings,
 };
 
 type Helper = keyof typeof HELPERS;
@@ -157,6 +112,8 @@ class Scope {
     readonly object: string,
   ) {}
 }
+
+const ignore = () => {};
 
 const collectIdentifiers = (node: ASTNode, names: Set<string>): void => {
   if (node.type === 'Identifier') {
@@ -191,25 +148,6 @@ const isAtomic = (node: ASTNode): boolean => {
   }
 };
 
-const boundNames = (param: ArrowParam): string[] => {
-  switch (param.kind) {
-    case 'identifier':
-    case 'rest':
-      return [param.name];
-    case 'object':
-      return param.properties.map(property => property.value.name);
-    case 'array': {
-      const names: string[] = [];
-      for (const element of param.elements) {
-        if (element !== null) {
-          names.push(element.name);
-        }
-      }
-      return names;
-    }
-  }
-};
-
 /**
  * Names an arrow binds that one of its own defaults can read (directly, or
  * through a closure created there) before their first binding, so they have to
@@ -217,41 +155,22 @@ const boundNames = (param: ArrowParam): string[] => {
  */
 const earlyNames = (params: ArrowParam[]): Set<string> => {
   const all = new Set<string>();
-  for (const param of params) {
-    boundNames(param).forEach(name => all.add(name));
-  }
+  forEachParamBinding(params, ignore, name => all.add(name));
   const bound = new Set<string>();
   const early = new Set<string>();
-  const read = (node: ASTNode | undefined): void => {
-    if (node === undefined) {
-      return;
-    }
-    const names = new Set<string>();
-    collectIdentifiers(node, names);
-    names.forEach(name => {
-      if (all.has(name) && !bound.has(name)) {
-        early.add(name);
-      }
-    });
-  };
-  for (const param of params) {
-    if (param.kind === 'rest' || param.kind === 'identifier') {
-      read(param.kind === 'identifier' ? param.default : undefined);
-      bound.add(param.name);
-      continue;
-    }
-    read(param.default);
-    const elements: Array<IdentifierParam | null> =
-      param.kind === 'object'
-        ? param.properties.map(property => property.value)
-        : param.elements;
-    for (const element of elements) {
-      if (element !== null) {
-        read(element.default);
-        bound.add(element.name);
-      }
-    }
-  }
+  forEachParamBinding(
+    params,
+    value => {
+      const names = new Set<string>();
+      collectIdentifiers(value, names);
+      names.forEach(name => {
+        if (all.has(name) && !bound.has(name)) {
+          early.add(name);
+        }
+      });
+    },
+    name => bound.add(name),
+  );
   return early;
 };
 
@@ -721,11 +640,9 @@ class Generator {
     } else {
       const early = earlyNames(node.params);
       const counts = new Map<string, number>();
-      for (const param of node.params) {
-        for (const name of boundNames(param)) {
-          counts.set(name, (counts.get(name) ?? 0) + 1);
-        }
-      }
+      forEachParamBinding(node.params, ignore, name => {
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      });
       node.params.forEach((param, index) => {
         const direct =
           (param.kind === 'rest' ||
@@ -897,10 +814,9 @@ export function compile<Context = unknown, ReturnType = unknown>(
     throw new Error(formatInvalid());
   }
 
-  const optionalMemberAccess =
-    options?.optionalMemberAccess === true || options?.loose === true;
-  const cacheKey = (optionalMemberAccess ? 'o' : 's') + expr;
-  const cached = cacheGet(cacheKey);
+  const optionalMemberAccess = isOptionalMemberAccess(options);
+  const modeCache = cache.for(optionalMemberAccess);
+  const cached = modeCache.get(expr);
   if (cached) {
     return cached as Compiled<Context, ReturnType>;
   }
@@ -908,13 +824,13 @@ export function compile<Context = unknown, ReturnType = unknown>(
   const ast = parseSource(expr);
   if (ast === null) {
     const result: Compiled<Context, ReturnType> = () => undefined as ReturnType;
-    cacheSet(cacheKey, result);
+    modeCache.set(expr, result);
     return result;
   }
 
   try {
     const result = compileAst<Context, ReturnType>(ast, optionalMemberAccess);
-    cacheSet(cacheKey, result);
+    modeCache.set(expr, result);
     return result;
   } catch (error) {
     if (options?.strict) {
@@ -922,10 +838,6 @@ export function compile<Context = unknown, ReturnType = unknown>(
         ? error
         : new ExpressionCompileError('Expression code generation failed');
     }
-    const evalOptions: EvalOptions | undefined = optionalMemberAccess
-      ? { optionalMemberAccess: true }
-      : undefined;
-    return (env: Context) =>
-      evaluate(ast, env as Record<string, unknown>, evalOptions) as ReturnType;
+    return interpret(ast, optionalMemberAccess);
   }
 }

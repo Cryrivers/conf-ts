@@ -1,5 +1,5 @@
-import { keywordKinds } from './lexer';
-import { precedence as BINARY_PRECEDENCE } from './parser';
+import { HEX4, isIdentifierText, keywordKinds } from './lexer';
+import { isLogicalOperator, precedenceOf, prefixOps } from './parser';
 import type {
   ArrayNode,
   ArrowFunctionNode,
@@ -30,22 +30,8 @@ const UNARY = 13;
 const POSTFIX = 14; // member access, calls, tagged templates
 const PRIMARY = 15;
 
-const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const DIGITS = /^\d+$/;
-const HEX4 = /^[0-9a-fA-F]{4}$/;
-const UNARY_OPERATORS = new Set([
-  '+',
-  '-',
-  '!',
-  '~',
-  'void',
-  'delete',
-  'typeof',
-]);
-const LOGICAL_OPERATORS = new Set(['&&', '||', '??']);
-
-const hasOwn = (object: object, key: string) =>
-  Object.prototype.hasOwnProperty.call(object, key);
+/** Printed text and how tightly it binds. */
+type Printed = [text: string, level: number];
 
 const invalid = (message: string): never => {
   throw new TypeError(`print(): ${message}`);
@@ -53,7 +39,7 @@ const invalid = (message: string): never => {
 
 /** A name that can be referenced or bound: not a keyword. */
 const isBindingName = (name: unknown): name is string =>
-  typeof name === 'string' && IDENTIFIER.test(name) && !keywordKinds.has(name);
+  typeof name === 'string' && isIdentifierText(name) && !keywordKinds.has(name);
 
 /**
  * A name usable after `.` or as a bare object key. The parser also accepts
@@ -62,7 +48,7 @@ const isBindingName = (name: unknown): name is string =>
  */
 const isPropertyName = (name: unknown): name is string =>
   typeof name === 'string' &&
-  IDENTIFIER.test(name) &&
+  isIdentifierText(name) &&
   (keywordKinds.get(name) ?? 'operator') === 'operator';
 
 const bindingName = (name: unknown): string =>
@@ -122,53 +108,20 @@ const printString = (value: string, quote: string): string => {
 
 // Numbers the grammar has no literal for are written as equivalent
 // expressions, e.g. `-1` as a unary minus and NaN as `0 / 0`.
-const printNumber = (value: number): string => {
+const printNumber = (value: number): Printed => {
   if (Number.isNaN(value)) {
-    return '0 / 0';
+    return ['0 / 0', MULTIPLICATIVE];
   }
   if (value === Infinity) {
-    return '1 / 0';
+    return ['1 / 0', MULTIPLICATIVE];
   }
   if (value === -Infinity) {
-    return '-1 / 0';
+    return ['-1 / 0', MULTIPLICATIVE];
   }
   if (Object.is(value, -0)) {
-    return '-0';
+    return ['-0', UNARY];
   }
-  return value < 0 ? `-${String(-value)}` : String(value);
-};
-
-const numberPrecedence = (value: number): number =>
-  !Number.isFinite(value)
-    ? MULTIPLICATIVE
-    : value < 0 || Object.is(value, -0)
-      ? UNARY
-      : PRIMARY;
-
-const precedenceOf = (node: ASTNode): number => {
-  switch (node.type) {
-    case 'ArrowFunctionExpression':
-    case 'ConditionalExpression':
-      return ASSIGNMENT;
-    case 'BinaryExpression':
-    case 'LogicalExpression':
-      return hasOwn(BINARY_PRECEDENCE, node.operator)
-        ? BINARY_PRECEDENCE[node.operator]
-        : PRIMARY; // rejected when printed
-    case 'UnaryExpression':
-      return UNARY;
-    case 'MemberExpression':
-    case 'CallExpression':
-    case 'TaggedTemplateExpression':
-    case 'ChainExpression':
-      return POSTFIX;
-    case 'Literal':
-      return typeof node.value === 'number'
-        ? numberPrecedence(node.value)
-        : PRIMARY;
-    default:
-      return PRIMARY;
-  }
+  return [String(value), value < 0 ? UNARY : PRIMARY];
 };
 
 // Whether a raw template chunk can be printed verbatim between backticks:
@@ -195,16 +148,19 @@ const isTemplateRaw = (raw: unknown): raw is string => {
   return true;
 };
 
+const isSpread = (node: ASTNode | SpreadElement): node is SpreadElement =>
+  node.type === 'SpreadElement';
+
 class Printer {
   constructor(private readonly quote: string) {}
 
   /** `node` as an operand that must bind at least as tightly as `level`. */
   operand(node: ASTNode, level: number, parenthesize = false): string {
-    const text = this.node(node);
-    return parenthesize || precedenceOf(node) < level ? `(${text})` : text;
+    const [text, own] = this.print(node);
+    return parenthesize || own < level ? `(${text})` : text;
   }
 
-  node(node: ASTNode): string {
+  print(node: ASTNode): Printed {
     if (node === null || typeof node !== 'object') {
       return invalid(`expected an AST node, got ${String(node)}`);
     }
@@ -212,54 +168,59 @@ class Printer {
       case 'Literal':
         return this.literal(node.value);
       case 'Identifier':
-        return bindingName(node.name);
+        return [bindingName(node.name), PRIMARY];
       case 'Elision':
         return invalid('an Elision can only be an ArrayExpression element');
       case 'ParenthesizedExpression':
-        return `(${this.node(node.expression)})`;
+        return [`(${this.print(node.expression)[0]})`, PRIMARY];
       case 'ChainExpression':
         // The `?.` links inside mark the chain; see `postfixBase`.
-        return this.node(node.expression);
+        return [this.print(node.expression)[0], POSTFIX];
       case 'UnaryExpression': {
         const { operator } = node;
-        if (!UNARY_OPERATORS.has(operator)) {
+        if (!prefixOps.has(operator)) {
           return invalid(`unknown unary operator ${JSON.stringify(operator)}`);
         }
         const argument = this.operand(node.argument, UNARY);
         // Keep `- -a` from reading as `--a`, and words apart: `typeof a`.
         const space =
-          IDENTIFIER.test(operator) ||
+          isIdentifierText(operator) ||
           ((operator === '+' || operator === '-') &&
             argument.startsWith(operator));
-        return `${operator}${space ? ' ' : ''}${argument}`;
+        return [`${operator}${space ? ' ' : ''}${argument}`, UNARY];
       }
       case 'BinaryExpression':
       case 'LogicalExpression':
         return this.binary(node);
       case 'ConditionalExpression':
-        return `${this.operand(node.test, SHORT_CIRCUIT)} ? ${this.operand(node.consequent, ASSIGNMENT)} : ${this.operand(node.alternate, ASSIGNMENT)}`;
+        return [
+          `${this.operand(node.test, SHORT_CIRCUIT)} ? ${this.operand(node.consequent, ASSIGNMENT)} : ${this.operand(node.alternate, ASSIGNMENT)}`,
+          ASSIGNMENT,
+        ];
       case 'MemberExpression':
-        return this.member(node);
+        return [this.member(node), POSTFIX];
       case 'CallExpression': {
         const callee = this.postfixBase(node.callee, false);
         const args = node.args.map(arg => this.operand(arg, ASSIGNMENT));
-        return `${callee}${node.optional ? '?.' : ''}(${args.join(', ')})`;
+        const optional = node.optional ? '?.' : '';
+        return [`${callee}${optional}(${args.join(', ')})`, POSTFIX];
       }
       case 'ArrayExpression':
-        return this.array(node);
+        return [this.array(node), PRIMARY];
       case 'ObjectExpression':
-        return this.object(node);
+        return [this.object(node), PRIMARY];
       case 'TemplateLiteral':
-        return this.template(node);
+        return [this.template(node), PRIMARY];
       case 'TaggedTemplateExpression': {
         const { quasi } = node;
         if (quasi?.type !== 'TemplateLiteral') {
           return invalid('a tagged template needs a TemplateLiteral quasi');
         }
-        return `${this.postfixBase(node.tag, false)}${this.template(quasi)}`;
+        const tag = this.postfixBase(node.tag, false);
+        return [`${tag}${this.template(quasi)}`, POSTFIX];
       }
       case 'ArrowFunctionExpression':
-        return this.arrow(node);
+        return [this.arrow(node), ASSIGNMENT];
       default:
         return invalid(
           `unknown node type ${JSON.stringify((node as { type?: unknown }).type)}`,
@@ -267,15 +228,12 @@ class Printer {
     }
   }
 
-  literal(value: unknown): string {
-    if (value === undefined) {
-      return 'undefined';
-    }
-    if (value === null || typeof value === 'boolean') {
-      return String(value);
+  literal(value: unknown): Printed {
+    if (value === undefined || value === null || typeof value === 'boolean') {
+      return [String(value), PRIMARY];
     }
     if (typeof value === 'string') {
-      return printString(value, this.quote);
+      return [printString(value, this.quote), PRIMARY];
     }
     if (typeof value === 'number') {
       return printNumber(value);
@@ -283,18 +241,15 @@ class Printer {
     return invalid(`a Literal can't hold a ${typeof value} value`);
   }
 
-  binary(node: BinaryNode | LogicalNode): string {
+  binary(node: BinaryNode | LogicalNode): Printed {
     const { operator } = node;
+    const level = precedenceOf(operator);
     const isLogical = node.type === 'LogicalExpression';
-    if (
-      !hasOwn(BINARY_PRECEDENCE, operator) ||
-      isLogical !== LOGICAL_OPERATORS.has(operator)
-    ) {
+    if (level === undefined || isLogical !== isLogicalOperator(operator)) {
       return invalid(
         `unknown ${isLogical ? 'logical' : 'binary'} operator ${JSON.stringify(operator)}`,
       );
     }
-    const level = BINARY_PRECEDENCE[operator];
     // JavaScript rejects `??` next to an unparenthesized `&&` or `||`.
     const mixesNullish = (child: ASTNode) =>
       isLogical &&
@@ -312,7 +267,7 @@ class Printer {
       operator === '**' ? EXPONENT : level + 1,
       mixesNullish(node.right),
     );
-    return `${left} ${operator} ${right}`;
+    return [`${left} ${operator} ${right}`, level];
   }
 
   /**
@@ -321,12 +276,8 @@ class Printer {
    * like `a?.b.c` does, and so does an integer before `.` (`(1).toFixed()`).
    */
   postfixBase(node: ASTNode, beforeDot: boolean): string {
-    const text = this.operand(
-      node,
-      POSTFIX,
-      node.type === 'ChainExpression',
-    );
-    return beforeDot && node.type === 'Literal' && DIGITS.test(text)
+    const text = this.operand(node, POSTFIX, node.type === 'ChainExpression');
+    return beforeDot && node.type === 'Literal' && /^\d+$/.test(text)
       ? `(${text})`
       : text;
   }
@@ -335,7 +286,7 @@ class Printer {
     const optional = node.optional ? '?.' : '';
     if (node.computed) {
       const object = this.postfixBase(node.object, false);
-      return `${object}${optional}[${this.node(node.property)}]`;
+      return `${object}${optional}[${this.print(node.property)[0]}]`;
     }
     const { property } = node;
     if (property?.type !== 'Literal') {
@@ -352,11 +303,11 @@ class Printer {
     return `${this.postfixBase(node.object, true)}${optional || '.'}${key}`;
   }
 
-  // A spread or element in an array, argument list position, or property.
+  // An element of an array literal or an entry of an object literal.
   element(node: ASTNode | SpreadElement): string {
-    return (node as SpreadElement).type === 'SpreadElement'
-      ? `...${this.operand((node as SpreadElement).argument, ASSIGNMENT)}`
-      : this.operand(node as ASTNode, ASSIGNMENT);
+    return isSpread(node)
+      ? `...${this.operand(node.argument, ASSIGNMENT)}`
+      : this.operand(node, ASSIGNMENT);
   }
 
   array(node: ArrayNode): string {
@@ -371,15 +322,12 @@ class Printer {
 
   object(node: ObjectNode): string {
     const properties = node.properties.map(property => {
-      if ((property as SpreadElement).type === 'SpreadElement') {
-        return this.element(property as SpreadElement);
-      }
-      if (!('key' in property)) {
-        return invalid('expected an object property');
+      if ('type' in property) {
+        return this.element(property);
       }
       const value = this.operand(property.value, ASSIGNMENT);
       if (property.computed) {
-        return `[${this.node(property.key)}]: ${value}`;
+        return `[${this.print(property.key)[0]}]: ${value}`;
       }
       const { key } = property;
       if (typeof key !== 'string') {
@@ -414,13 +362,11 @@ class Printer {
     let out = '`';
     rawQuasis.forEach((raw, index) => {
       if (!isTemplateRaw(raw)) {
-        return invalid(
-          `${JSON.stringify(raw)} isn't valid raw template literal text`,
-        );
+        invalid(`${JSON.stringify(raw)} isn't valid raw template literal text`);
       }
       out += raw;
       if (index < expressions.length) {
-        out += `\${${this.node(expressions[index])}}`;
+        out += `\${${this.print(expressions[index])[0]}}`;
       }
     });
     return `${out}\``;
@@ -497,10 +443,12 @@ class Printer {
  * kept; otherwise parentheses are added only where precedence, associativity,
  * or an optional chain's extent requires them, or where JavaScript would
  * misread the text (`??` mixed with `&&`/`||`, a unary base of `**`, an arrow
- * body starting with `{`). Source positions and `Literal.raw` are ignored.
+ * body starting with `{`). The output targets this package's grammar, so it
+ * is valid JavaScript only as far as the two agree (e.g. `this` is an
+ * ordinary name here). Source positions and `Literal.raw` are ignored.
  *
  * Throws a `TypeError` for a tree that has no source form, e.g. an invalid
  * identifier name or a `Literal` holding an object.
  */
 export const print = (node: ASTNode, options?: PrintOptions): string =>
-  new Printer(options?.quote === 'single' ? "'" : '"').node(node);
+  new Printer(options?.quote === 'single' ? "'" : '"').print(node)[0];

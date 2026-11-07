@@ -219,6 +219,8 @@ describe('syntax errors', () => {
     ['"x" "y"', 'unexpected string "y"', 4, 7],
     ['a = 1', 'unexpected token "="', 2, 3],
     ['a.1', 'unexpected number 1, expected a property name', 2, 3],
+    ['a.[0]', 'unexpected token "[", expected a property name', 2, 3],
+    ['a.(0)', 'unexpected token "(", expected a property name', 2, 3],
     ['a[1', 'unexpected end of expression, expected "]"', 3, 3],
     ['f(1', 'unexpected end of expression, expected ")"', 3, 3],
     ['{ ;a: 1 }', 'unexpected token ";", expected a property name', 2, 3],

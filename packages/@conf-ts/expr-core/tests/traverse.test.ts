@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   collectFreeIdentifiers,
   forEachChild,
+  forEachParamBinding,
   getChildren,
   print,
   type ASTNode,
@@ -70,6 +71,31 @@ describe('getChildren() / forEachChild()', () => {
   it('ignores values that are not expression nodes', () => {
     const spread = { type: 'SpreadElement', argument: parseSource('a') };
     expect(getChildren(spread as unknown as ASTNode)).toEqual([]);
+  });
+});
+
+describe('forEachParamBinding()', () => {
+  it('walks defaults and bound names in evaluation order', () => {
+    const ast = parseSource(
+      '(a = 1, {b, c: d = 2} = e, [, f = 3], ...g) => 0',
+    ) as Extract<ASTNode, { type: 'ArrowFunctionExpression' }>;
+    const steps: string[] = [];
+    forEachParamBinding(
+      ast.params,
+      value => steps.push(`default ${print(value)}`),
+      name => steps.push(`bind ${name}`),
+    );
+    expect(steps).toEqual([
+      'default 1',
+      'bind a',
+      'default e',
+      'bind b',
+      'default 2',
+      'bind d',
+      'default 3',
+      'bind f',
+      'bind g',
+    ]);
   });
 });
 

@@ -3,38 +3,56 @@ import type {
   ASTNode,
   IdentifierNode,
   IdentifierParam,
-  SpreadElement,
 } from './types';
 
-// Default values of an arrow's parameters, in the order they are evaluated:
-// each parameter's own (or whole-pattern) default, then those of its pattern
-// elements.
-const paramDefaults = (params: ArrowParam[]): ASTNode[] => {
-  const defaults: ASTNode[] = [];
-  for (const param of params) {
-    if (param.kind === 'rest') {
-      continue;
-    }
-    if (param.default !== undefined) {
-      defaults.push(param.default);
-    }
-    const elements: Array<IdentifierParam | null> =
-      param.kind === 'object'
-        ? param.properties.map(property => property.value)
-        : param.kind === 'array'
-          ? param.elements
-          : [];
-    for (const element of elements) {
-      if (element?.default !== undefined) {
-        defaults.push(element.default);
+const ignore = () => {};
+
+/**
+ * Walks how an arrow function binds `params`, in the order its evaluation
+ * does: `onDefault` gets each default value as it would be evaluated, and
+ * `onBind` each name as it becomes bound. A destructuring pattern's own
+ * default (`= c` in `({a = b} = c) => a`) comes first, then each element's
+ * default and name, so a default only sees the names bound before it.
+ */
+export const forEachParamBinding = (
+  params: readonly ArrowParam[],
+  onDefault: (value: ASTNode) => void,
+  onBind: (name: string) => void,
+): void => {
+  const bind = (element: IdentifierParam | null) => {
+    if (element) {
+      if (element.default !== undefined) {
+        onDefault(element.default);
       }
+      onBind(element.name);
+    }
+  };
+  for (const param of params) {
+    switch (param.kind) {
+      case 'identifier':
+        bind(param);
+        break;
+      case 'rest':
+        onBind(param.name);
+        break;
+      case 'object':
+      case 'array':
+        if (param.default !== undefined) {
+          onDefault(param.default);
+        }
+        if (param.kind === 'object') {
+          for (const property of param.properties) {
+            bind(property.value);
+          }
+        } else {
+          for (const element of param.elements) {
+            bind(element);
+          }
+        }
+        break;
     }
   }
-  return defaults;
 };
-
-const isSpread = (node: ASTNode | SpreadElement): node is SpreadElement =>
-  node.type === 'SpreadElement';
 
 /**
  * Calls `visitor` with each direct child expression of `node`, in evaluation
@@ -45,10 +63,9 @@ const isSpread = (node: ASTNode | SpreadElement): node is SpreadElement =>
  *   not an expression, and is skipped; a computed one (`a[b]`) is visited.
  * - Spread elements (`...x`) are visited as their argument.
  * - A tagged template's children are its tag and then its interpolations.
- * - An arrow function's children are its parameters' default values, then
- *   its body. A destructuring pattern's own default (`= c` in `({a = b} = c)
- *   => a`) comes before its elements' defaults, as it is evaluated first. Use
- *   `collectFreeIdentifiers` for the names an arrow doesn't bind.
+ * - An arrow function's children are its parameters' default values, in
+ *   `forEachParamBinding` order, then its body. Use `collectFreeIdentifiers`
+ *   for the names an arrow doesn't bind.
  *
  * Array holes are visited as `Elision` nodes.
  */
@@ -57,10 +74,6 @@ export const forEachChild = (
   visitor: (child: ASTNode) => void,
 ): void => {
   switch (node.type) {
-    case 'Literal':
-    case 'Identifier':
-    case 'Elision':
-      return;
     case 'ParenthesizedExpression':
     case 'ChainExpression':
       visitor(node.expression);
@@ -86,18 +99,20 @@ export const forEachChild = (
       return;
     case 'CallExpression':
       visitor(node.callee);
-      node.args.forEach(arg => visitor(arg));
+      for (const arg of node.args) {
+        visitor(arg);
+      }
       return;
     case 'ArrayExpression':
       for (const element of node.elements) {
-        visitor(isSpread(element) ? element.argument : element);
+        visitor(element.type === 'SpreadElement' ? element.argument : element);
       }
       return;
     case 'ObjectExpression':
       for (const property of node.properties) {
-        if ((property as SpreadElement).type === 'SpreadElement') {
-          visitor((property as SpreadElement).argument);
-        } else if ('key' in property) {
+        if ('type' in property) {
+          visitor(property.argument);
+        } else {
           if (property.computed) {
             visitor(property.key);
           }
@@ -106,18 +121,23 @@ export const forEachChild = (
       }
       return;
     case 'TemplateLiteral':
-      node.expressions.forEach(expression => visitor(expression));
+      for (const expression of node.expressions) {
+        visitor(expression);
+      }
       return;
     case 'TaggedTemplateExpression':
       visitor(node.tag);
-      node.quasi.expressions.forEach(expression => visitor(expression));
+      for (const expression of node.quasi.expressions) {
+        visitor(expression);
+      }
       return;
     case 'ArrowFunctionExpression':
-      paramDefaults(node.params).forEach(value => visitor(value));
+      forEachParamBinding(node.params, value => visitor(value), ignore);
       visitor(node.body);
       return;
     default:
-      // Not an expression node (e.g. a SpreadElement passed in directly).
+      // Literal, Identifier, Elision, or something that is not an expression
+      // node (e.g. a SpreadElement passed in directly): no children.
       return;
   }
 };
@@ -140,46 +160,17 @@ const collect = (
     if (!bound.has(node.name)) {
       found.push(node);
     }
-    return;
-  }
-  if (node.type !== 'ArrowFunctionExpression') {
+  } else if (node.type === 'ArrowFunctionExpression') {
+    const local = new Set(bound);
+    forEachParamBinding(
+      node.params,
+      value => collect(value, local, found),
+      name => local.add(name),
+    );
+    collect(node.body, local, found);
+  } else {
     forEachChild(node, child => collect(child, bound, found));
-    return;
   }
-  // Parameters are bound in order, so a default value only sees the
-  // parameters before it; a name it reads that a later parameter binds still
-  // refers to the enclosing scope (as when the evaluator runs it).
-  const local = new Set(bound);
-  const bind = (param: IdentifierParam) => {
-    if (param.default !== undefined) {
-      collect(param.default, local, found);
-    }
-    local.add(param.name);
-  };
-  for (const param of node.params) {
-    switch (param.kind) {
-      case 'identifier':
-        bind(param);
-        break;
-      case 'rest':
-        local.add(param.name);
-        break;
-      case 'object':
-      case 'array':
-        if (param.default !== undefined) {
-          collect(param.default, local, found);
-        }
-        for (const element of param.kind === 'object'
-          ? param.properties.map(property => property.value)
-          : param.elements) {
-          if (element) {
-            bind(element);
-          }
-        }
-        break;
-    }
-  }
-  collect(node.body, local, found);
 };
 
 /**

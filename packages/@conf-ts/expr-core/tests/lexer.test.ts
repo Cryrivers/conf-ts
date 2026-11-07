@@ -44,6 +44,11 @@ describe('tokenize()', () => {
       ['eof', ''],
     ]);
     expect(tokens.at(-1)).toMatchObject({ start: 22, end: 22 });
+    // `raw` is the source text; `value` decodes string literals
+    expect(
+      tokens.every(token => token.raw === source.slice(token.start, token.end)),
+    ).toBe(true);
+    expect(tokens[4]).toMatchObject({ value: 'x\ty', raw: '"x\\ty"' });
   });
 
   it('keeps the full source text of template escapes in rawQuasis', () => {
@@ -138,7 +143,7 @@ describe('tokenize()', () => {
     expect(() => tokenize(undefined)).toThrow('invalid expression');
     expect(() => tokenize(1 as never)).toThrow('invalid expression');
     expect(tokenize('')).toEqual([
-      { kind: 'eof', value: '', start: 0, end: 0 },
+      { kind: 'eof', value: '', raw: '', start: 0, end: 0 },
     ]);
   });
 });

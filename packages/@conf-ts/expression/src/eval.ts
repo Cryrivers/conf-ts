@@ -4,17 +4,16 @@ import type {
   ASTNode,
   BinaryNode,
   CallNode,
-  ComputedObjectProperty,
   Env,
   IdentifierNode,
   LiteralNode,
   LogicalNode,
   MemberNode,
-  ObjectProperty,
-  SpreadElement,
   TaggedTemplateNode,
   UnaryNode,
 } from '@conf-ts/expr-core';
+
+import type { Compiled } from './types';
 
 export type EvalOptions = {
   optionalMemberAccess?: boolean;
@@ -29,8 +28,93 @@ type Reference = {
   key: PropertyKey;
 };
 
-const toKey = (key: unknown): PropertyKey =>
+// --- Runtime helpers, shared with the code that compile.ts generates ---
+
+export const toKey = (key: unknown): PropertyKey =>
   typeof key === 'symbol' ? key : String(key);
+
+export const isNullish = (value: unknown): value is null | undefined =>
+  value === null || value === undefined;
+
+export const nullishMemberError = (): never => {
+  throw new TypeError('Cannot read properties of null or undefined');
+};
+
+export const nonCallableError = (): never => {
+  throw new TypeError('Expression value is not callable');
+};
+
+export const destructureError = (): never => {
+  throw new TypeError('Cannot destructure null or undefined');
+};
+
+// Globals available to compiled expr text even when absent from env. These
+// back the @conf-ts/macro type-casting macros (String/Number/Boolean) that
+// the compiler keeps as runtime calls (e.g. `Number(a + 1)`) when they
+// can't be folded to a compile-time constant. An env value of the same name
+// always takes precedence.
+//
+// This must stay in sync with its counterparts, since nothing enforces
+// agreement between them (@conf-ts/expression has no dependency on the macro
+// transformer packages):
+//   - macro-transformer/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
+//   - macro-transformer-native/src/transform.rs: runtime fallback macro matching
+// expr-check.ts's BUILTIN_RESULTS (the names @conf-ts/expression/zod accepts
+// even when a context schema lacks them) is typed by this object's keys, and
+// compile.ts uses this object itself.
+// If a name is added to the transformers but not here, the compiler emits
+// runtime call text for it that this evaluator can't resolve, and it throws
+// "Expression value is not callable" at request time instead of compile time.
+export const GLOBAL_BUILTINS = {
+  String,
+  Number,
+  Boolean,
+};
+
+// Both env and GLOBAL_BUILTINS are looked up by own-property only, never via
+// the prototype chain. Every plain JS object inherits Object.prototype, so an
+// unguarded lookup (`env[name]`) lets a compiled or hand-written expr string
+// resolve names like `constructor`/`toString` to real Object.prototype
+// members — `constructor.constructor(...)` reaches the Function constructor,
+// letting arbitrary expr text execute arbitrary JS. Own-property-only lookup
+// closes that off for both env and the new builtins object.
+//
+// Uses Object.prototype.hasOwnProperty.call rather than the newer
+// Object.hasOwn for wider runtime compatibility.
+export const hasOwn = (obj: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
+
+export const copySpread = (target: object, source: unknown): void => {
+  if (isNullish(source)) {
+    return;
+  }
+  const boxed = Object(source);
+  for (const key of Reflect.ownKeys(boxed)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(boxed, key);
+    if (!descriptor?.enumerable) {
+      continue;
+    }
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: true,
+      value: Reflect.get(boxed, key),
+      writable: true,
+    });
+  }
+};
+
+/** The frozen strings array (with `raw`) a template tag is called with. */
+export const templateStrings = (
+  quasis: string[],
+  rawQuasis: string[],
+): TemplateStringsArray => {
+  const raw = Object.freeze([...rawQuasis]);
+  const strings = [...quasis] as string[] & { raw: readonly string[] };
+  Object.defineProperty(strings, 'raw', { value: raw });
+  return Object.freeze(strings) as unknown as TemplateStringsArray;
+};
+
+// --- Interpreter ---
 
 const propertyKey = (
   node: MemberNode,
@@ -41,31 +125,49 @@ const propertyKey = (
     ? toKey(evaluate(node.property, env, options))
     : String((node.property as LiteralNode).value);
 
-const nullishMemberError = (): never => {
-  throw new TypeError('Cannot read properties of null or undefined');
+// The object a member access reads from, or CHAIN_SHORT_CIRCUIT when the
+// access is skipped; a non-optional access on null/undefined throws.
+const memberObject = (
+  node: MemberNode,
+  env: Env,
+  chain: boolean,
+  options?: EvalOptions,
+): ChainResult => {
+  const object = chain
+    ? evaluateChainOperand(node.object, env, options)
+    : evaluate(node.object, env, options);
+  if (object === CHAIN_SHORT_CIRCUIT || !isNullish(object)) {
+    return object;
+  }
+  return node.optional || options?.optionalMemberAccess
+    ? CHAIN_SHORT_CIRCUIT
+    : nullishMemberError();
 };
 
-const nonCallableError = (): never => {
-  throw new TypeError('Expression value is not callable');
+// Reads a member without building a Reference; keys are evaluated only once
+// the object is known to be readable.
+const memberValue = (
+  node: MemberNode,
+  env: Env,
+  chain: boolean,
+  options?: EvalOptions,
+): ChainResult => {
+  const object = memberObject(node, env, chain, options);
+  return object === CHAIN_SHORT_CIRCUIT
+    ? object
+    : (object as Record<PropertyKey, unknown>)[propertyKey(node, env, options)];
 };
 
+// The object and key as well, for calls (`this`), tags, and `delete`.
 const memberReference = (
   node: MemberNode,
   env: Env,
   chain: boolean,
   options?: EvalOptions,
 ): Reference | typeof CHAIN_SHORT_CIRCUIT => {
-  const object = chain
-    ? evaluateChainOperand(node.object, env, options)
-    : evaluate(node.object, env, options);
+  const object = memberObject(node, env, chain, options);
   if (object === CHAIN_SHORT_CIRCUIT) {
-    return CHAIN_SHORT_CIRCUIT;
-  }
-  if (object === null || object === undefined) {
-    if (node.optional || options?.optionalMemberAccess) {
-      return CHAIN_SHORT_CIRCUIT;
-    }
-    return nullishMemberError();
+    return object;
   }
   const key = propertyKey(node, env, options);
   return {
@@ -81,8 +183,7 @@ const evaluateChainOperand = (
   options?: EvalOptions,
 ): ChainResult => {
   if (node.type === 'MemberExpression') {
-    const reference = memberReference(node, env, true, options);
-    return reference === CHAIN_SHORT_CIRCUIT ? reference : reference.value;
+    return memberValue(node, env, true, options);
   }
   if (node.type === 'CallExpression') {
     return evaluateCall(node, env, true, options);
@@ -116,95 +217,57 @@ const evaluateCall = (
     value = callee;
   }
 
-  if (node.optional && (value === null || value === undefined)) {
+  if (node.optional && isNullish(value)) {
     return CHAIN_SHORT_CIRCUIT;
   }
   if (typeof value !== 'function') {
     return nonCallableError();
   }
 
-  const args = node.args.map(arg => evaluate(arg, env, options));
+  const args: unknown[] = [];
+  for (const arg of node.args) {
+    args.push(evaluate(arg, env, options));
+  }
   return Reflect.apply(value, thisArg, args);
 };
-
-// Globals available to compiled expr text even when absent from env. These
-// back the @conf-ts/macro type-casting macros (String/Number/Boolean) that
-// the compiler keeps as runtime calls (e.g. `Number(a + 1)`) when they
-// can't be folded to a compile-time constant. An env value of the same name
-// always takes precedence.
-//
-// This must stay in sync with its counterparts, since nothing enforces
-// agreement between them (@conf-ts/expression has no dependency on the macro
-// transformer packages):
-//   - macro-transformer/src/macro.ts: EXPR_RUNTIME_FALLBACK_MACROS
-//   - macro-transformer-native/src/transform.rs: runtime fallback macro matching
-//   - expr-check.ts: BUILTIN_RESULTS, the names @conf-ts/expression/zod
-//     accepts in an expression even when its context schema lacks them
-// If a name is added to the transformers but not here, the compiler emits
-// runtime call text for it that this evaluator can't resolve, and it throws
-// "Expression value is not callable" at request time instead of compile time.
-const GLOBAL_BUILTINS: Env = {
-  String,
-  Number,
-  Boolean,
-};
-
-// Both env and GLOBAL_BUILTINS are looked up by own-property only, never via
-// the prototype chain. Every plain JS object inherits Object.prototype, so an
-// unguarded lookup (`env[name]`) lets a compiled or hand-written expr string
-// resolve names like `constructor`/`toString` to real Object.prototype
-// members — `constructor.constructor(...)` reaches the Function constructor,
-// letting arbitrary expr text execute arbitrary JS. Own-property-only lookup
-// closes that off for both env and the new builtins object.
-//
-// Uses Object.prototype.hasOwnProperty.call rather than the newer
-// Object.hasOwn for wider runtime compatibility.
-const hasOwn = (obj: object, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(obj, key);
 
 const evaluateIdentifier = (node: IdentifierNode, env: Env): unknown =>
   hasOwn(env, node.name)
     ? env[node.name]
     : hasOwn(GLOBAL_BUILTINS, node.name)
-      ? GLOBAL_BUILTINS[node.name]
+      ? (GLOBAL_BUILTINS as Env)[node.name]
       : undefined;
+
+const deleteReference = (
+  reference: Reference | typeof CHAIN_SHORT_CIRCUIT,
+): boolean =>
+  reference === CHAIN_SHORT_CIRCUIT ||
+  delete (reference.object as Record<PropertyKey, unknown>)[reference.key];
 
 const deleteExpression = (
   node: ASTNode,
   env: Env,
   options?: EvalOptions,
 ): boolean => {
-  if (node.type === 'ParenthesizedExpression') {
-    return deleteExpression(node.expression, env, options);
-  }
-  if (node.type === 'ChainExpression') {
-    const expression = node.expression;
-    if (expression.type !== 'MemberExpression') {
-      evaluate(expression, env, options);
+  switch (node.type) {
+    case 'ParenthesizedExpression':
+      return deleteExpression(node.expression, env, options);
+    case 'ChainExpression':
+      if (node.expression.type !== 'MemberExpression') {
+        evaluate(node.expression, env, options);
+        return true;
+      }
+      return deleteReference(
+        memberReference(node.expression, env, true, options),
+      );
+    case 'Identifier':
+      return delete env[node.name];
+    case 'MemberExpression':
+      return deleteReference(memberReference(node, env, false, options));
+    default:
+      evaluate(node, env, options);
       return true;
-    }
-    const reference = memberReference(expression, env, true, options);
-    if (reference === CHAIN_SHORT_CIRCUIT) {
-      return true;
-    }
-    return delete (reference.object as Record<PropertyKey, unknown>)[
-      reference.key
-    ];
   }
-  if (node.type === 'Identifier') {
-    return delete env[node.name];
-  }
-  if (node.type === 'MemberExpression') {
-    const reference = memberReference(node, env, false, options);
-    if (reference === CHAIN_SHORT_CIRCUIT) {
-      return true;
-    }
-    return delete (reference.object as Record<PropertyKey, unknown>)[
-      reference.key
-    ];
-  }
-  evaluate(node, env, options);
-  return true;
 };
 
 const evaluateUnary = (
@@ -283,28 +346,7 @@ const evaluateLogical = (
   if (node.operator === '||') {
     return left ? left : evaluate(node.right, env, options);
   }
-  return left === null || left === undefined
-    ? evaluate(node.right, env, options)
-    : left;
-};
-
-const copySpread = (target: object, source: unknown): void => {
-  if (source === null || source === undefined) {
-    return;
-  }
-  const boxed = Object(source);
-  for (const key of Reflect.ownKeys(boxed)) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(boxed, key);
-    if (!descriptor?.enumerable) {
-      continue;
-    }
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: true,
-      value: Reflect.get(boxed, key),
-      writable: true,
-    });
-  }
+  return isNullish(left) ? evaluate(node.right, env, options) : left;
 };
 
 // Spreads any iterable (arrays, strings, Sets, Maps, generators, ...) into
@@ -316,9 +358,6 @@ const spreadIntoArray = (target: unknown[], source: unknown): void => {
     target.push(item);
   }
 };
-
-const isNullish = (value: unknown): value is null | undefined =>
-  value === null || value === undefined;
 
 // A default only kicks in when the argument is strictly `undefined` —
 // shared by all three param kinds below (a plain identifier's own default,
@@ -335,12 +374,8 @@ const resolveWithDefault = (
 
 // Destructuring `null`/`undefined` (once any default has already been
 // applied) throws, just like `const {a} = null` would.
-const requireDestructurable = (source: unknown): unknown => {
-  if (isNullish(source)) {
-    throw new TypeError('Cannot destructure null or undefined');
-  }
-  return source;
-};
+const requireDestructurable = (source: unknown): unknown =>
+  isNullish(source) ? destructureError() : source;
 
 // Binds one parameter (which may itself be a one-level destructuring
 // pattern) against an incoming argument, writing directly into `env`.
@@ -368,10 +403,14 @@ const bindArrowParam = (
       const source = requireDestructurable(
         resolveWithDefault(arg, param.default, env, options),
       ) as ArrayLike<unknown>;
-      param.elements.forEach((element, index) => {
-        if (element === null) return; // hole, e.g. the middle slot in `[a, , b]`
-        bindArrowParam(element, source[index], env, options);
-      });
+      const { elements } = param;
+      for (let index = 0; index < elements.length; index++) {
+        const element = elements[index];
+        // `null` is a hole, e.g. the middle slot in `[a, , b]`
+        if (element !== null) {
+          bindArrowParam(element, source[index], env, options);
+        }
+      }
       return;
     }
   }
@@ -384,13 +423,15 @@ const evaluateArrowFunction =
   (node: ArrowFunctionNode, env: Env, options?: EvalOptions) =>
   (...args: unknown[]): unknown => {
     const localEnv: Env = { ...env };
-    node.params.forEach((param, index) => {
+    const { params } = node;
+    for (let index = 0; index < params.length; index++) {
+      const param = params[index];
       if (param.kind === 'rest') {
         localEnv[param.name] = args.slice(index);
-        return;
+      } else {
+        bindArrowParam(param, args[index], localEnv, options);
       }
-      bindArrowParam(param, args[index], localEnv, options);
-    });
+    }
     return evaluate(node.body, localEnv, options);
   };
 
@@ -415,21 +456,13 @@ const evaluateTaggedTemplate = (
     return nonCallableError();
   }
 
-  const raw = Object.freeze([...node.quasi.rawQuasis]);
-  const strings = [...node.quasi.quasis] as string[] & {
-    raw: readonly string[];
-  };
-  Object.defineProperty(strings, 'raw', {
-    value: raw,
-  });
-  Object.freeze(strings);
-
-  return Reflect.apply(tag, thisArg, [
-    strings,
-    ...node.quasi.expressions.map(expression =>
-      evaluate(expression, env, options),
-    ),
-  ]);
+  const args: unknown[] = [
+    templateStrings(node.quasi.quasis, node.quasi.rawQuasis),
+  ];
+  for (const expression of node.quasi.expressions) {
+    args.push(evaluate(expression, env, options));
+  }
+  return Reflect.apply(tag, thisArg, args);
 };
 
 export const evaluate = (
@@ -461,8 +494,8 @@ export const evaluate = (
         ? evaluate(node.consequent, env, options)
         : evaluate(node.alternate, env, options);
     case 'MemberExpression': {
-      const reference = memberReference(node, env, false, options);
-      return reference === CHAIN_SHORT_CIRCUIT ? undefined : reference.value;
+      const result = memberValue(node, env, false, options);
+      return result === CHAIN_SHORT_CIRCUIT ? undefined : result;
     }
     case 'CallExpression': {
       const result = evaluateCall(node, env, false, options);
@@ -471,15 +504,12 @@ export const evaluate = (
     case 'ArrayExpression': {
       const array: unknown[] = [];
       for (const element of node.elements) {
-        if ((element as SpreadElement).type === 'SpreadElement') {
-          spreadIntoArray(
-            array,
-            evaluate((element as SpreadElement).argument, env, options),
-          );
-        } else if ((element as ASTNode).type === 'Elision') {
+        if (element.type === 'SpreadElement') {
+          spreadIntoArray(array, evaluate(element.argument, env, options));
+        } else if (element.type === 'Elision') {
           array.length += 1;
         } else {
-          array.push(evaluate(element as ASTNode, env, options));
+          array.push(evaluate(element, env, options));
         }
       }
       return array;
@@ -487,17 +517,13 @@ export const evaluate = (
     case 'ObjectExpression': {
       const object: Record<PropertyKey, unknown> = {};
       for (const property of node.properties) {
-        if ((property as SpreadElement).type === 'SpreadElement') {
-          copySpread(
-            object,
-            evaluate((property as SpreadElement).argument, env, options),
-          );
+        if ('type' in property) {
+          copySpread(object, evaluate(property.argument, env, options));
         } else {
-          const item = property as ObjectProperty | ComputedObjectProperty;
-          const key = item.computed
-            ? toKey(evaluate(item.key, env, options))
-            : item.key;
-          object[key] = evaluate(item.value, env, options);
+          const key = property.computed
+            ? toKey(evaluate(property.key, env, options))
+            : property.key;
+          object[key] = evaluate(property.value, env, options);
         }
       }
       return object;
@@ -516,4 +542,15 @@ export const evaluate = (
     case 'ArrowFunctionExpression':
       return evaluateArrowFunction(node, env, options);
   }
+};
+
+const LOOSE: EvalOptions = { optionalMemberAccess: true };
+
+/** An interpreter-backed function evaluating `ast` against its argument. */
+export const interpret = <Context, ReturnType>(
+  ast: ASTNode,
+  optionalMemberAccess: boolean,
+): Compiled<Context, ReturnType> => {
+  const options = optionalMemberAccess ? LOOSE : undefined;
+  return (env: Context) => evaluate(ast, env as Env, options) as ReturnType;
 };

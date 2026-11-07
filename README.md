@@ -575,7 +575,7 @@ The parser applies JavaScript-style precedence to the supported operators, inclu
 
 Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. The same options work with `compile()`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error.
 
-Interpreted and compiled expressions have separate 1,000-entry LRU caches by source and option mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Invalid syntax throws an `ExprSyntaxError` carrying the offending range (`start`/`end`) and reason (`detail`).
+Interpreted and compiled expressions keep separate 1,000-entry LRU caches for each option mode, keyed by source (`optionalMemberAccess` and its `loose` alias share a mode). Invalid syntax throws an `ExprSyntaxError` carrying the offending range (`start`/`end`) and reason (`detail`).
 
 Tooling can import the parser, printer, and AST utilities from `@conf-ts/expression/core`, a re-export of [`@conf-ts/expr-core`](packages/@conf-ts/expr-core): `tryParse()` returns the AST (every node carrying its source range) or the syntax error, `print()` turns an AST, e.g. a rewritten condition, back into source text, and `forEachChild()`/`getChildren()`/`collectFreeIdentifiers()` walk it.
 

@@ -19,7 +19,7 @@ if (result.ok) {
 
 `parse(tokenize(source), source)` returns the same tree but throws an `ExprSyntaxError` instead. The error's `message` keeps the long-standing `parse expression error: …` / `invalid expression: …` text; `detail` says what is wrong (`unexpected token ")", expected an expression`, `unterminated string literal`, …), `start`/`end` locate it as offsets into the source (`end` exclusive, equal to `start` at the end of input), and `token` is the rejected token when the parser found the error.
 
-Every token, AST node, spread element, object property, and arrow parameter that `parse()` creates carries its `start`/`end` range, measured in the parsed string, including inside template literal interpolations. Literals also keep their source text as `raw` (`1e3`, `'a'`). Both are optional in the types so hand-built nodes can leave them out.
+Every token, AST node, spread element, object property, and arrow parameter carries its `start`/`end` range, measured in the parsed string, including inside template literal interpolations. Tokens and literals also keep their source text as `raw` (`1e3`, `'a'`). On AST objects both are optional in the types, so hand-built nodes can leave them out.
 
 ### Printing
 
@@ -51,3 +51,4 @@ print({
 
 - `forEachChild(node, visit)` / `getChildren(node)`: a node's child expressions in evaluation order. Non-computed property names (`b` in `a.b`) are not children, spread elements are visited as their argument, and an arrow function's children are its parameter defaults followed by its body.
 - `collectFreeIdentifiers(node)`: every `Identifier` that reads the evaluation environment, i.e. not bound by an enclosing arrow function's parameters, with its range. A parameter default only sees the parameters before it.
+- `forEachParamBinding(params, onDefault, onBind)`: the order in which an arrow function evaluates its parameter defaults and binds its parameter names, for scope analysis of your own.

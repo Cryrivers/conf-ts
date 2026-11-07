@@ -31,7 +31,13 @@ export type NodeRange = Partial<SourceRange>;
 
 export interface Token extends SourceRange {
   kind: TokenKind;
+  /**
+   * A string literal's decoded value, `''` for a template literal (see
+   * `template`), and otherwise the token's text.
+   */
   value: string;
+  /** The token's source text, e.g. a string literal with its quotes. */
+  raw: string;
   // Template literal payload when kind === 'template'
   // quasis.length === rawQuasis.length === expressionsSrc.length + 1
   template?: {

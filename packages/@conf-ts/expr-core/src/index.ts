@@ -5,7 +5,7 @@ export {
   type ExprSyntaxErrorOptions,
 } from './errors';
 export type { Expr, LooseExpr } from './expr';
-export { tokenize, type LexerState } from './lexer';
+export { tokenize } from './lexer';
 export {
   parse,
   parseExpression,
@@ -14,5 +14,10 @@ export {
   type ParseResult,
 } from './parser';
 export { print, type PrintOptions } from './print';
-export { collectFreeIdentifiers, forEachChild, getChildren } from './traverse';
+export {
+  collectFreeIdentifiers,
+  forEachChild,
+  forEachParamBinding,
+  getChildren,
+} from './traverse';
 export type * from './types';

@@ -53,11 +53,7 @@ export type ExprIssueParams = {
   end: number;
 };
 
-export type ValidateExpressionOptions = {
-  /** Schema of the context; see `ExprSchemaOptions.context`. */
-  context?: z.core.$ZodType;
-  /** Schema of the result; see `ExprSchemaOptions.returns`. */
-  returns?: z.core.$ZodType;
+export type ValidateExpressionOptions = ExprSchemaOptions & {
   /** Check for evaluation with `loose: true`, as `LooseExprSchema()` does. */
   loose?: boolean;
 };
@@ -430,36 +426,60 @@ function assertSchema(
   }
 }
 
-const checkOptions = (
-  context: Schema | undefined,
-  returns: Schema | undefined,
+// Models are shared by every check against the same schema; schemas are
+// immutable.
+const contextModels = new WeakMap<Schema, ContextModel<Variants>>();
+const returnModels = new WeakMap<Schema, ReturnModel>();
+
+const memoized = <Model>(
+  models: WeakMap<Schema, Model>,
+  schema: Schema,
+  build: (schema: Schema) => Model,
+): Model => {
+  let model = models.get(schema);
+  if (model === undefined) {
+    model = build(schema);
+    models.set(schema, model);
+  }
+  return model;
+};
+
+/**
+ * Validates `options` now, and returns the check options, built on first use:
+ * lazy and getter-based schemas may reference declarations that aren't
+ * initialized yet when `options` are passed.
+ */
+function prepare(
+  factory: string,
+  options: ExprSchemaOptions | undefined,
   loose: boolean,
-): CheckOptions<Variants> => ({
-  context: context && contextModel(context),
-  returns: returns && returnModel(returns),
-  loose,
-});
+): () => CheckOptions<Variants> {
+  const context = options?.context;
+  const returns = options?.returns;
+  assertSchema(factory, 'context', context);
+  assertSchema(factory, 'returns', returns);
+  let checkOptions: CheckOptions<Variants> | undefined;
+  return () =>
+    (checkOptions ??= {
+      context: context && memoized(contextModels, context, contextModel),
+      returns: returns && memoized(returnModels, returns, returnModel),
+      loose,
+    });
+}
 
 function createExprSchema<Output>(
   factory: string,
   options: ExprSchemaOptions | undefined,
   loose: boolean,
 ): z.ZodCustom<Output, Output> {
-  const context = options?.context;
-  const returns = options?.returns;
-  assertSchema(factory, 'context', context);
-  assertSchema(factory, 'returns', returns);
-  // Built on first use: lazy and getter-based schemas may reference
-  // declarations that aren't initialized yet when the schema is created.
-  let models: CheckOptions<Variants> | undefined;
+  const checkOptions = prepare(factory, options, loose);
   return z.custom<Output>().check(payload => {
     const input: unknown = payload.value;
     if (typeof input !== 'string') {
       payload.issues.push({ code: 'invalid_type', expected: 'string', input });
       return;
     }
-    models ??= checkOptions(context, returns, loose);
-    for (const problem of checkExpression(input, models)) {
+    for (const problem of checkExpression(input, checkOptions())) {
       const params: ExprIssueParams = {
         reason: problem.reason,
         start: problem.start,
@@ -508,15 +528,13 @@ export function validateExpression(
   source: string,
   options?: ValidateExpressionOptions,
 ): ExprProblem[] {
-  const context = options?.context;
-  const returns = options?.returns;
-  assertSchema('validateExpression', 'context', context);
-  assertSchema('validateExpression', 'returns', returns);
+  const checkOptions = prepare(
+    'validateExpression',
+    options,
+    options?.loose === true,
+  );
   if (typeof source !== 'string') {
     throw new TypeError('validateExpression(): `source` must be a string');
   }
-  return checkExpression(
-    source,
-    checkOptions(context, returns, options?.loose === true),
-  );
+  return checkExpression(source, checkOptions());
 }

@@ -2,7 +2,6 @@ import { ExprSyntaxError, formatInvalid } from './errors';
 import type { Token, TokenKind } from './types';
 
 const isDigit = (ch: string) => ch >= '0' && ch <= '9';
-const HEX4 = /^[0-9a-fA-F]{4}$/;
 const isIdentStart = (ch: string) =>
   ch === '_' ||
   ch === '$' ||
@@ -10,21 +9,23 @@ const isIdentStart = (ch: string) =>
   (ch >= 'A' && ch <= 'Z');
 const isIdentPart = (ch: string) => isIdentStart(ch) || isDigit(ch);
 
-const punctuators = new Set(['(', ')', '[', ']', '{', '}', ',', ':', '.', '?']);
+/** Four hex digits, as in a `\uXXXX` escape. */
+export const HEX4 = /^[0-9a-fA-F]{4}$/;
 
-const twoCharOps = new Set([
-  '==',
-  '!=',
-  '>=',
-  '<=',
-  '&&',
-  '||',
-  '??',
-  '**',
-  '<<',
-  '>>',
-]);
-const threeCharOps = new Set(['===', '!==', '...', '>>>']);
+/** Whether `text` is spelled like an identifier (keywords included). */
+export const isIdentifierText = (text: string): boolean => {
+  if (!isIdentStart(text[0] ?? '')) {
+    return false;
+  }
+  for (let i = 1; i < text.length; i++) {
+    if (!isIdentPart(text[i])) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const punctuators = new Set(['(', ')', '[', ']', '{', '}', ',', ':', '.', '?']);
 
 /**
  * Words the lexer doesn't emit as identifiers. Matched case-sensitively, as in
@@ -45,41 +46,44 @@ export const keywordKinds: ReadonlyMap<string, TokenKind> = new Map<
   ['delete', 'operator'],
 ]);
 
-export interface LexerState {
-  input: string;
+interface State {
+  readonly input: string;
   pos: number;
-}
-
-interface State extends LexerState {
   /** Offset of `input` in the source that token positions refer to. */
   readonly base: number;
 }
 
 const eof = (st: State) => st.pos >= st.input.length;
 
+// A token ending at `st.pos`. `raw` defaults to the source text; tokens whose
+// value is their source text pass `value` instead of slicing it again.
 const token = (
   st: State,
   kind: TokenKind,
   value: string,
   start: number,
-): Token => {
-  return { kind, value, start: st.base + start, end: st.base + st.pos };
-};
+  raw = st.input.slice(start, st.pos),
+): Token => ({
+  kind,
+  value,
+  raw,
+  start: st.base + start,
+  end: st.base + st.pos,
+});
 
 // `message` keeps the historical text: the source being tokenized plus, for
-// some errors only, a detail. `detail` is always given on the error itself.
+// some errors only (`quoteDetail`), the detail. The error always has `detail`.
 const fail = (
   st: State,
   start: number,
   end: number,
   detail: string,
-  messageDetail?: string,
+  quoteDetail: boolean,
 ): never => {
-  throw new ExprSyntaxError(formatInvalid(st.input, messageDetail), {
-    start: st.base + start,
-    end: st.base + end,
-    detail,
-  });
+  throw new ExprSyntaxError(
+    formatInvalid(st.input, quoteDetail ? detail : undefined),
+    { start: st.base + start, end: st.base + end, detail },
+  );
 };
 
 const skipWhitespace = (st: State) => {
@@ -120,11 +124,12 @@ const readNumber = (st: State): Token => {
       st.pos++;
     }
     if (eof(st) || !isDigit(st.input[st.pos])) {
-      fail(st, start, st.pos, 'missing exponent digits');
+      fail(st, start, st.pos, 'missing exponent digits', false);
     }
     skipDigits(st);
   }
-  return token(st, 'number', st.input.slice(start, st.pos), start);
+  const text = st.input.slice(start, st.pos);
+  return token(st, 'number', text, start, text);
 };
 
 /**
@@ -157,7 +162,7 @@ const decodeEscape = (st: State): string | undefined => {
       const hex = st.input.slice(hexStart, hexStart + 4);
       if (!HEX4.test(hex)) {
         const detail = `invalid unicode escape [\\u${hex}]`;
-        fail(st, backslash, hexStart + hex.length, detail, detail);
+        fail(st, backslash, hexStart + hex.length, detail, true);
       }
       st.pos += 4;
       return String.fromCharCode(parseInt(hex, 16));
@@ -168,63 +173,54 @@ const decodeEscape = (st: State): string | undefined => {
   }
 };
 
+// Literal text is collected as slices between escapes rather than one
+// character at a time.
+
 const readString = (st: State): Token => {
+  const { input } = st;
   const start = st.pos;
-  const quote = st.input[st.pos++];
-  let out = '';
+  const quote = input[st.pos++];
+  let value = '';
+  let chunk = st.pos;
   while (!eof(st)) {
-    const ch = st.input[st.pos];
+    const ch = input[st.pos];
     if (ch === quote) {
+      value += input.slice(chunk, st.pos);
       st.pos++;
-      return token(st, 'string', out, start);
+      return token(st, 'string', value, start);
     }
-    if (ch === '\\') {
-      const decoded = decodeEscape(st);
-      if (decoded === undefined) {
-        break;
-      }
-      out += decoded;
-    } else {
-      out += ch;
+    if (ch !== '\\') {
       st.pos++;
+      continue;
     }
+    value += input.slice(chunk, st.pos);
+    const decoded = decodeEscape(st);
+    if (decoded === undefined) {
+      break;
+    }
+    value += decoded;
+    chunk = st.pos;
   }
-  return fail(st, start, st.input.length, 'unterminated string literal');
+  return fail(st, start, input.length, 'unterminated string literal', false);
 };
 
-// Advances `st.pos` by one character without running past the end.
-const step = (st: State) => {
-  st.pos = Math.min(st.pos + 1, st.input.length);
-};
-
-// The skip* helpers only find where a template literal interpolation ends;
+// The skip helpers only find where a template literal interpolation ends;
 // its source is validated when it is tokenized on its own (see the parser).
+// Positions may run past the end of input after a trailing backslash.
 
+// Moves past the string or template literal at `st.pos`, including a
+// template's interpolations, or to the end of input if it isn't closed.
 const skipQuoted = (st: State) => {
-  const quote = st.input[st.pos];
-  step(st);
+  const { input } = st;
+  const quote = input[st.pos++];
   while (!eof(st)) {
-    const ch = st.input[st.pos];
-    step(st);
+    const ch = input[st.pos++];
     if (ch === '\\') {
-      step(st);
+      st.pos++;
     } else if (ch === quote) {
       return;
-    }
-  }
-};
-
-const skipTemplate = (st: State) => {
-  step(st); // opening backtick
-  while (!eof(st)) {
-    const ch = st.input[st.pos];
-    step(st);
-    if (ch === '\\') {
-      step(st);
-    } else if (ch === '`') {
-      return;
-    } else if (ch === '$' && st.input[st.pos] === '{') {
-      step(st);
+    } else if (quote === '`' && ch === '$' && input[st.pos] === '{') {
+      st.pos++;
       if (!skipInterpolation(st)) {
         return;
       }
@@ -237,20 +233,17 @@ const skipTemplate = (st: State) => {
  * after `${`. Returns false when the input ends first.
  */
 const skipInterpolation = (st: State): boolean => {
+  const { input } = st;
   let depth = 0;
   while (!eof(st)) {
-    const ch = st.input[st.pos];
-    if (ch === '"' || ch === "'") {
+    const ch = input[st.pos];
+    if (ch === '"' || ch === "'" || ch === '`') {
       skipQuoted(st);
       continue;
     }
-    if (ch === '`') {
-      skipTemplate(st);
-      continue;
-    }
-    step(st);
+    st.pos++;
     if (ch === '\\') {
-      step(st);
+      st.pos++;
     } else if (ch === '{') {
       depth++;
     } else if (ch === '}') {
@@ -264,53 +257,56 @@ const skipInterpolation = (st: State): boolean => {
 };
 
 const readTemplate = (st: State): Token => {
+  const { input } = st;
   const start = st.pos;
   st.pos++; // opening backtick
   const quasis: string[] = [];
   const rawQuasis: string[] = [];
   const expressionsSrc: string[] = [];
   const expressionsStart: number[] = [];
-  let cooked = '';
   let rawStart = st.pos;
+  let cooked = '';
+  let chunk = st.pos;
   while (!eof(st)) {
-    const ch = st.input[st.pos];
-    if (ch === '`') {
-      quasis.push(cooked);
-      rawQuasis.push(st.input.slice(rawStart, st.pos));
+    const ch = input[st.pos];
+    if (ch === '\\') {
+      cooked += input.slice(chunk, st.pos);
+      const decoded = decodeEscape(st);
+      if (decoded === undefined) {
+        // the historical message has no detail here
+        fail(st, start, input.length, 'unterminated template literal', false);
+      }
+      cooked += decoded;
+      chunk = st.pos;
+      continue;
+    }
+    const interpolation = ch === '$' && input[st.pos + 1] === '{';
+    if (ch !== '`' && !interpolation) {
+      st.pos++;
+      continue;
+    }
+    // End of a chunk; without escapes its cooked text is its raw text.
+    const raw = input.slice(rawStart, st.pos);
+    rawQuasis.push(raw);
+    quasis.push(chunk === rawStart ? raw : cooked + input.slice(chunk, st.pos));
+    if (!interpolation) {
       st.pos++;
       const result = token(st, 'template', '', start);
       result.template = { quasis, rawQuasis, expressionsSrc, expressionsStart };
       return result;
     }
-    if (ch === '\\') {
-      const decoded = decodeEscape(st);
-      if (decoded === undefined) {
-        fail(st, start, st.input.length, 'unterminated template literal');
-      }
-      cooked += decoded;
-      continue;
+    const open = st.pos;
+    st.pos += 2;
+    const expressionStart = st.pos;
+    if (!skipInterpolation(st)) {
+      fail(st, open, input.length, 'unterminated template expression', true);
     }
-    if (ch === '$' && st.input[st.pos + 1] === '{') {
-      quasis.push(cooked);
-      rawQuasis.push(st.input.slice(rawStart, st.pos));
-      cooked = '';
-      const open = st.pos;
-      st.pos += 2;
-      const expressionStart = st.pos;
-      if (!skipInterpolation(st)) {
-        const detail = 'unterminated template expression';
-        fail(st, open, st.input.length, detail, detail);
-      }
-      expressionsSrc.push(st.input.slice(expressionStart, st.pos - 1));
-      expressionsStart.push(st.base + expressionStart);
-      rawStart = st.pos;
-      continue;
-    }
-    cooked += ch;
-    st.pos++;
+    expressionsSrc.push(input.slice(expressionStart, st.pos - 1));
+    expressionsStart.push(st.base + expressionStart);
+    cooked = '';
+    rawStart = chunk = st.pos;
   }
-  const detail = 'unterminated template literal';
-  return fail(st, start, st.input.length, detail, detail);
+  return fail(st, start, input.length, 'unterminated template literal', true);
 };
 
 const readIdentifier = (st: State): Token => {
@@ -320,29 +316,47 @@ const readIdentifier = (st: State): Token => {
     st.pos++;
   }
   const id = st.input.slice(start, st.pos);
-  return token(st, keywordKinds.get(id) ?? 'identifier', id, start);
+  return token(st, keywordKinds.get(id) ?? 'identifier', id, start, id);
 };
 
+// Operators of two or three characters all start with one of `= ! < > & | ?
+// * .`; any other character is a one-character token. Punctuators are
+// 'punct' tokens (and so is `=>`); everything else, including characters the
+// parser doesn't know, is an 'operator' token.
 const readOperatorOrPunct = (st: State): Token => {
+  const { input } = st;
   const start = st.pos;
-  const three = st.input.slice(start, start + 3);
-  if (threeCharOps.has(three)) {
-    st.pos += 3;
-    return token(st, 'operator', three, start);
+  const c1 = input[start];
+  const c2 = input[start + 1];
+  const c3 = input[start + 2];
+  let length = 1;
+  switch (c1) {
+    case '=': // = == === =>
+      length = c2 === '=' ? (c3 === '=' ? 3 : 2) : c2 === '>' ? 2 : 1;
+      break;
+    case '!': // ! != !==
+      length = c2 === '=' ? (c3 === '=' ? 3 : 2) : 1;
+      break;
+    case '<': // < <= <<
+      length = c2 === '=' || c2 === '<' ? 2 : 1;
+      break;
+    case '>': // > >= >> >>>
+      length = c2 === '>' ? (c3 === '>' ? 3 : 2) : c2 === '=' ? 2 : 1;
+      break;
+    case '&':
+    case '|':
+    case '?':
+    case '*': // && || ?? **
+      length = c2 === c1 ? 2 : 1;
+      break;
+    case '.': // . ...
+      length = c2 === '.' && c3 === '.' ? 3 : 1;
+      break;
   }
-  const two = three.slice(0, 2);
-  if (two === '=>') {
-    st.pos += 2;
-    return token(st, 'punct', '=>', start);
-  }
-  if (twoCharOps.has(two)) {
-    st.pos += 2;
-    return token(st, 'operator', two, start);
-  }
-  // Single-character operators, and any other character, are 'operator'
-  // tokens; the parser rejects the ones it doesn't know.
-  const one = st.input[st.pos++];
-  return token(st, punctuators.has(one) ? 'punct' : 'operator', one, start);
+  st.pos += length;
+  const value = length === 1 ? c1 : input.slice(start, st.pos);
+  const punct = length === 1 ? punctuators.has(c1) : value === '=>';
+  return token(st, punct ? 'punct' : 'operator', value, start, value);
 };
 
 /**
@@ -361,7 +375,7 @@ export const tokenizeAt = (input: string, base: number): Token[] => {
     const ch = st.input[st.pos];
     if (ch === '\\') {
       // standalone backslash is invalid
-      fail(st, st.pos, st.pos + 1, 'unexpected character "\\"');
+      fail(st, st.pos, st.pos + 1, 'unexpected character "\\"', false);
     }
     if (ch === '"' || ch === "'") {
       tokens.push(readString(st));
@@ -375,7 +389,7 @@ export const tokenizeAt = (input: string, base: number): Token[] => {
       tokens.push(readOperatorOrPunct(st));
     }
   }
-  tokens.push(token(st, 'eof', '', st.pos));
+  tokens.push(token(st, 'eof', '', st.pos, ''));
   return tokens;
 };
 
