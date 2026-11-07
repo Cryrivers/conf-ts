@@ -1,4 +1,5 @@
 import {
+  forEachChild,
   formatInvalid,
   type ArrowFunctionNode,
   type ArrowParam,
@@ -156,96 +157,6 @@ class Scope {
     readonly object: string,
   ) {}
 }
-
-const paramDefaults = (params: ArrowParam[]): ASTNode[] => {
-  const defaults: ASTNode[] = [];
-  for (const param of params) {
-    if (param.kind === 'rest') {
-      continue;
-    }
-    if (param.default !== undefined) {
-      defaults.push(param.default);
-    }
-    const elements: Array<IdentifierParam | null> =
-      param.kind === 'object'
-        ? param.properties.map(property => property.value)
-        : param.kind === 'array'
-          ? param.elements
-          : [];
-    for (const element of elements) {
-      if (element?.default !== undefined) {
-        defaults.push(element.default);
-      }
-    }
-  }
-  return defaults;
-};
-
-const forEachChild = (node: ASTNode, visit: (child: ASTNode) => void): void => {
-  switch (node.type) {
-    case 'Literal':
-    case 'Identifier':
-    case 'Elision':
-      return;
-    case 'ParenthesizedExpression':
-    case 'ChainExpression':
-      visit(node.expression);
-      return;
-    case 'UnaryExpression':
-      visit(node.argument);
-      return;
-    case 'BinaryExpression':
-    case 'LogicalExpression':
-      visit(node.left);
-      visit(node.right);
-      return;
-    case 'ConditionalExpression':
-      visit(node.test);
-      visit(node.consequent);
-      visit(node.alternate);
-      return;
-    case 'MemberExpression':
-      visit(node.object);
-      if (node.computed) {
-        visit(node.property);
-      }
-      return;
-    case 'CallExpression':
-      visit(node.callee);
-      node.args.forEach(visit);
-      return;
-    case 'ArrayExpression':
-      for (const element of node.elements) {
-        visit(element.type === 'SpreadElement' ? element.argument : element);
-      }
-      return;
-    case 'ObjectExpression':
-      for (const property of node.properties) {
-        if ('type' in property) {
-          visit(property.argument);
-        } else {
-          if (property.computed) {
-            visit(property.key);
-          }
-          visit(property.value);
-        }
-      }
-      return;
-    case 'TemplateLiteral':
-      node.expressions.forEach(visit);
-      return;
-    case 'TaggedTemplateExpression':
-      visit(node.tag);
-      node.quasi.expressions.forEach(visit);
-      return;
-    case 'ArrowFunctionExpression':
-      paramDefaults(node.params).forEach(visit);
-      visit(node.body);
-      return;
-    default:
-      return node satisfies never;
-  }
-};
 
 const collectIdentifiers = (node: ASTNode, names: Set<string>): void => {
   if (node.type === 'Identifier') {

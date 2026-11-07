@@ -1,9 +1,12 @@
 import {
+  ExprSyntaxError,
   parse,
   tokenize,
   type ArrowFunctionNode,
   type ASTNode,
+  type IdentifierNode,
   type IdentifierParam,
+  type NodeRange,
   type LogicalNode,
   type MemberNode,
   type SpreadElement,
@@ -57,6 +60,13 @@ export type ExprProblemReason =
 export interface ExprProblem {
   readonly reason: ExprProblemReason;
   readonly message: string;
+  /**
+   * Where the problem is in the expression string, `end` exclusive: the
+   * offending syntax, unknown identifier, or missing property's name, or the
+   * whole expression for its return type.
+   */
+  readonly start: number;
+  readonly end: number;
 }
 
 export interface CheckOptions<Type> {
@@ -347,7 +357,7 @@ class Checker<Type> {
         return valuesInfo([node.value]);
       }
       case 'Identifier': {
-        return this.identifier(node.name, scope);
+        return this.identifier(node, scope);
       }
       case 'Elision': {
         return { kinds: UNDEFINED, values: [undefined] };
@@ -442,7 +452,11 @@ class Checker<Type> {
     }
   }
 
-  checkReturn(info: Info<Type>, returns: ReturnModel): void {
+  checkReturn(
+    info: Info<Type>,
+    returns: ReturnModel,
+    expression: NodeRange,
+  ): void {
     if (info.values) {
       const values = [...new Set(info.values)];
       for (const value of values) {
@@ -451,6 +465,7 @@ class Checker<Type> {
           this.report(
             'return_type',
             `Expression ${values.length > 1 ? 'can evaluate' : 'evaluates'} to ${formatValue(value)}, which the return schema rejects: ${reason}`,
+            expression,
           );
         }
       }
@@ -468,17 +483,32 @@ class Checker<Type> {
       this.report(
         'return_type',
         `Expression evaluates to ${formatKinds(kinds)}, but the return schema expects ${formatKinds(expected)}`,
+        expression,
       );
     }
   }
 
-  private report(reason: ExprProblemReason, message: string): void {
-    this.problems.push({ reason, message });
+  private report(
+    reason: ExprProblemReason,
+    message: string,
+    at: NodeRange,
+  ): void {
+    // Parsed nodes always have a range; the fallback is for the type only.
+    this.problems.push({
+      reason,
+      message,
+      start: at.start ?? 0,
+      end: at.end ?? 0,
+    });
   }
 
   // Root identifiers are own properties of the context (the evaluator never
   // consults its prototype), falling back to the evaluator's builtins.
-  private identifier(name: string, scope: ReadonlySet<string>): Info<Type> {
+  private identifier(
+    node: IdentifierNode,
+    scope: ReadonlySet<string>,
+  ): Info<Type> {
+    const { name } = node;
     if (scope.has(name)) {
       return ANY;
     }
@@ -498,6 +528,7 @@ class Checker<Type> {
       this.report(
         'unknown_context_property',
         `Unknown context property "${name}"${suggestion(name, lookup.missing)}`,
+        node,
       );
     }
     return ANY;
@@ -522,6 +553,7 @@ class Checker<Type> {
       this.report(
         'unknown_property',
         `Property "${key}" does not exist on "${object.path}"${suggestion(key!, lookup.missing)}`,
+        node.property,
       );
       return ANY;
     }
@@ -620,22 +652,29 @@ export function checkExpression<Type>(
   source: string,
   options: CheckOptions<Type> = {},
 ): ExprProblem[] {
-  let ast: ASTNode | null;
+  let ast: ASTNode;
   try {
-    ast = parse(tokenize(source), source);
+    ast = parse(tokenize(source), source)!;
   } catch (error) {
+    if (error instanceof ExprSyntaxError) {
+      const { detail, start, end } = error;
+      const message = `Invalid expression syntax: ${detail}`;
+      return [{ reason: 'syntax', message, start, end }];
+    }
     const detail = error instanceof Error ? error.message : String(error);
     return [
-      { reason: 'syntax', message: `Invalid expression syntax: ${detail}` },
+      {
+        reason: 'syntax',
+        message: `Invalid expression syntax: ${detail}`,
+        start: 0,
+        end: source.length,
+      },
     ];
-  }
-  if (!ast) {
-    return [{ reason: 'syntax', message: 'Invalid expression syntax' }];
   }
   const checker = new Checker(options.context, options.loose === true);
   const info = checker.visit(ast, new Set());
   if (options.returns) {
-    checker.checkReturn(info, options.returns);
+    checker.checkReturn(info, options.returns, ast);
   }
   return checker.problems;
 }

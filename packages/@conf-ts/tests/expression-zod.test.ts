@@ -4,7 +4,9 @@ import expression from '@conf-ts/expression';
 import {
   ExprSchema,
   LooseExprSchema,
+  validateExpression,
   type ExprIssueParams,
+  type ExprProblem,
 } from '@conf-ts/expression/zod';
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
@@ -82,14 +84,24 @@ describe('ExprSchema()', () => {
       expect(reasonsOf(schema, source), source).toEqual(['syntax']);
     }
     expect(messagesOf(schema, 'a +')).toEqual([
-      'Invalid expression syntax: parse expression error: a +',
+      'Invalid expression syntax: unexpected end of expression',
+    ]);
+    expect(messagesOf(schema, 'a ? : b')).toEqual([
+      'Invalid expression syntax: unexpected token ":", expected an expression',
+    ]);
+    expect(messagesOf(schema, '"open')).toEqual([
+      'Invalid expression syntax: unterminated string literal',
     ]);
   });
 
   it('reports issues at the path of the expression property', () => {
     const schema = z.object({ rules: z.array(ExprSchema()) });
     expect(issuesOf(schema, { rules: ['a', 'b +'] })).toMatchObject([
-      { code: 'custom', path: ['rules', 1], params: { reason: 'syntax' } },
+      {
+        code: 'custom',
+        path: ['rules', 1],
+        params: { reason: 'syntax', start: 3, end: 3 },
+      },
     ]);
   });
 
@@ -695,9 +707,100 @@ describe('@conf-ts/expression/zod with macro transformer output', () => {
       },
       {
         path: ['verified'],
-        message:
-          'Invalid expression syntax: parse expression error: user.profile.verified +',
+        message: 'Invalid expression syntax: unexpected end of expression',
       },
     ]);
+  });
+});
+
+describe('validateExpression()', () => {
+  // Each problem's reason with the source text its range covers.
+  const located = (source: string, problems: ExprProblem[]) =>
+    problems.map(({ reason, start, end }) => [
+      reason,
+      source.slice(start, end),
+    ]);
+
+  it('returns every problem with the range it applies to', () => {
+    const source = 'usr.age > thresold || user.agee || user["nmae"]';
+    expect(
+      located(source, validateExpression(source, { context: Context })),
+    ).toEqual([
+      ['unknown_context_property', 'usr'],
+      ['unknown_context_property', 'thresold'],
+      ['unknown_property', 'agee'],
+      ['unknown_property', '"nmae"'],
+    ]);
+  });
+
+  it('reports syntax errors at the offending text', () => {
+    expect(validateExpression('user.age +')).toEqual([
+      {
+        reason: 'syntax',
+        message: 'Invalid expression syntax: unexpected end of expression',
+        start: 10,
+        end: 10,
+      },
+    ]);
+    const source = 'user.age + ) - 1';
+    expect(located(source, validateExpression(source))).toEqual([
+      ['syntax', ')'],
+    ]);
+    expect(validateExpression('`${user.age +}`')).toMatchObject([
+      { reason: 'syntax', start: 13, end: 13 },
+    ]);
+  });
+
+  it('reports a return type problem for the whole expression', () => {
+    const source = '  user.age + 1 ';
+    expect(
+      located(
+        source,
+        validateExpression(source, {
+          context: Context,
+          returns: z.boolean(),
+        }),
+      ),
+    ).toEqual([['return_type', 'user.age + 1']]);
+  });
+
+  it('checks loose evaluation with `loose: true`', () => {
+    const options = { context: Context, returns: z.undefined() };
+    expect(validateExpression('user.profile.score', options)).toMatchObject([
+      { reason: 'return_type' },
+    ]);
+    expect(
+      validateExpression('user.profile.score', { ...options, loose: true }),
+    ).toEqual([]);
+  });
+
+  it('agrees with the issues ExprSchema() reports', () => {
+    const schema = ExprSchema({ context: Context, returns: z.boolean() });
+    for (const source of [
+      'usr.age > 1',
+      'user.agee',
+      'user.age',
+      'a +',
+      'user.age > 1',
+    ]) {
+      expect(
+        issuesOf(schema, source).map(({ message, params }) => ({
+          ...(params as ExprIssueParams),
+          message,
+        })),
+        source,
+      ).toEqual(
+        validateExpression(source, { context: Context, returns: z.boolean() }),
+      );
+    }
+  });
+
+  it('rejects a source that is not a string, and options that are not schemas', () => {
+    expect(() => validateExpression(1 as never)).toThrow(
+      'validateExpression(): `source` must be a string',
+    );
+    expect(() => validateExpression('a', { context: {} as z.ZodType })).toThrow(
+      'validateExpression(): `context` must be a Zod 4 schema',
+    );
   });
 });

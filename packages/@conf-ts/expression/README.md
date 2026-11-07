@@ -20,11 +20,13 @@ calculate({ subtotal: 100, taxRate: 0.08 }); // 108
 
 Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. Calls are not made optional this way: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error.
 
-Interpreted and successfully compiled expressions use separate 1,000-entry LRU caches keyed by source and option mode, so asking for the same path repeatedly returns the same function. A CSP fallback is intentionally not cached, allowing a later call to compile after policy or runtime conditions change. Tooling that needs lexer/parser primitives should import [`@conf-ts/expr-core`](../expr-core) instead.
+Interpreted and successfully compiled expressions use separate 1,000-entry LRU caches keyed by source and option mode, so asking for the same path repeatedly returns the same function. A CSP fallback is intentionally not cached, allowing a later call to compile after policy or runtime conditions change. Invalid syntax throws an `ExprSyntaxError` with the offending range (`start`/`end`) and reason (`detail`).
+
+`@conf-ts/expression/core` re-exports [`@conf-ts/expr-core`](../expr-core) for tooling: `tryParse()` and `parse()` produce ASTs whose nodes carry source ranges, `print()` prints an AST back to source text, and `forEachChild()`/`getChildren()`/`collectFreeIdentifiers()` walk it. It is the same module this package evaluates with, so its ASTs and `ExprSyntaxError` match what `expression()` and `compile()` use.
 
 `LooseExpr<Context, ReturnType>` is a type-only counterpart to `Expr<Context, ReturnType>` for `Context` types with nested optional properties, letting an `expr()` callback body skip `?.` at every level while `@conf-ts/expression` still enforces `optionalMemberAccess`/`loose: true` at evaluation time. See the [root README](../../../README.md#runtime-expression-evaluator) for the full type-level explanation.
 
-`@conf-ts/expression/zod` exports `ExprSchema()` and `LooseExprSchema()`, [Zod](https://zod.dev) 4 schemas that check serialized `Expr`/`LooseExpr` values against context and return schemas before they are evaluated. Zod is an optional peer dependency, needed only when you import this entry point. See the [root README](../../../README.md#validating-expr-values-with-zod) for what the schemas check.
+`@conf-ts/expression/zod` exports `ExprSchema()` and `LooseExprSchema()`, [Zod](https://zod.dev) 4 schemas that check serialized `Expr`/`LooseExpr` values against context and return schemas before they are evaluated, and `validateExpression()`, which runs the same checks on one expression string and returns each problem with its `start`/`end` range. Zod is an optional peer dependency, needed only when you import this entry point. See the [root README](../../../README.md#validating-expr-values-with-zod) for what the schemas check.
 
 ## Ahead-of-time compilation
 

@@ -411,9 +411,10 @@ function renderTokens(tokens: OutputToken[], quote: QuoteStyle): string {
         i++;
       } else if (value === '=>') {
         output = `${trimRight(output)} => `;
-      } else if (value === '(' && /\s$/u.test(output)) {
-        // Preserve the separator emitted after a binary/keyword operator,
-        // while calls and unary operators still render compactly (`fn()` /
+      } else if (['(', '[', '{'].includes(value) && /\s$/u.test(output)) {
+        // Preserve the separator emitted after a binary/keyword operator, a
+        // comma, or a colon (`a ?? []`, `c ? [1] : {}`), while calls, member
+        // access, and unary operators still render compactly (`fn()`, `a[0]`,
         // `!(value)`). This also matches the native expression encoder.
         output += value;
         stack.push('bracket');

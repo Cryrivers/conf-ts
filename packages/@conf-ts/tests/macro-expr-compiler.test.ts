@@ -373,6 +373,45 @@ describe('Expr Macro', () => {
     ).toBe(false);
   });
 
+  it('should emit optional calls, bracketed conditional branches, and keyword-like names the runtime evaluates', () => {
+    assertMacroOutput('expr-js-syntax');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-js-syntax.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const context = {
+      enabled: true,
+      count: 2,
+      format: (value: number) => `#${value}`,
+      TRUE: true,
+      Null: 1,
+      Undefined: 'defined',
+      flags: { False: false },
+    };
+    const { format: _format, ...unformatted } = context;
+    const disabled = { ...context, enabled: false, Null: 0 };
+
+    expect(expression(output.optionalCall)(context)).toBe('#2');
+    expect(expression(output.optionalCall)(unformatted)).toBeUndefined();
+    expect(expression(output.parenthesizedConsequent)(context)).toBe(6);
+    expect(expression(output.parenthesizedConsequent)(disabled)).toBe(0);
+    expect(expression(output.arrayConsequent)(context)).toEqual([2]);
+    expect(expression(output.arrayConsequent)(disabled)).toEqual([]);
+    // `TRUE`, `Null`, and `Undefined` read the context, not the literals.
+    expect(expression(output.upperCaseKeyword)(context)).toBe(true);
+    expect(expression(output.mixedCaseKeywords)(context)).toBe('defined');
+    expect(expression(output.mixedCaseKeywords)(disabled)).toBe('none');
+    expect(expression(output.nullishArray)(context)).toEqual([]);
+    expect(expression(output.nestedLiterals)(context)).toEqual([
+      2,
+      [2],
+      { values: [2], flags: { on: true } },
+    ]);
+  });
+
   it('should support array spread, object shorthand, and computed object keys', () => {
     assertMacroOutput('expr-new-syntax');
 

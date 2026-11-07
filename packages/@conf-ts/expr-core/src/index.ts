@@ -1,10 +1,18 @@
 export {
+  ExprSyntaxError,
   formatInvalid,
   formatParseError,
-  raiseInvalid,
-  raiseParseError,
+  type ExprSyntaxErrorOptions,
 } from './errors';
 export type { Expr, LooseExpr } from './expr';
 export { tokenize, type LexerState } from './lexer';
-export { parse, parseExpression, type ParserState } from './parser';
+export {
+  parse,
+  parseExpression,
+  tryParse,
+  type ParserState,
+  type ParseResult,
+} from './parser';
+export { print, type PrintOptions } from './print';
+export { collectFreeIdentifiers, forEachChild, getChildren } from './traverse';
 export type * from './types';

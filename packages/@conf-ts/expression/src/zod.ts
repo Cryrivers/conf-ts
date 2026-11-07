@@ -6,6 +6,7 @@ import {
   kindOf,
   type CheckOptions,
   type ContextModel,
+  type ExprProblem,
   type ExprProblemReason,
   type PropertyLookup,
   type ReturnModel,
@@ -39,8 +40,27 @@ export type LooseExprSchema<
   ReturnType = unknown,
 > = z.ZodCustom<LooseExpr<Context, ReturnType>, LooseExpr<Context, ReturnType>>;
 
-/** `params` of the `custom` issues reported for an invalid expression. */
-export type ExprIssueParams = { reason: ExprProblemReason };
+export type { ExprProblem, ExprProblemReason };
+
+/**
+ * `params` of the `custom` issues reported for an invalid expression: the
+ * problem's `reason`, and its `start`/`end` offsets in the expression string
+ * (see `ExprProblem`).
+ */
+export type ExprIssueParams = {
+  reason: ExprProblemReason;
+  start: number;
+  end: number;
+};
+
+export type ValidateExpressionOptions = {
+  /** Schema of the context; see `ExprSchemaOptions.context`. */
+  context?: z.core.$ZodType;
+  /** Schema of the result; see `ExprSchemaOptions.returns`. */
+  returns?: z.core.$ZodType;
+  /** Check for evaluation with `loose: true`, as `LooseExprSchema()` does. */
+  loose?: boolean;
+};
 
 /**
  * The structural forms a context value can take once wrappers such as
@@ -410,6 +430,16 @@ function assertSchema(
   }
 }
 
+const checkOptions = (
+  context: Schema | undefined,
+  returns: Schema | undefined,
+  loose: boolean,
+): CheckOptions<Variants> => ({
+  context: context && contextModel(context),
+  returns: returns && returnModel(returns),
+  loose,
+});
+
 function createExprSchema<Output>(
   factory: string,
   options: ExprSchemaOptions | undefined,
@@ -428,13 +458,13 @@ function createExprSchema<Output>(
       payload.issues.push({ code: 'invalid_type', expected: 'string', input });
       return;
     }
-    models ??= {
-      context: context && contextModel(context),
-      returns: returns && returnModel(returns),
-      loose,
-    };
+    models ??= checkOptions(context, returns, loose);
     for (const problem of checkExpression(input, models)) {
-      const params: ExprIssueParams = { reason: problem.reason };
+      const params: ExprIssueParams = {
+        reason: problem.reason,
+        start: problem.start,
+        end: problem.end,
+      };
       payload.issues.push({
         code: 'custom',
         input,
@@ -466,4 +496,27 @@ export function LooseExprSchema<Context = unknown, ReturnType = unknown>(
   options?: ExprSchemaOptions<Context, ReturnType>,
 ): LooseExprSchema<Context, ReturnType> {
   return createExprSchema('LooseExprSchema', options, true);
+}
+
+/**
+ * Checks an expression string the way `ExprSchema()` (or, with `loose: true`,
+ * `LooseExprSchema()`) does and returns every problem found, each with the
+ * `start`/`end` range it applies to, e.g. for editor diagnostics. An empty
+ * array means the expression is valid.
+ */
+export function validateExpression(
+  source: string,
+  options?: ValidateExpressionOptions,
+): ExprProblem[] {
+  const context = options?.context;
+  const returns = options?.returns;
+  assertSchema('validateExpression', 'context', context);
+  assertSchema('validateExpression', 'returns', returns);
+  if (typeof source !== 'string') {
+    throw new TypeError('validateExpression(): `source` must be a string');
+  }
+  return checkExpression(
+    source,
+    checkOptions(context, returns, options?.loose === true),
+  );
 }
