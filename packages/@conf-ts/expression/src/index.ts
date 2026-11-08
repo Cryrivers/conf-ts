@@ -1,37 +1,14 @@
 import { formatInvalid, type Expr, type LooseExpr } from '@conf-ts/expr-core';
 
+import { ExpressionCache, isOptionalMemberAccess } from './cache';
 import { compile, ExpressionCompileError } from './compile';
-import { evaluate, type EvalOptions } from './eval';
+import { interpret } from './eval';
 import { parseSource } from './parse';
 import type { Compiled, CompileOptions, ExpressionOptions } from './types';
 
-/**
- * LRU cache for interpreter-backed expressions.
- * Prevents unbounded memory growth in long-running applications.
- */
-const MAX_CACHE_SIZE = 1000;
-const cache = new Map<string, Compiled>();
-
-function cacheSet(key: string, value: Compiled<any, any>): void {
-  // If cache is full, evict the oldest entry (first key in Map iteration order)
-  if (cache.size >= MAX_CACHE_SIZE) {
-    const firstKey = cache.keys().next().value;
-    if (firstKey !== undefined) {
-      cache.delete(firstKey);
-    }
-  }
-  cache.set(key, value);
-}
-
-function cacheGet(key: string): Compiled | undefined {
-  const value = cache.get(key);
-  if (value !== undefined) {
-    // Move to end of Map (most recently used) by re-inserting
-    cache.delete(key);
-    cache.set(key, value);
-  }
-  return value;
-}
+// Interpreter-backed functions; bounded so that long-running applications
+// don't grow without limit.
+const cache = new ExpressionCache();
 
 function expression<Context = unknown, ReturnType = unknown>(
   expr: LooseExpr<Context, ReturnType>,
@@ -50,30 +27,15 @@ function expression<Context = unknown, ReturnType = unknown>(
   if (typeof expr !== 'string') {
     throw new Error(formatInvalid());
   }
-
-  const optionalMemberAccess =
-    options?.optionalMemberAccess === true || options?.loose === true;
-  const evalOptions: EvalOptions | undefined = optionalMemberAccess
-    ? { optionalMemberAccess: true }
-    : undefined;
-  const cacheKey = (optionalMemberAccess ? 'o' : 's') + expr;
-
-  const cached = cacheGet(cacheKey);
-  if (cached) {
-    return cached as Compiled<Context, ReturnType>;
+  const optionalMemberAccess = isOptionalMemberAccess(options);
+  const modeCache = cache.for(optionalMemberAccess);
+  let fn = modeCache.get(expr);
+  if (!fn) {
+    const ast = parseSource(expr);
+    fn = ast === null ? () => undefined : interpret(ast, optionalMemberAccess);
+    modeCache.set(expr, fn);
   }
-
-  const ast = parseSource(expr);
-  if (ast === null) {
-    const fn: Compiled<Context, ReturnType> = () => undefined as ReturnType;
-    cacheSet(cacheKey, fn);
-    return fn;
-  }
-
-  const fn: Compiled<Context, ReturnType> = (env: Context) =>
-    evaluate(ast, env as Record<string, unknown>, evalOptions) as ReturnType;
-  cacheSet(cacheKey, fn);
-  return fn;
+  return fn as Compiled<Context, ReturnType>;
 }
 
 export default expression;

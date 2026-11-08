@@ -1,5 +1,5 @@
-import { raiseParseError } from './errors';
-import { tokenize } from './lexer';
+import { ExprSyntaxError, formatParseError } from './errors';
+import { keywordKinds, tokenize, tokenizeAt } from './lexer';
 import type {
   ArrayPatternParam,
   ArrowParam,
@@ -7,11 +7,13 @@ import type {
   BinaryNode,
   ComputedObjectProperty,
   IdentifierParam,
+  LiteralNode,
   LogicalNode,
   ObjectPatternParam,
   ObjectPatternProperty,
   ObjectProperty,
   SpreadElement,
+  TemplateLiteralNode,
   Token,
   UnaryNode,
 } from './types';
@@ -22,37 +24,143 @@ export interface ParserState {
   src: string;
 }
 
-const createParser = (tokens: Token[], src: string): ParserState => ({
-  tokens,
-  pos: 0,
-  src,
-});
-
 const peek = (ps: ParserState) => ps.tokens[ps.pos];
 const next = (ps: ParserState) => ps.tokens[ps.pos++];
 const eof = (ps: ParserState) => peek(ps)?.kind === 'eof';
+// Where the most recently consumed token ends, i.e. the end of a node that
+// was just completed.
+const lastEnd = (ps: ParserState) => ps.tokens[ps.pos - 1].end;
 
 const isPunct = (ps: ParserState, value: string) =>
   peek(ps)?.kind === 'punct' && peek(ps)?.value === value;
 const isOp = (ps: ParserState, value?: string) =>
   peek(ps)?.kind === 'operator' && (value ? peek(ps)?.value === value : true);
+// A name that can follow `.` or be an object key: an identifier, or one of
+// the operator keywords (`in`, `typeof`, ...).
 const isIdentifierName = (token: Token | undefined) =>
   token?.kind === 'identifier' ||
-  (token?.kind === 'operator' &&
-    ['instanceof', 'in', 'typeof', 'void', 'delete'].includes(token.value));
+  (token?.kind === 'operator' && keywordKinds.get(token.value) === 'operator');
+
+/** The prefix (unary) operators. */
+export const prefixOps: ReadonlySet<string> = new Set([
+  '+',
+  '-',
+  '!',
+  '~',
+  'void',
+  'delete',
+  'typeof',
+]);
+
+export const isLogicalOperator = (
+  operator: string,
+): operator is LogicalNode['operator'] =>
+  operator === '&&' || operator === '||' || operator === '??';
+
+// Binding power of each binary operator; higher binds tighter.
+const precedence: Readonly<
+  Record<BinaryNode['operator'] | LogicalNode['operator'], number>
+> = {
+  '**': 12,
+  '*': 11,
+  '/': 11,
+  '%': 11,
+  '+': 10,
+  '-': 10,
+  '<<': 9,
+  '>>': 9,
+  '>>>': 9,
+  '>': 8,
+  '<': 8,
+  '>=': 8,
+  '<=': 8,
+  instanceof: 8,
+  in: 8,
+  '==': 7,
+  '!=': 7,
+  '===': 7,
+  '!==': 7,
+  '&': 6,
+  '^': 5,
+  '|': 4,
+  '&&': 3,
+  '||': 2,
+  '??': 2,
+};
+
+/** Binding power of a binary operator (2 to 12), or undefined for others. */
+export const precedenceOf = (operator: string): number | undefined =>
+  Object.prototype.hasOwnProperty.call(precedence, operator)
+    ? precedence[operator as keyof typeof precedence]
+    : undefined;
+
+const EXPRESSION = 'an expression';
+
+const describe = (tk: Token): string => {
+  switch (tk.kind) {
+    case 'eof':
+      return 'end of expression';
+    case 'template':
+      return 'template literal';
+    case 'identifier':
+      return `identifier "${tk.value}"`;
+    case 'number':
+      return `number ${tk.value}`;
+    case 'string':
+      return `string ${tk.raw}`;
+    default:
+      return `token "${tk.value}"`;
+  }
+};
+
+/** Throws for the current token, optionally naming what was expected there. */
+const fail = (ps: ParserState, expected?: string): never => {
+  const tk: Token | undefined =
+    ps.tokens[Math.min(ps.pos, ps.tokens.length - 1)];
+  const detail =
+    !tk || (tk.kind === 'eof' && expected === EXPRESSION)
+      ? 'unexpected end of expression'
+      : `unexpected ${describe(tk)}${expected ? `, expected ${expected}` : ''}`;
+  throw new ExprSyntaxError(formatParseError(ps.src), {
+    start: tk?.start ?? 0,
+    end: tk?.end ?? 0,
+    detail,
+    token: tk,
+  });
+};
 
 const expectPunct = (ps: ParserState, value: string) => {
   if (!isPunct(ps, value)) {
-    raiseParseError(ps.src);
+    fail(ps, `"${value}"`);
   }
   next(ps);
 };
 
-const mustNode = (ps: ParserState, node: ASTNode | null) => {
-  if (!node) {
-    raiseParseError(ps.src);
-  }
-  return node as ASTNode;
+const mustNode = (ps: ParserState, node: ASTNode | null): ASTNode =>
+  node ?? fail(ps, EXPRESSION);
+
+const literal = (tk: Token, value: unknown): LiteralNode => ({
+  type: 'Literal',
+  value,
+  raw: tk.raw,
+  start: tk.start,
+  end: tk.end,
+});
+
+const templateLiteral = (tk: Token): TemplateLiteralNode => {
+  const t = tk.template!;
+  return {
+    type: 'TemplateLiteral',
+    quasis: t.quasis,
+    rawQuasis: t.rawQuasis,
+    // Each interpolation is parsed on its own, keeping positions in the
+    // whole source.
+    expressions: t.expressionsSrc.map((src, index) =>
+      parseTokens(tokenizeAt(src, t.expressionsStart[index]), src),
+    ),
+    start: tk.start,
+    end: tk.end,
+  };
 };
 
 const parsePrimary = (ps: ParserState): ASTNode | null => {
@@ -60,55 +168,50 @@ const parsePrimary = (ps: ParserState): ASTNode | null => {
   if (!tk) {
     return null;
   }
-  if (tk.kind === 'number') {
-    next(ps);
-    return { type: 'Literal', value: Number(tk.value) };
-  }
-  if (tk.kind === 'string') {
-    next(ps);
-    return { type: 'Literal', value: tk.value };
-  }
-  if (tk.kind === 'boolean') {
-    next(ps);
-    return { type: 'Literal', value: tk.value === 'true' };
-  }
-  if (tk.kind === 'null') {
-    next(ps);
-    return { type: 'Literal', value: null };
-  }
-  if (tk.kind === 'undefined') {
-    next(ps);
-    return { type: 'Literal', value: undefined };
-  }
-  if (tk.kind === 'identifier') {
-    next(ps);
-    return { type: 'Identifier', name: tk.value };
-  }
-  if (tk.kind === 'template') {
-    next(ps);
-    const t = tk.template!;
-    const exprAsts = t.expressionsSrc.map(src => {
-      const subTokens = tokenize(src);
-      const subAst = parse(subTokens, src);
-      if (!subAst) {
-        raiseParseError(src);
-      }
-      return subAst as ASTNode;
-    });
-    return {
-      type: 'TemplateLiteral',
-      quasis: t.quasis,
-      rawQuasis: t.rawQuasis,
-      expressions: exprAsts,
-    };
+  switch (tk.kind) {
+    case 'number':
+      next(ps);
+      return literal(tk, Number(tk.value));
+    case 'string':
+      next(ps);
+      return literal(tk, tk.value);
+    case 'boolean':
+      next(ps);
+      return literal(tk, tk.value === 'true');
+    case 'null':
+      next(ps);
+      return literal(tk, null);
+    case 'undefined':
+      next(ps);
+      return literal(tk, undefined);
+    case 'identifier':
+      next(ps);
+      return {
+        type: 'Identifier',
+        name: tk.value,
+        start: tk.start,
+        end: tk.end,
+      };
+    case 'template':
+      next(ps);
+      return templateLiteral(tk);
   }
   if (isPunct(ps, '(')) {
     next(ps);
     const e = parseExpression(ps);
+    const close = peek(ps);
     expectPunct(ps, ')');
     return {
       type: 'ParenthesizedExpression',
-      expression: e ?? { type: 'Literal', value: undefined },
+      // `()` is the legacy spelling of `(undefined)`.
+      expression: e ?? {
+        type: 'Literal',
+        value: undefined,
+        start: close.start,
+        end: close.start,
+      },
+      start: tk.start,
+      end: lastEnd(ps),
     };
   }
   if (isPunct(ps, '[')) {
@@ -120,19 +223,25 @@ const parsePrimary = (ps: ParserState): ASTNode | null => {
   return null;
 };
 
+// `...expr` in an array or object literal; the `...` is the current token.
+const parseSpread = (ps: ParserState): SpreadElement => {
+  const start = next(ps).start;
+  const argument = mustNode(ps, parseExpression(ps));
+  return { type: 'SpreadElement', argument, start, end: lastEnd(ps) };
+};
+
 const parseArray = (ps: ParserState): ASTNode => {
+  const start = peek(ps).start;
   expectPunct(ps, '[');
   const elements: Array<ASTNode | SpreadElement> = [];
   while (!eof(ps) && !isPunct(ps, ']')) {
     if (isPunct(ps, ',')) {
-      elements.push({ type: 'Elision' });
-      next(ps);
+      const comma = next(ps);
+      elements.push({ type: 'Elision', start: comma.start, end: comma.end });
       continue;
     }
     if (isOp(ps, '...')) {
-      next(ps);
-      const arg = mustNode(ps, parseExpression(ps));
-      elements.push({ type: 'SpreadElement', argument: arg });
+      elements.push(parseSpread(ps));
     } else {
       const el = parseExpression(ps);
       if (el) {
@@ -146,71 +255,66 @@ const parseArray = (ps: ParserState): ASTNode => {
     }
   }
   expectPunct(ps, ']');
-  return { type: 'ArrayExpression', elements };
+  return { type: 'ArrayExpression', elements, start, end: lastEnd(ps) };
 };
 
 const parseObject = (ps: ParserState): ASTNode => {
+  const start = peek(ps).start;
   expectPunct(ps, '{');
   const properties: Array<
     ObjectProperty | ComputedObjectProperty | SpreadElement
   > = [];
   while (!eof(ps) && !isPunct(ps, '}')) {
-    // support spread in object literal: ...expr
+    const first = peek(ps);
     if (isOp(ps, '...')) {
+      // support spread in object literal: ...expr
+      properties.push(parseSpread(ps));
+    } else if (isPunct(ps, '[')) {
+      // computed key: { [expr]: value }
       next(ps);
-      const arg = mustNode(ps, parseExpression(ps));
-      properties.push({ type: 'SpreadElement', argument: arg });
-      if (isPunct(ps, ',')) {
-        next(ps);
-      }
-      continue;
-    }
-
-    // computed key: { [expr]: value }
-    if (isPunct(ps, '[')) {
-      next(ps);
-      const keyExpr = mustNode(ps, parseExpression(ps));
-      if (!isPunct(ps, ']')) {
-        raiseParseError(ps.src);
-      }
-      next(ps);
-      if (!isPunct(ps, ':')) {
-        raiseParseError(ps.src);
-      }
-      next(ps);
+      const key = mustNode(ps, parseExpression(ps));
+      expectPunct(ps, ']');
+      expectPunct(ps, ':');
       const value = mustNode(ps, parseExpression(ps));
-      properties.push({ key: keyExpr, computed: true, value });
-      if (isPunct(ps, ',')) {
-        next(ps);
-      }
-      continue;
-    }
-
-    const keyTk = peek(ps);
-    if (!keyTk || (!isIdentifierName(keyTk) && keyTk.kind !== 'string')) {
-      raiseParseError(ps.src);
-    }
-    next(ps);
-    const key = keyTk.value;
-    if (isPunct(ps, ':')) {
-      next(ps);
-      const value = mustNode(ps, parseExpression(ps));
-      properties.push({ key, value });
+      properties.push({
+        key,
+        computed: true,
+        value,
+        start: first.start,
+        end: lastEnd(ps),
+      });
     } else {
-      // shorthand property: { a } is short for { a: a }, and only a plain
-      // identifier can stand in for its own value (matching real JS, where
-      // e.g. `in`/`typeof` can be property keys but not shorthand ones).
-      if (keyTk.kind !== 'identifier') {
-        raiseParseError(ps.src);
+      if (!isIdentifierName(first) && first?.kind !== 'string') {
+        fail(ps, 'a property name');
       }
-      properties.push({ key, value: { type: 'Identifier', name: key } });
+      next(ps);
+      const key = first.value;
+      let value: ASTNode;
+      if (isPunct(ps, ':')) {
+        next(ps);
+        value = mustNode(ps, parseExpression(ps));
+      } else {
+        // shorthand property: { a } is short for { a: a }, and only a plain
+        // identifier can stand in for its own value (matching real JS, where
+        // e.g. `in`/`typeof` can be property keys but not shorthand ones).
+        if (first.kind !== 'identifier') {
+          fail(ps, '":"');
+        }
+        value = {
+          type: 'Identifier',
+          name: key,
+          start: first.start,
+          end: first.end,
+        };
+      }
+      properties.push({ key, value, start: first.start, end: lastEnd(ps) });
     }
     if (isPunct(ps, ',')) {
       next(ps); // allow trailing comma
     }
   }
   expectPunct(ps, '}');
-  return { type: 'ObjectExpression', properties };
+  return { type: 'ObjectExpression', properties, start, end: lastEnd(ps) };
 };
 
 const parsePostfix = (
@@ -220,145 +324,93 @@ const parsePostfix = (
   let expr = base;
   let optionalChain = false;
   while (expr) {
+    const start = expr.start;
     // Tagged template: Identifier/MemberExpression immediately followed by template token
     if (peek(ps)?.kind === 'template') {
-      const tk = next(ps);
-      const t = tk.template!;
-      const exprAsts = t.expressionsSrc.map(src => {
-        const subTokens = tokenize(src);
-        const subAst = parse(subTokens, src);
-        if (!subAst) {
-          raiseParseError(src);
-        }
-        return subAst as ASTNode;
-      });
-      const quasi: ASTNode = {
-        type: 'TemplateLiteral',
-        quasis: t.quasis,
-        rawQuasis: t.rawQuasis,
-        expressions: exprAsts,
-      } as any;
-      expr = { type: 'TaggedTemplateExpression', tag: expr, quasi } as any;
+      expr = {
+        type: 'TaggedTemplateExpression',
+        tag: expr,
+        quasi: templateLiteral(next(ps)),
+        start,
+        end: lastEnd(ps),
+      };
       continue;
     }
 
-    // Optional chaining: '?.', '?[', '?.('
+    // Optional chaining: '?.prop', '?.[expr]', '?.(args)'. As in JavaScript,
+    // a '?' followed by anything but '.' (including '[' or '(') starts a
+    // conditional expression instead.
+    let optional = false;
+    // whether a property name must follow: after `.`, or `?.` not followed
+    // by `[` or `(`
+    let dot = false;
     if (isPunct(ps, '?')) {
       const nextTk = ps.tokens[ps.pos + 1];
-      // If '?' is part of conditional (not followed by '.', '[' or '('), stop postfix parsing
-      if (
-        !nextTk ||
-        nextTk.kind !== 'punct' ||
-        (nextTk.value !== '.' && nextTk.value !== '[' && nextTk.value !== '(')
-      ) {
+      if (nextTk?.kind !== 'punct' || nextTk.value !== '.') {
         break;
       }
       next(ps); // consume '?'
+      next(ps); // consume '.'
       optionalChain = true;
-      if (isPunct(ps, '.')) {
-        next(ps); // consume '.'
-        // Support '?.[' (optional computed property)
-        if (isPunct(ps, '[')) {
-          next(ps);
-          const propExpr = mustNode(ps, parseExpression(ps));
-          if (!isPunct(ps, ']')) {
-            raiseParseError(ps.src);
-          }
-          next(ps);
-          expr = {
-            type: 'MemberExpression',
-            object: expr,
-            property: propExpr,
-            computed: true,
-            optional: true,
-          };
-          continue;
-        }
-        // Otherwise, expect identifier for '?.prop'
-        const prop = peek(ps);
-        if (!isIdentifierName(prop)) {
-          raiseParseError(ps.src);
-        }
-        next(ps);
-        expr = {
-          type: 'MemberExpression',
-          object: expr,
-          property: { type: 'Literal', value: prop.value },
-          computed: false,
-          optional: true,
-        };
-        continue;
-      }
-      if (isPunct(ps, '[')) {
-        next(ps);
-        const propExpr = mustNode(ps, parseExpression(ps));
-        if (!isPunct(ps, ']')) {
-          raiseParseError(ps.src);
-        }
-        next(ps);
-        expr = {
-          type: 'MemberExpression',
-          object: expr,
-          property: propExpr,
-          computed: true,
-          optional: true,
-        };
-        continue;
-      }
-      if (isPunct(ps, '(')) {
-        next(ps);
-        const args: ASTNode[] = [];
-        if (!isPunct(ps, ')')) {
-          while (true) {
-            const arg = parseExpression(ps);
-            if (arg) {
-              args.push(arg);
-            }
-            if (isPunct(ps, ',')) {
-              next(ps);
-              continue;
-            }
-            break;
-          }
-        }
-        expectPunct(ps, ')');
-        expr = { type: 'CallExpression', callee: expr, args, optional: true };
-        continue;
-      }
+      optional = true;
+      dot = !isPunct(ps, '[') && !isPunct(ps, '(');
+    } else if (isPunct(ps, '.')) {
+      next(ps);
+      dot = true;
+    } else if (!isPunct(ps, '[') && !isPunct(ps, '(')) {
+      break;
     }
 
-    if (isPunct(ps, '.')) {
-      next(ps);
+    if (dot) {
       const prop = peek(ps);
       if (!isIdentifierName(prop)) {
-        raiseParseError(ps.src);
+        fail(ps, 'a property name');
       }
       next(ps);
-      expr = {
-        type: 'MemberExpression',
-        object: expr,
-        property: { type: 'Literal', value: prop.value },
-        computed: false,
-      };
-      continue;
-    }
-    if (isPunct(ps, '[')) {
+      const property = literal(prop, prop.value);
+      expr = optional
+        ? {
+            type: 'MemberExpression',
+            object: expr,
+            property,
+            computed: false,
+            optional,
+            start,
+            end: prop.end,
+          }
+        : {
+            type: 'MemberExpression',
+            object: expr,
+            property,
+            computed: false,
+            start,
+            end: prop.end,
+          };
+    } else if (isPunct(ps, '[')) {
       next(ps);
-      const propExpr = mustNode(ps, parseExpression(ps));
-      if (!isPunct(ps, ']')) {
-        raiseParseError(ps.src);
-      }
-      next(ps);
-      expr = {
-        type: 'MemberExpression',
-        object: expr,
-        property: propExpr,
-        computed: true,
-      };
-      continue;
-    }
-    if (isPunct(ps, '(')) {
-      next(ps);
+      const property = mustNode(ps, parseExpression(ps));
+      expectPunct(ps, ']');
+      const end = lastEnd(ps);
+      expr = optional
+        ? {
+            type: 'MemberExpression',
+            object: expr,
+            property,
+            computed: true,
+            optional,
+            start,
+            end,
+          }
+        : {
+            type: 'MemberExpression',
+            object: expr,
+            property,
+            computed: true,
+            start,
+            end,
+          };
+    } else {
+      next(ps); // '('
       const args: ASTNode[] = [];
       if (!isPunct(ps, ')')) {
         while (true) {
@@ -374,13 +426,19 @@ const parsePostfix = (
         }
       }
       expectPunct(ps, ')');
-      expr = { type: 'CallExpression', callee: expr, args };
-      continue;
+      const end = lastEnd(ps);
+      expr = optional
+        ? { type: 'CallExpression', callee: expr, args, optional, start, end }
+        : { type: 'CallExpression', callee: expr, args, start, end };
     }
-    break;
   }
   return expr && optionalChain
-    ? { type: 'ChainExpression', expression: expr }
+    ? {
+        type: 'ChainExpression',
+        expression: expr,
+        start: expr.start,
+        end: expr.end,
+      }
     : expr;
 };
 
@@ -415,6 +473,12 @@ const findMatchingParenEnd = (tokens: Token[], openIndex: number): number => {
 const isArrowToken = (tk: Token | undefined) =>
   tk?.kind === 'punct' && tk.value === '=>';
 
+// Whether the `(` at the current token opens an arrow's parameter list.
+const isParenthesizedParams = (ps: ParserState) => {
+  const close = findMatchingParenEnd(ps.tokens, ps.pos);
+  return close !== -1 && isArrowToken(ps.tokens[close + 1]);
+};
+
 const parseParamDefault = (ps: ParserState): ASTNode | undefined => {
   if (!isOp(ps, '=')) {
     return undefined;
@@ -429,20 +493,22 @@ const parseParamDefault = (ps: ParserState): ASTNode | undefined => {
 // and each property/element of a destructuring pattern.
 const parseDefaultedIdentifier = (
   ps: ParserState,
-  name: string,
+  nameTk: Token,
 ): IdentifierParam => ({
   kind: 'identifier',
-  name,
+  name: nameTk.value,
   default: parseParamDefault(ps),
+  start: nameTk.start,
+  end: lastEnd(ps),
 });
 
-const consumeIdentifierName = (ps: ParserState): string => {
+const consumeIdentifierName = (ps: ParserState): Token => {
   const tk = peek(ps);
   if (tk?.kind !== 'identifier') {
-    raiseParseError(ps.src);
+    fail(ps, 'an identifier');
   }
   next(ps);
-  return tk.value;
+  return tk;
 };
 
 const parseIdentifierParam = (ps: ParserState): IdentifierParam =>
@@ -453,21 +519,26 @@ const parseIdentifierParam = (ps: ParserState): IdentifierParam =>
 // nested pattern — matching the restriction the macro-transformer already
 // enforces when down-leveling TypeScript source into this DSL.
 const parseObjectPatternParam = (ps: ParserState): ObjectPatternParam => {
+  const start = peek(ps).start;
   expectPunct(ps, '{');
   const properties: ObjectPatternProperty[] = [];
   while (!isPunct(ps, '}')) {
     const keyTk = peek(ps);
     if (!isIdentifierName(keyTk)) {
-      raiseParseError(ps.src);
+      fail(ps, 'a property name');
     }
     next(ps);
-    const key = keyTk.value;
-    let bindingName = key;
+    let bindingTk = keyTk;
     if (isPunct(ps, ':')) {
       next(ps);
-      bindingName = consumeIdentifierName(ps);
+      bindingTk = consumeIdentifierName(ps);
     }
-    properties.push({ key, value: parseDefaultedIdentifier(ps, bindingName) });
+    properties.push({
+      key: keyTk.value,
+      value: parseDefaultedIdentifier(ps, bindingTk),
+      start: keyTk.start,
+      end: lastEnd(ps),
+    });
     if (isPunct(ps, ',')) {
       next(ps);
       continue;
@@ -475,10 +546,17 @@ const parseObjectPatternParam = (ps: ParserState): ObjectPatternParam => {
     break;
   }
   expectPunct(ps, '}');
-  return { kind: 'object', properties, default: parseParamDefault(ps) };
+  return {
+    kind: 'object',
+    properties,
+    default: parseParamDefault(ps),
+    start,
+    end: lastEnd(ps),
+  };
 };
 
 const parseArrayPatternParam = (ps: ParserState): ArrayPatternParam => {
+  const start = peek(ps).start;
   expectPunct(ps, '[');
   const elements: Array<IdentifierParam | null> = [];
   while (!isPunct(ps, ']')) {
@@ -495,18 +573,20 @@ const parseArrayPatternParam = (ps: ParserState): ArrayPatternParam => {
     break;
   }
   expectPunct(ps, ']');
-  return { kind: 'array', elements, default: parseParamDefault(ps) };
+  return {
+    kind: 'array',
+    elements,
+    default: parseParamDefault(ps),
+    start,
+    end: lastEnd(ps),
+  };
 };
 
 const parseArrowParam = (ps: ParserState): ArrowParam => {
   if (isOp(ps, '...')) {
-    next(ps);
-    const tk = peek(ps);
-    if (tk?.kind !== 'identifier') {
-      raiseParseError(ps.src);
-    }
-    next(ps);
-    return { kind: 'rest', name: tk.value };
+    const start = next(ps).start;
+    const name = consumeIdentifierName(ps).value;
+    return { kind: 'rest', name, start, end: lastEnd(ps) };
   }
   if (isPunct(ps, '{')) {
     return parseObjectPatternParam(ps);
@@ -527,45 +607,43 @@ const parseArrowParam = (ps: ParserState): ArrowParam => {
 // destructuring (with defaults), and a trailing rest parameter.
 const tryParseArrowFunction = (ps: ParserState): ASTNode | null => {
   const tk = peek(ps);
+  let params: ArrowParam[];
   if (tk?.kind === 'identifier' && isArrowToken(ps.tokens[ps.pos + 1])) {
     next(ps); // identifier
-    next(ps); // '=>'
-    const body = mustNode(ps, parseExpression(ps));
-    return {
-      type: 'ArrowFunctionExpression',
-      params: [{ kind: 'identifier', name: tk.value }],
-      body,
-    };
-  }
-  if (isPunct(ps, '(')) {
-    const closeIndex = findMatchingParenEnd(ps.tokens, ps.pos);
-    if (closeIndex !== -1 && isArrowToken(ps.tokens[closeIndex + 1])) {
-      next(ps); // '('
-      const params: ArrowParam[] = [];
-      if (!isPunct(ps, ')')) {
-        while (true) {
-          const param = parseArrowParam(ps);
-          params.push(param);
-          if (param.kind === 'rest') {
-            break; // rest must be the last parameter; trailing comma/params rejected below
-          }
-          if (isPunct(ps, ',')) {
-            next(ps);
-            continue;
-          }
-          break;
+    params = [
+      { kind: 'identifier', name: tk.value, start: tk.start, end: tk.end },
+    ];
+  } else if (isPunct(ps, '(') && isParenthesizedParams(ps)) {
+    next(ps); // '('
+    params = [];
+    if (!isPunct(ps, ')')) {
+      while (true) {
+        const param = parseArrowParam(ps);
+        params.push(param);
+        if (param.kind === 'rest') {
+          break; // rest must be the last parameter; trailing comma/params rejected below
         }
+        if (isPunct(ps, ',')) {
+          next(ps);
+          continue;
+        }
+        break;
       }
-      expectPunct(ps, ')');
-      next(ps); // '=>'
-      const body = mustNode(ps, parseExpression(ps));
-      return { type: 'ArrowFunctionExpression', params, body };
     }
+    expectPunct(ps, ')');
+  } else {
+    return null;
   }
-  return null;
+  next(ps); // '=>'
+  const body = mustNode(ps, parseExpression(ps));
+  return {
+    type: 'ArrowFunctionExpression',
+    params,
+    body,
+    start: tk.start,
+    end: lastEnd(ps),
+  };
 };
-
-const prefixOps = new Set(['+', '-', '!', '~', 'void', 'delete', 'typeof']);
 
 const parseUnary = (ps: ParserState): ASTNode | null => {
   const tk = peek(ps);
@@ -574,50 +652,19 @@ const parseUnary = (ps: ParserState): ASTNode | null => {
   }
   if (tk.kind === 'operator' && prefixOps.has(tk.value)) {
     next(ps);
-    const arg = mustNode(ps, parseUnary(ps));
+    const argument = mustNode(ps, parseUnary(ps));
     return {
       type: 'UnaryExpression',
       operator: tk.value as UnaryNode['operator'],
-      argument: arg,
+      argument,
+      start: tk.start,
+      end: lastEnd(ps),
     };
   }
   // Arrow functions have lower precedence than everything else and are never
   // postfixed directly (`x => x` can't be called without wrapping parens,
   // just like real JS), so this returns straight from the arrow branch.
-  const arrow = tryParseArrowFunction(ps);
-  if (arrow) {
-    return arrow;
-  }
-  const primary = parsePrimary(ps);
-  return parsePostfix(ps, primary);
-};
-
-const precedence: Record<string, number> = {
-  '**': 12,
-  '*': 11,
-  '/': 11,
-  '%': 11,
-  '+': 10,
-  '-': 10,
-  '<<': 9,
-  '>>': 9,
-  '>>>': 9,
-  '>': 8,
-  '<': 8,
-  '>=': 8,
-  '<=': 8,
-  instanceof: 8,
-  in: 8,
-  '==': 7,
-  '!=': 7,
-  '===': 7,
-  '!==': 7,
-  '&': 6,
-  '^': 5,
-  '|': 4,
-  '&&': 3,
-  '||': 2,
-  '??': 2,
+  return tryParseArrowFunction(ps) ?? parsePostfix(ps, parsePrimary(ps));
 };
 
 const parseBinaryRHS = (
@@ -628,15 +675,15 @@ const parseBinaryRHS = (
   let lhs = left;
   while (!eof(ps) && peek(ps).kind === 'operator') {
     const opTk = peek(ps);
-    const prec = precedence[opTk.value];
+    const prec = precedenceOf(opTk.value);
     if (prec === undefined || prec < minPrec) {
       break;
     }
     next(ps);
     let rhs = mustNode(ps, parseUnary(ps));
-    // handle right-assoc? none here
+    // `**` is right-associative; tighter operators bind into the right side.
     while (!eof(ps) && peek(ps).kind === 'operator') {
-      const nextPrec = precedence[peek(ps).value];
+      const nextPrec = precedenceOf(peek(ps).value);
       if (
         nextPrec !== undefined &&
         (nextPrec > prec || (opTk.value === '**' && nextPrec === prec))
@@ -646,12 +693,26 @@ const parseBinaryRHS = (
         break;
       }
     }
-    const op = opTk.value as LogicalNode['operator'] | BinaryNode['operator'];
-    if (op === '&&' || op === '||' || op === '??') {
-      lhs = { type: 'LogicalExpression', operator: op, left: lhs, right: rhs };
-    } else {
-      lhs = { type: 'BinaryExpression', operator: op, left: lhs, right: rhs };
-    }
+    const operator = opTk.value;
+    const start = lhs.start;
+    const end = lastEnd(ps);
+    lhs = isLogicalOperator(operator)
+      ? {
+          type: 'LogicalExpression',
+          operator,
+          left: lhs,
+          right: rhs,
+          start,
+          end,
+        }
+      : {
+          type: 'BinaryExpression',
+          operator: operator as BinaryNode['operator'],
+          left: lhs,
+          right: rhs,
+          start,
+          end,
+        };
   }
   return lhs;
 };
@@ -662,12 +723,16 @@ const parseConditional = (ps: ParserState, test: ASTNode): ASTNode => {
   }
   next(ps);
   const consequent = mustNode(ps, parseExpression(ps));
-  if (!isPunct(ps, ':')) {
-    raiseParseError(ps.src);
-  }
-  next(ps);
+  expectPunct(ps, ':');
   const alternate = mustNode(ps, parseExpression(ps));
-  return { type: 'ConditionalExpression', test, consequent, alternate };
+  return {
+    type: 'ConditionalExpression',
+    test,
+    consequent,
+    alternate,
+    start: test.start,
+    end: lastEnd(ps),
+  };
 };
 
 export const parseExpression = (ps: ParserState): ASTNode | null => {
@@ -679,11 +744,37 @@ export const parseExpression = (ps: ParserState): ASTNode | null => {
   return parseConditional(ps, rhs);
 };
 
-export const parse = (tokens: Token[], src: string): ASTNode | null => {
-  const ps = createParser(tokens, src);
-  const node = parseExpression(ps);
-  if (!node || !eof(ps)) {
-    raiseParseError(src);
+const parseTokens = (tokens: Token[], src: string): ASTNode => {
+  const ps: ParserState = { tokens, pos: 0, src };
+  const node = mustNode(ps, parseExpression(ps));
+  if (!eof(ps)) {
+    fail(ps);
   }
   return node;
+};
+
+/**
+ * Parses the tokens of `src` (from `tokenize(src)`). Throws `ExprSyntaxError`
+ * unless they form exactly one expression.
+ */
+export const parse = (tokens: Token[], src: string): ASTNode =>
+  parseTokens(tokens, src);
+
+export type ParseResult =
+  { ok: true; ast: ASTNode } | { ok: false; error: ExprSyntaxError };
+
+/**
+ * Tokenizes and parses `input` without throwing for invalid syntax: the
+ * result holds either the AST or the `ExprSyntaxError` that `parse()` would
+ * have thrown, with its `start`/`end` range and `detail`.
+ */
+export const tryParse = (input: string): ParseResult => {
+  try {
+    return { ok: true, ast: parseTokens(tokenize(input), input) };
+  } catch (error) {
+    if (error instanceof ExprSyntaxError) {
+      return { ok: false, error };
+    }
+    throw error;
+  }
 };

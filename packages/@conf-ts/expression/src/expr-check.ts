@@ -1,14 +1,19 @@
 import {
+  ExprSyntaxError,
+  forEachChild,
+  forEachParamBinding,
   parse,
   tokenize,
   type ArrowFunctionNode,
   type ASTNode,
-  type IdentifierParam,
+  type IdentifierNode,
   type LogicalNode,
   type MemberNode,
-  type SpreadElement,
+  type NodeRange,
   type UnaryNode,
 } from '@conf-ts/expr-core';
+
+import type { GLOBAL_BUILTINS } from './eval';
 
 /** The `typeof`-style categories a statically analyzed value can fall into. */
 export type ValueKind =
@@ -57,6 +62,13 @@ export type ExprProblemReason =
 export interface ExprProblem {
   readonly reason: ExprProblemReason;
   readonly message: string;
+  /**
+   * Where the problem is in the expression string, `end` exclusive: the
+   * offending syntax, unknown identifier, or missing property's name, or the
+   * whole expression for its return type.
+   */
+  readonly start: number;
+  readonly end: number;
 }
 
 export interface CheckOptions<Type> {
@@ -66,9 +78,12 @@ export interface CheckOptions<Type> {
   loose?: boolean;
 }
 
-// Globals the runtime evaluator resolves when the context doesn't define the
-// name. Keep in sync with GLOBAL_BUILTINS in eval.ts.
-const BUILTIN_RESULTS: Readonly<Record<string, ValueKind>> = {
+// What calling each of the evaluator's GLOBAL_BUILTINS (the globals it
+// resolves when the context doesn't define the name) returns. Typed by that
+// object's keys, so a new builtin can't be left out here.
+const BUILTIN_RESULTS: Readonly<
+  Record<keyof typeof GLOBAL_BUILTINS, ValueKind>
+> = {
   String: 'string',
   Number: 'number',
   Boolean: 'boolean',
@@ -76,7 +91,7 @@ const BUILTIN_RESULTS: Readonly<Record<string, ValueKind>> = {
 
 const builtinResult = (name: string): ValueKind | undefined =>
   Object.prototype.hasOwnProperty.call(BUILTIN_RESULTS, name)
-    ? BUILTIN_RESULTS[name]
+    ? BUILTIN_RESULTS[name as keyof typeof BUILTIN_RESULTS]
     : undefined;
 
 /**
@@ -305,10 +320,16 @@ const editDistance = (a: string, b: string): number => {
 };
 
 const suggestion = (name: string, candidates: readonly string[]): string => {
+  const lowered = name.toLowerCase();
   let best: string | undefined;
   let bestDistance = Math.max(1, Math.floor(name.length / 4)) + 1;
   for (const candidate of new Set(candidates)) {
-    const distance = editDistance(name.toLowerCase(), candidate.toLowerCase());
+    const other = candidate.toLowerCase();
+    // The distance is at least the difference in length.
+    if (Math.abs(other.length - lowered.length) >= bestDistance) {
+      continue;
+    }
+    const distance = editDistance(lowered, other);
     if (distance < bestDistance) {
       best = candidate;
       bestDistance = distance;
@@ -330,9 +351,6 @@ const formatValue = (value: unknown): string => {
   return Object.is(value, -0) ? '-0' : String(value);
 };
 
-const isSpread = (node: ASTNode | SpreadElement): node is SpreadElement =>
-  node.type === 'SpreadElement';
-
 class Checker<Type> {
   readonly problems: ExprProblem[] = [];
 
@@ -347,7 +365,7 @@ class Checker<Type> {
         return valuesInfo([node.value]);
       }
       case 'Identifier': {
-        return this.identifier(node.name, scope);
+        return this.identifier(node, scope);
       }
       case 'Elision': {
         return { kinds: UNDEFINED, values: [undefined] };
@@ -396,26 +414,14 @@ class Checker<Type> {
       }
       case 'CallExpression': {
         const callee = this.visit(node.callee, scope);
-        node.args.forEach(argument => this.visit(argument, scope));
+        for (const argument of node.args) {
+          this.visit(argument, scope);
+        }
         return callee.builtin ? { kinds: kindSet(callee.builtin) } : ANY;
       }
-      case 'ArrayExpression': {
-        for (const element of node.elements) {
-          this.visit(isSpread(element) ? element.argument : element, scope);
-        }
-        return OBJECT_INFO;
-      }
+      case 'ArrayExpression':
       case 'ObjectExpression': {
-        for (const property of node.properties) {
-          if ('type' in property) {
-            this.visit(property.argument, scope);
-            continue;
-          }
-          if (property.computed) {
-            this.visit(property.key, scope);
-          }
-          this.visit(property.value, scope);
-        }
+        this.visitChildren(node, scope);
         return OBJECT_INFO;
       }
       case 'TemplateLiteral': {
@@ -432,8 +438,7 @@ class Checker<Type> {
         return values ? valuesInfo(values) : { kinds: STRING };
       }
       case 'TaggedTemplateExpression': {
-        this.visit(node.tag, scope);
-        node.quasi.expressions.forEach(part => this.visit(part, scope));
+        this.visitChildren(node, scope);
         return ANY;
       }
       case 'ArrowFunctionExpression': {
@@ -442,7 +447,18 @@ class Checker<Type> {
     }
   }
 
-  checkReturn(info: Info<Type>, returns: ReturnModel): void {
+  // Checks the children of a node whose own result doesn't depend on them.
+  private visitChildren(node: ASTNode, scope: ReadonlySet<string>): void {
+    forEachChild(node, child => {
+      this.visit(child, scope);
+    });
+  }
+
+  checkReturn(
+    info: Info<Type>,
+    returns: ReturnModel,
+    expression: NodeRange,
+  ): void {
     if (info.values) {
       const values = [...new Set(info.values)];
       for (const value of values) {
@@ -451,6 +467,7 @@ class Checker<Type> {
           this.report(
             'return_type',
             `Expression ${values.length > 1 ? 'can evaluate' : 'evaluates'} to ${formatValue(value)}, which the return schema rejects: ${reason}`,
+            expression,
           );
         }
       }
@@ -468,38 +485,59 @@ class Checker<Type> {
       this.report(
         'return_type',
         `Expression evaluates to ${formatKinds(kinds)}, but the return schema expects ${formatKinds(expected)}`,
+        expression,
       );
     }
   }
 
-  private report(reason: ExprProblemReason, message: string): void {
-    this.problems.push({ reason, message });
+  private report(
+    reason: ExprProblemReason,
+    message: string,
+    at: NodeRange,
+  ): void {
+    // Parsed nodes always have a range; the fallback is for the type only.
+    this.problems.push({
+      reason,
+      message,
+      start: at.start ?? 0,
+      end: at.end ?? 0,
+    });
   }
 
   // Root identifiers are own properties of the context (the evaluator never
   // consults its prototype), falling back to the evaluator's builtins.
-  private identifier(name: string, scope: ReadonlySet<string>): Info<Type> {
+  private identifier(
+    node: IdentifierNode,
+    scope: ReadonlySet<string>,
+  ): Info<Type> {
+    const { name } = node;
     if (scope.has(name)) {
       return ANY;
     }
     const builtin = builtinResult(name);
-    const lookup = this.context?.root(name);
-    if (lookup && 'found' in lookup) {
+    if (!this.context) {
+      return builtin ? { kinds: FUNCTION, builtin } : ANY;
+    }
+    const lookup = this.context.root(name);
+    if (!lookup) {
+      return ANY;
+    }
+    if ('found' in lookup) {
       return {
-        kinds: this.context!.kinds(lookup.found),
+        kinds: this.context.kinds(lookup.found),
         type: lookup.found,
         path: name,
       };
     }
-    if (builtin && (!this.context || lookup)) {
+    // A builtin the context doesn't define resolves to the builtin.
+    if (builtin) {
       return { kinds: FUNCTION, builtin };
     }
-    if (lookup) {
-      this.report(
-        'unknown_context_property',
-        `Unknown context property "${name}"${suggestion(name, lookup.missing)}`,
-      );
-    }
+    this.report(
+      'unknown_context_property',
+      `Unknown context property "${name}"${suggestion(name, lookup.missing)}`,
+      node,
+    );
     return ANY;
   }
 
@@ -522,6 +560,7 @@ class Checker<Type> {
       this.report(
         'unknown_property',
         `Property "${key}" does not exist on "${object.path}"${suggestion(key!, lookup.missing)}`,
+        node.property,
       );
       return ANY;
     }
@@ -574,38 +613,11 @@ class Checker<Type> {
     scope: ReadonlySet<string>,
   ): Info<Type> {
     const local = new Set(scope);
-    const bind = (param: IdentifierParam) => {
-      if (param.default) {
-        this.visit(param.default, local);
-      }
-      local.add(param.name);
-    };
-    for (const param of node.params) {
-      switch (param.kind) {
-        case 'identifier': {
-          bind(param);
-          break;
-        }
-        case 'object': {
-          if (param.default) {
-            this.visit(param.default, local);
-          }
-          param.properties.forEach(property => bind(property.value));
-          break;
-        }
-        case 'array': {
-          if (param.default) {
-            this.visit(param.default, local);
-          }
-          param.elements.forEach(element => element && bind(element));
-          break;
-        }
-        case 'rest': {
-          local.add(param.name);
-          break;
-        }
-      }
-    }
+    forEachParamBinding(
+      node.params,
+      value => this.visit(value, local),
+      name => local.add(name),
+    );
     this.visit(node.body, local);
     return FUNCTION_INFO;
   }
@@ -620,22 +632,29 @@ export function checkExpression<Type>(
   source: string,
   options: CheckOptions<Type> = {},
 ): ExprProblem[] {
-  let ast: ASTNode | null;
+  let ast: ASTNode;
   try {
     ast = parse(tokenize(source), source);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    // Anything but an ExprSyntaxError (e.g. a stack overflow on deeply
+    // nested input) covers the whole source.
+    const syntax = error instanceof ExprSyntaxError ? error : undefined;
+    const detail =
+      syntax?.detail ??
+      (error instanceof Error ? error.message : String(error));
     return [
-      { reason: 'syntax', message: `Invalid expression syntax: ${detail}` },
+      {
+        reason: 'syntax',
+        message: `Invalid expression syntax: ${detail}`,
+        start: syntax?.start ?? 0,
+        end: syntax?.end ?? source.length,
+      },
     ];
-  }
-  if (!ast) {
-    return [{ reason: 'syntax', message: 'Invalid expression syntax' }];
   }
   const checker = new Checker(options.context, options.loose === true);
   const info = checker.visit(ast, new Set());
   if (options.returns) {
-    checker.checkReturn(info, options.returns);
+    checker.checkReturn(info, options.returns, ast);
   }
   return checker.problems;
 }

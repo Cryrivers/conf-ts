@@ -117,7 +117,7 @@ The skill lives in [`skills/conf-ts`](skills/conf-ts) and is scoped to writing c
 | `@conf-ts/cli`                      | CLI to compile `.ts`/`.conf.ts` to JSON/YAML                              |
 | `@conf-ts/compiler`                 | Core compiler APIs (`compile`, `compileInMemory`)                         |
 | `@conf-ts/compiler-native`          | Native Rust compiler with Node bindings (same API as `@conf-ts/compiler`) |
-| `@conf-ts/expr-core`                | Shared expression lexer, parser, AST and `Expr` types, and parse errors   |
+| `@conf-ts/expr-core`                | Expression lexer, parser, printer, AST utilities, and `Expr` types        |
 | `@conf-ts/expression`               | Runtime expression evaluator; Zod schemas for `Expr` values               |
 | `@conf-ts/macro`                    | Macro functions consumed by the transform                                 |
 | `@conf-ts/macro-transformer`        | TypeScript source transformer for macros                                  |
@@ -523,7 +523,9 @@ const verified = expression(config.verified, { loose: true });
 - **Context.** With `context`, each root identifier must be a property of the context schema (or the runtime builtin `String`, `Number`, or `Boolean`), and statically known property paths must exist: `user.agee` fails with `Property "agee" does not exist on "user" (did you mean "age"?)`. Optional, nullable, default, pipe, lazy, union, intersection, record, array, and tuple schemas are followed, and members of strings, numbers, arrays, and other built-ins are checked against their prototypes. A union member is enough for a property to exist, and nullability isn't enforced, because guards such as `a && a.b` aren't followed. Values typed `any`, `unknown`, `z.custom()`, or by a transform aren't checked further, nor are callback parameters.
 - **Result.** With `returns`, the result type is inferred where it is certain (literals, operators, templates, `String()`/`Number()`/`Boolean()` calls, and context paths) and must overlap the schema's: `user.age` fails `returns: z.boolean()`. When every possible result is a literal, including each branch of a conditional, each one is parsed with the schema, so `user.age >= 18 ? "adult" : "adlut"` fails `z.enum(['adult', 'minor'])`. Calls and other results that can't be inferred are accepted.
 
-Problems are regular Zod issues at the config path: `invalid_type` for a non-string, otherwise `custom` with `params.reason` set to `syntax`, `unknown_context_property`, `unknown_property`, or `return_type`. Without schemas, `ExprSchema<Context, ReturnType>()` still infers the given types but only checks syntax. `context` and `returns` also accept Zod Mini schemas. `LooseExprSchema()` checks the same things while accounting for loose access yielding `undefined`; evaluate its values with `loose: true`.
+Problems are regular Zod issues at the config path: `invalid_type` for a non-string, otherwise `custom` with `params.reason` set to `syntax`, `unknown_context_property`, `unknown_property`, or `return_type`, and `params.start`/`params.end` locating the problem in the expression string. Without schemas, `ExprSchema<Context, ReturnType>()` still infers the given types but only checks syntax. `context` and `returns` also accept Zod Mini schemas. `LooseExprSchema()` checks the same things while accounting for loose access yielding `undefined`; evaluate its values with `loose: true`.
+
+To check a single expression outside a schema, e.g. for editor diagnostics, `validateExpression(source, { context, returns, loose })` runs the same checks and returns the problems as `{ reason, message, start, end }` objects (an empty array when the expression is valid).
 
 </details>
 
@@ -553,10 +555,10 @@ The default export parses a serialized expression and evaluates its AST through 
 
 | Category    | Supported syntax                                                                                                                                                                                                      |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Literals    | Decimal numbers (including exponent notation), strings, booleans, `null`, `undefined`                                                                                                                                 |
+| Literals    | Decimal numbers (including exponent notation), strings and templates with JavaScript escapes (`\n`, `\x41`, `\u{1F600}`, ...), booleans, `null`, `undefined`                                                          |
 | Collections | Array literals (including spread elements, e.g. `[...a, b]`); object literals with identifier/string/computed (`{ [key]: value }`) keys, shorthand properties (`{ a, b }`), trailing commas, and object spread        |
 | Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`)                                                                                                           |
-| Calls       | Functions and methods supplied by the environment; method calls preserve `this`                                                                                                                                       |
+| Calls       | Functions and methods supplied by the environment; method calls preserve `this`; optional calls (`fn?.()`)                                                                                                            |
 | Functions   | Arrow function expressions (`x => x * 2`, `(a, b) => a + b`) as callback arguments — expression bodies only, with identifier/destructured/rest/defaulted parameters, nesting, and closures over the surrounding scope |
 | Templates   | Template literals, nested interpolation, and tagged templates                                                                                                                                                         |
 | Arithmetic  | `+`, `-`, `*`, `/`, `%`, `**`                                                                                                                                                                                         |
@@ -573,7 +575,9 @@ The parser applies JavaScript-style precedence to the supported operators, inclu
 
 Pass `expression(source, { optionalMemberAccess: true })` (or the equivalent `{ loose: true }` alias) to make non-optional property access behave like optional member access: `a.b.c` acts like `a?.b?.c` and returns `undefined` if the chain crosses `null` or `undefined`. The same options work with `compile()`. Calls are not made optional: an interrupted callee chain such as `a.b.c()` returns `undefined`, but calling an existing property whose value is `undefined` still throws a non-callable error.
 
-Interpreted and compiled expressions have separate 1,000-entry LRU caches by source and option mode (`optionalMemberAccess` and its `loose` alias share the same cache bucket). Tooling that needs lexer/parser primitives should import `@conf-ts/expr-core` instead.
+Interpreted and compiled expressions keep separate 1,000-entry LRU caches for each option mode, keyed by source (`optionalMemberAccess` and its `loose` alias share a mode). Invalid syntax throws an `ExprSyntaxError` carrying the offending range (`start`/`end`) and reason (`detail`).
+
+Tooling can import the parser, printer, and AST utilities from `@conf-ts/expression/core`, a re-export of [`@conf-ts/expr-core`](packages/@conf-ts/expr-core): `tryParse()` returns the AST (every node carrying its source range) or the syntax error, `print()` turns an AST, e.g. a rewritten condition, back into source text, and `forEachChild()`/`getChildren()`/`collectFreeIdentifiers()` walk it.
 
 Within the supported grammar, serialized expressions follow JavaScript semantics:
 

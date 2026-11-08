@@ -403,10 +403,10 @@ export default { canEnter: expr((ctx: UserContext) => ctx.user.age >= 18) };
 
 | Category    | Supported                                                                                                                     |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Literals    | Decimal numbers incl. exponents, strings (with `\uXXXX` escapes), booleans, `null`, `undefined`                              |
+| Literals    | Decimal numbers incl. exponents, strings (JavaScript escapes), booleans, `null`, `undefined`                                 |
 | Collections | Array literals with spread; object literals with identifier/string/computed keys, shorthand, trailing commas, object spread   |
 | Access      | Identifiers, `o.p`, `o[k]`, `o?.p`, `o?.[k]`                                                                                  |
-| Calls       | Functions and methods from the environment; method calls preserve `this`                                                      |
+| Calls       | Functions and methods from the environment; method calls preserve `this`; optional calls `f?.()`                              |
 | Functions   | Arrow functions as callback arguments — expression bodies only, with identifier/destructured/rest/defaulted params, nesting, closures |
 | Templates   | Template literals, nested interpolation, tagged templates                                                                     |
 | Arithmetic  | `+ - * / % **` (right-associative `**`)                                                                                       |

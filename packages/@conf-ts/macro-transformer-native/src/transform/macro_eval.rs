@@ -2207,12 +2207,7 @@ fn walk_const_children(
                 };
                 let start = prop.span.start as usize - body_start as usize;
                 let end = prop.span.end as usize - body_start as usize;
-                let separator = if literal.starts_with('{') || literal.starts_with('[') {
-                  ":"
-                } else {
-                  ": "
-                };
-                replacements.push((start, end, format!("{key_name}{separator}{literal}")));
+                replacements.push((start, end, format!("{key_name}: {literal}")));
               }
             }
           }

@@ -98,8 +98,8 @@ describe('compile()', () => {
       ['a?.b.c', () => ({})],
       ['(a?.b).c', () => ({})],
       ['a?.[key]?.value', () => ({ a: { x: { value: 3 } }, key: 'x' })],
-      ['fn?(2)', () => ({ fn: undefined })],
-      ['fn?(2)', () => ({ fn: (value: number) => value * 3 })],
+      ['fn?.(2)', () => ({ fn: undefined })],
+      ['fn?.(2)', () => ({ fn: (value: number) => value * 3 })],
       [
         'object.method(2)',
         () => ({
@@ -247,8 +247,8 @@ describe('compile()', () => {
       ['object.notCallable(log("argument"))'],
       ['missing[log("key")]'],
       ['missing?.[log("key")].deep'],
-      ['object.nothing?(log("argument"))'],
-      ['object.method?(log(2))'],
+      ['object.nothing?.(log("argument"))'],
+      ['object.method?.(log(2))'],
       ['object.method(log(1)) + object["method"](log(2))'],
       ['(object.receiver)()'],
       ['"abc".toUpperCase().length'],

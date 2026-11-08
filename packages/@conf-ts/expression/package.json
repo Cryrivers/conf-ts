@@ -29,6 +29,16 @@
         "default": "./dist/require.cjs"
       }
     },
+    "./core": {
+      "import": {
+        "types": "./dist/core.d.mts",
+        "default": "./dist/core.mjs"
+      },
+      "require": {
+        "types": "./dist/core.d.cts",
+        "default": "./dist/core.cjs"
+      }
+    },
     "./zod": {
       "import": {
         "types": "./dist/zod.d.mts",

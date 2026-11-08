@@ -1,0 +1,7 @@
+optionalCall: format?.(count)
+parenthesizedConsequent: "enabled ? (count + 1) * 2 : 0"
+arrayConsequent: "enabled ? [count] : []"
+upperCaseKeyword: TRUE && !flags.False
+mixedCaseKeywords: 'Null > 0 ? Undefined : "none"'
+nullishArray: list ?? []
+nestedLiterals: "[count, [count], {values: [count], flags: {on: enabled}}]"

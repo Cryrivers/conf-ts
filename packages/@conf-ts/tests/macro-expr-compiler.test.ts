@@ -1,5 +1,5 @@
 import path from 'path';
-import expression from '@conf-ts/expression';
+import expression, { compile } from '@conf-ts/expression';
 import {
   encodeStringLiteral,
   rewriteContextExpression,
@@ -371,6 +371,72 @@ describe('Expr Macro', () => {
         threshold: 0,
       }),
     ).toBe(false);
+  });
+
+  it('should emit optional calls, bracketed conditional branches, and keyword-like names the runtime evaluates', () => {
+    assertMacroOutput('expr-js-syntax');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-js-syntax.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const context = {
+      enabled: true,
+      count: 2,
+      format: (value: number) => `#${value}`,
+      TRUE: true,
+      Null: 1,
+      Undefined: 'defined',
+      flags: { False: false },
+    };
+    const { format: _format, ...unformatted } = context;
+    const disabled = { ...context, enabled: false, Null: 0 };
+
+    expect(expression(output.optionalCall)(context)).toBe('#2');
+    expect(expression(output.optionalCall)(unformatted)).toBeUndefined();
+    expect(expression(output.parenthesizedConsequent)(context)).toBe(6);
+    expect(expression(output.parenthesizedConsequent)(disabled)).toBe(0);
+    expect(expression(output.arrayConsequent)(context)).toEqual([2]);
+    expect(expression(output.arrayConsequent)(disabled)).toEqual([]);
+    // `TRUE`, `Null`, and `Undefined` read the context, not the literals.
+    expect(expression(output.upperCaseKeyword)(context)).toBe(true);
+    expect(expression(output.mixedCaseKeywords)(context)).toBe('defined');
+    expect(expression(output.mixedCaseKeywords)(disabled)).toBe('none');
+    expect(expression(output.nullishArray)(context)).toEqual([]);
+    expect(expression(output.nestedLiterals)(context)).toEqual([
+      2,
+      [2],
+      { values: [2], flags: { on: true } },
+    ]);
+  });
+
+  it('should keep the meaning of string and template escapes', () => {
+    assertMacroOutput('expr-escapes');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-escapes.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const tag = (strings: TemplateStringsArray, ...values: unknown[]) =>
+      `${strings.raw.join('|')}/${strings.join('|')}/${values.join('|')}`;
+    for (const run of [
+      (source: string) => expression(source),
+      (source: string) => compile(source, { strict: true }),
+    ]) {
+      expect(run(output.backspace)({ s: '\b' })).toBe(true);
+      expect(run(output.backspace)({ s: 'b' })).toBe(false);
+      expect(run(output.nul)({ s: '\0' })).toBe(true);
+      expect(run(output.hex)({ s: 'A~' })).toBe(true);
+      expect(run(output.codePoint)({ s: '😀A' })).toBe(true);
+      expect(run(output.unicode)({ s: 'A' })).toBe(true);
+      expect(run(output.doubleQuoted)({ s: '\b\0AB' })).toBe(true);
+      expect(run(output.template)({ s: '-' })).toBe('-\b\0A😀-');
+      expect(run(output.tagged)({ s: '-', tag })).toBe('\\x41|\\u{42}/A|B/-');
+    }
   });
 
   it('should support array spread, object shorthand, and computed object keys', () => {
