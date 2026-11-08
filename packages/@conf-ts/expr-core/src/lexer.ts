@@ -2,15 +2,14 @@ import { ExprSyntaxError, formatInvalid } from './errors';
 import type { Token, TokenKind } from './types';
 
 const isDigit = (ch: string) => ch >= '0' && ch <= '9';
+const isHexDigit = (ch: string) =>
+  isDigit(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
 const isIdentStart = (ch: string) =>
   ch === '_' ||
   ch === '$' ||
   (ch >= 'a' && ch <= 'z') ||
   (ch >= 'A' && ch <= 'Z');
 const isIdentPart = (ch: string) => isIdentStart(ch) || isDigit(ch);
-
-/** Four hex digits, as in a `\uXXXX` escape. */
-export const HEX4 = /^[0-9a-fA-F]{4}$/;
 
 /** Whether `text` is spelled like an identifier (keywords included). */
 export const isIdentifierText = (text: string): boolean => {
@@ -132,43 +131,115 @@ const readNumber = (st: State): Token => {
   return token(st, 'number', text, start, text);
 };
 
+// `count` hex digits starting at `st.pos`, or undefined.
+const readHex = (st: State, count: number): number | undefined => {
+  const digits = st.input.slice(st.pos, st.pos + count);
+  for (let i = 0; i < count; i++) {
+    if (!isHexDigit(digits[i] ?? '')) {
+      return undefined;
+    }
+  }
+  st.pos += count;
+  return parseInt(digits, 16);
+};
+
 /**
- * Decodes the escape sequence whose backslash is at `st.pos`, moving past it.
- * Returns `undefined` when the input ends right after the backslash.
+ * Decodes the escape sequence whose backslash is at `st.pos`, moving past it,
+ * the way strict-mode JavaScript does. Returns `undefined` when the input
+ * ends right after the backslash.
  */
 const decodeEscape = (st: State): string | undefined => {
+  const { input } = st;
   const backslash = st.pos;
   st.pos++;
   if (eof(st)) {
     return undefined;
   }
-  const esc = st.input[st.pos++];
+  const esc = input[st.pos++];
+  // Throws for the escape from the backslash up to `end`.
+  const invalid = (detail: string, end: number): never =>
+    fail(
+      st,
+      backslash,
+      end,
+      `${detail} [${input.slice(backslash, end)}]`,
+      true,
+    );
   switch (esc) {
+    case 'b':
+      return '\b';
+    case 'f':
+      return '\f';
     case 'n':
       return '\n';
     case 'r':
       return '\r';
-    case 'f':
-      return '\f';
     case 't':
       return '\t';
     case 'v':
       return '\v';
-    case 's':
-      // non-standard, treat as literal 's'
-      return 's';
-    case 'u': {
-      const hexStart = st.pos;
-      const hex = st.input.slice(hexStart, hexStart + 4);
-      if (!HEX4.test(hex)) {
-        const detail = `invalid unicode escape [\\u${hex}]`;
-        fail(st, backslash, hexStart + hex.length, detail, true);
+    case '0':
+      if (!isDigit(input[st.pos] ?? '')) {
+        return '\0';
       }
-      st.pos += 4;
-      return String.fromCharCode(parseInt(hex, 16));
+      return invalid('octal escape sequences are not allowed', st.pos + 1);
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7':
+      return invalid('octal escape sequences are not allowed', st.pos);
+    case '8':
+    case '9':
+      return invalid('invalid escape sequence', st.pos);
+    case 'x': {
+      const code = readHex(st, 2);
+      return code === undefined
+        ? invalid(
+            'invalid hexadecimal escape',
+            Math.min(st.pos + 2, input.length),
+          )
+        : String.fromCharCode(code);
     }
+    case 'u': {
+      if (input[st.pos] !== '{') {
+        const code = readHex(st, 4);
+        return code === undefined
+          ? invalid(
+              'invalid unicode escape',
+              Math.min(st.pos + 4, input.length),
+            )
+          : String.fromCharCode(code);
+      }
+      // `\u{X…}`: any number of hex digits, for a code point up to 0x10FFFF
+      let end = st.pos + 1;
+      while (end < input.length && isHexDigit(input[end])) {
+        end++;
+      }
+      const code = parseInt(input.slice(st.pos + 1, end), 16);
+      if (input[end] !== '}' || !(code <= 0x10ffff)) {
+        return invalid(
+          'invalid unicode escape',
+          Math.min(end + 1, input.length),
+        );
+      }
+      st.pos = end + 1;
+      return String.fromCodePoint(code);
+    }
+    case '\r':
+      // a line continuation, like `\` followed by a newline
+      if (input[st.pos] === '\n') {
+        st.pos++;
+      }
+      return '';
+    case '\n':
+    case '\u2028':
+    case '\u2029':
+      return '';
     default:
-      // includes '\\', quotes and '`', which stand for themselves
+      // Any other character stands for itself, e.g. `\\`, a quote, or `\s`.
       return esc;
   }
 };

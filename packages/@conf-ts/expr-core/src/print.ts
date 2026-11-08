@@ -1,4 +1,4 @@
-import { HEX4, isIdentifierText, keywordKinds } from './lexer';
+import { isIdentifierText, keywordKinds, tokenize } from './lexer';
 import { isLogicalOperator, precedenceOf, prefixOps } from './parser';
 import type {
   ArrayNode,
@@ -63,8 +63,8 @@ const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
 // Escapes only what the lexer needs, plus anything invisible or that would
 // make the output ill-formed (control characters, line/paragraph
-// separators, lone surrogates). The lexer has no `\b` or `\0` escapes, so
-// those, like other control characters, are written as `\uXXXX`.
+// separators, lone surrogates). Control characters without a short escape
+// are written as `\uXXXX`, including NUL, as `\0` can't precede a digit.
 const printString = (value: string, quote: string): string => {
   let out = quote;
   for (let i = 0; i < value.length; i++) {
@@ -78,6 +78,8 @@ const printString = (value: string, quote: string): string => {
       out += '\\r';
     } else if (ch === '\t') {
       out += '\\t';
+    } else if (ch === '\b') {
+      out += '\\b';
     } else if (ch === '\v') {
       out += '\\v';
     } else if (ch === '\f') {
@@ -124,28 +126,19 @@ const printNumber = (value: number): Printed => {
   return [String(value), value < 0 ? UNARY : PRIMARY];
 };
 
-// Whether a raw template chunk can be printed verbatim between backticks:
-// every escape is complete (and its `\u` has 4 hex digits), and there is no
-// unescaped backtick or `${`.
+// Whether a raw template chunk can be printed verbatim between backticks,
+// i.e. lexes as one whole chunk of a template literal: its escapes are valid
+// and it has no unescaped backtick or `${`.
 const isTemplateRaw = (raw: unknown): raw is string => {
   if (typeof raw !== 'string') {
     return false;
   }
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i];
-    if (ch === '\\') {
-      if (i + 1 >= raw.length) {
-        return false;
-      }
-      if (raw[i + 1] === 'u' && !HEX4.test(raw.slice(i + 2, i + 6))) {
-        return false;
-      }
-      i++;
-    } else if (ch === '`' || (ch === '$' && raw[i + 1] === '{')) {
-      return false;
-    }
+  try {
+    const tokens = tokenize(`\`${raw}\``);
+    return tokens.length === 2 && tokens[0].template?.rawQuasis.length === 1;
+  } catch {
+    return false;
   }
-  return true;
 };
 
 const isSpread = (node: ASTNode | SpreadElement): node is SpreadElement =>

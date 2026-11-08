@@ -384,7 +384,7 @@ describe('print()', () => {
     const value = 'a"b\'c\\d\n\r\t\v\f\b\0\u001f\u007f  `${x}é😀\ud800x\udc00';
     const printed = print(lit(value));
     expect(printed).toBe(
-      '"a\\"b\'c\\\\d\\n\\r\\t\\v\\f\\u0008\\u0000\\u001f\\u007f\\u2028\\u2029`${x}é😀\\ud800x\\udc00"',
+      '"a\\"b\'c\\\\d\\n\\r\\t\\v\\f\\b\\u0000\\u001f\\u007f\\u2028\\u2029`${x}é😀\\ud800x\\udc00"',
     );
     expect(strip(parseSource(printed))).toEqual(lit(value));
     const single = print(lit(value), { quote: 'single' });
@@ -442,6 +442,9 @@ describe('print()', () => {
       template(['${']),
       template(['\\']),
       template(['\\u12']),
+      template(['\\x4']),
+      template(['\\u{110000}']),
+      template(['\\01']),
       { type: 'TaggedTemplateExpression', tag: a, quasi: a },
     ];
     for (const node of invalid) {
@@ -510,6 +513,11 @@ const TEMPLATE_CHUNKS: Array<[string, string]> = [
   ['\\`', '`'],
   ['\\${', '${'],
   ['\\u0041', 'A'],
+  ['\\u{1F600}', '😀'],
+  ['\\x7e', '~'],
+  ['\\b', '\b'],
+  ['\\0', '\0'],
+  ['\\\n', ''],
   ['\\\\', '\\'],
   ['"', '"'],
 ];

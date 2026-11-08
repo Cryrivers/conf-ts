@@ -61,6 +61,29 @@ describe('tokenize()', () => {
     });
   });
 
+  it('decodes escapes the way JavaScript does', () => {
+    const decoded = (source: string) => tokenize(source)[0].value;
+    expect(decoded(String.raw`"\b\f\n\r\t\v\0"`)).toBe('\b\f\n\r\t\v\0');
+    expect(decoded(String.raw`"\x41\x7e\xff"`)).toBe('A~\xff');
+    expect(decoded(String.raw`"A\u{42}\u{1F600}\u{0000043}\u{10FFFF}"`)).toBe(
+      'AB😀C\u{10FFFF}',
+    );
+    // other escaped characters stand for themselves
+    expect(decoded(String.raw`"\'\"\\\s\d\$"`)).toBe('\'"\\sd$');
+    // a backslash before a line break continues the line
+    expect(decoded('"a\\\nb\\\r\nc\\\rd\\ e"')).toBe('abcde');
+    // `\0` not followed by a digit
+    expect(decoded(String.raw`"\0x"`)).toBe('\0x');
+  });
+
+  it('decodes template literal escapes into cooked text only', () => {
+    const [token] = tokenize('`\\b\\x41\\u{1F600}\\0${a}\\\nz`');
+    expect(token.template).toMatchObject({
+      quasis: ['\bA😀\0', 'z'],
+      rawQuasis: ['\\b\\x41\\u{1F600}\\0', '\\\nz'],
+    });
+  });
+
   it('finds the end of interpolations around nested strings and templates', () => {
     const source = '`${ {a: "}"}["a"] + `${`}`}\\u0041` + \'`\' }!`';
     const [token] = tokenize(source);
@@ -120,6 +143,64 @@ describe('tokenize()', () => {
         13,
       ],
     ];
+    cases.push(
+      [
+        String.raw`"\x4"`,
+        String.raw`invalid expression: "\x4", invalid hexadecimal escape [\x4"]`,
+        String.raw`invalid hexadecimal escape [\x4"]`,
+        1,
+        5,
+      ],
+      [
+        String.raw`"\u{110000}"`,
+        String.raw`invalid expression: "\u{110000}", invalid unicode escape [\u{110000}]`,
+        String.raw`invalid unicode escape [\u{110000}]`,
+        1,
+        11,
+      ],
+      [
+        String.raw`"\u{}"`,
+        String.raw`invalid expression: "\u{}", invalid unicode escape [\u{}]`,
+        String.raw`invalid unicode escape [\u{}]`,
+        1,
+        5,
+      ],
+      [
+        String.raw`"\u{12z}"`,
+        String.raw`invalid expression: "\u{12z}", invalid unicode escape [\u{12z]`,
+        String.raw`invalid unicode escape [\u{12z]`,
+        1,
+        7,
+      ],
+      [
+        String.raw`"\01"`,
+        String.raw`invalid expression: "\01", octal escape sequences are not allowed [\01]`,
+        String.raw`octal escape sequences are not allowed [\01]`,
+        1,
+        4,
+      ],
+      [
+        String.raw`"\7"`,
+        String.raw`invalid expression: "\7", octal escape sequences are not allowed [\7]`,
+        String.raw`octal escape sequences are not allowed [\7]`,
+        1,
+        3,
+      ],
+      [
+        String.raw`"\8"`,
+        String.raw`invalid expression: "\8", invalid escape sequence [\8]`,
+        String.raw`invalid escape sequence [\8]`,
+        1,
+        3,
+      ],
+      [
+        '`${a}\\x`',
+        'invalid expression: `${a}\\x`, invalid hexadecimal escape [\\x`]',
+        'invalid hexadecimal escape [\\x`]',
+        5,
+        8,
+      ],
+    );
     for (const [source, message, detail, start, end] of cases) {
       let error: unknown;
       try {

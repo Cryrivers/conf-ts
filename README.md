@@ -555,7 +555,7 @@ The default export parses a serialized expression and evaluates its AST through 
 
 | Category    | Supported syntax                                                                                                                                                                                                      |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Literals    | Decimal numbers (including exponent notation), strings, booleans, `null`, `undefined`                                                                                                                                 |
+| Literals    | Decimal numbers (including exponent notation), strings and templates with JavaScript escapes (`\n`, `\x41`, `\u{1F600}`, ...), booleans, `null`, `undefined`                                                          |
 | Collections | Array literals (including spread elements, e.g. `[...a, b]`); object literals with identifier/string/computed (`{ [key]: value }`) keys, shorthand properties (`{ a, b }`), trailing commas, and object spread        |
 | Access      | Identifiers, `object.property`, `object[key]`, optional member access (`object?.property`, `object?.[key]`)                                                                                                           |
 | Calls       | Functions and methods supplied by the environment; method calls preserve `this`; optional calls (`fn?.()`)                                                                                                            |

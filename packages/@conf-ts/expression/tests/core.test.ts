@@ -85,6 +85,36 @@ describe.each(Object.entries(modes))('%s expressions', (_, run) => {
     ]);
   });
 
+  it('decode string and template escapes like JavaScript', () => {
+    expect(run(String.raw`"\b\0\x41\u{1F600}\u{10FFFF}B"`)({})).toBe(
+      '\b\0A😀\u{10FFFF}B',
+    );
+    expect(run(String.raw`'a\'b' + "\"" + "\d\s"`)({})).toBe('a\'b"ds');
+    // a backslash before a line break continues the line
+    expect(run('"a\\\nb" + `c\\\nd`')({})).toBe('abcd');
+    const tag = (strings: TemplateStringsArray) => [
+      [...strings.raw],
+      [...strings],
+    ];
+    expect(run('tag`\\x41\\u{42}\\b`')({ tag })).toEqual([
+      ['\\x41\\u{42}\\b'],
+      ['AB\b'],
+    ]);
+  });
+
+  it('reject escapes strict-mode JavaScript rejects', () => {
+    for (const source of [
+      String.raw`"\01"`,
+      String.raw`"\1"`,
+      String.raw`"\9"`,
+      String.raw`"\x4"`,
+      String.raw`"\u{110000}"`,
+      '`\\07`',
+    ]) {
+      expect(() => run(source), source).toThrow(core.ExprSyntaxError);
+    }
+  });
+
   it('evaluate nested template literals with escapes, strings, and braces', () => {
     expect(run('`${`\\u0041${`\\u0042`}`}`')({})).toBe('AB');
     expect(run('`${ {a: "}"}["a"] + `${`}`}\\u0041` + \'`\' }!`')({})).toBe(
@@ -115,6 +145,7 @@ describe('print()', () => {
       () => ({}),
     ],
     ['`x${a}y${`n${b}`}\\u0041`', () => ({ a: 1, b: 2 })],
+    ['"\\b\\0\\x41\\u{1F600}" + `\\x42\\u{43}${a}`', () => ({ a: 1 })],
     [
       'tag`a${b}\\n`',
       () => ({ tag: (s: TemplateStringsArray) => s.raw.join('|'), b: 1 }),

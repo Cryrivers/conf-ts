@@ -1,0 +1,8 @@
+backspace: s === "\b"
+nul: s === "\u0000"
+hex: s === "A~"
+codePoint: s === "😀A"
+unicode: s === "A"
+doubleQuoted: s === "\b\u0000AB"
+template: s + `\b\0\x41\u{1F600}${s}`
+tagged: tag `\x41${s}\u{42}`

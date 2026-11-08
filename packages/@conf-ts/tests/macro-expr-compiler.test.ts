@@ -1,5 +1,5 @@
 import path from 'path';
-import expression from '@conf-ts/expression';
+import expression, { compile } from '@conf-ts/expression';
 import {
   encodeStringLiteral,
   rewriteContextExpression,
@@ -410,6 +410,33 @@ describe('Expr Macro', () => {
       [2],
       { values: [2], flags: { on: true } },
     ]);
+  });
+
+  it('should keep the meaning of string and template escapes', () => {
+    assertMacroOutput('expr-escapes');
+
+    const { output: result } = compileJsWithMacro(
+      path.resolve(__dirname, 'fixtures/macros/expr-escapes.conf.ts'),
+      'json',
+      { macro: true },
+    );
+    const output = JSON.parse(result) as Record<string, string>;
+    const tag = (strings: TemplateStringsArray, ...values: unknown[]) =>
+      `${strings.raw.join('|')}/${strings.join('|')}/${values.join('|')}`;
+    for (const run of [
+      (source: string) => expression(source),
+      (source: string) => compile(source, { strict: true }),
+    ]) {
+      expect(run(output.backspace)({ s: '\b' })).toBe(true);
+      expect(run(output.backspace)({ s: 'b' })).toBe(false);
+      expect(run(output.nul)({ s: '\0' })).toBe(true);
+      expect(run(output.hex)({ s: 'A~' })).toBe(true);
+      expect(run(output.codePoint)({ s: '😀A' })).toBe(true);
+      expect(run(output.unicode)({ s: 'A' })).toBe(true);
+      expect(run(output.doubleQuoted)({ s: '\b\0AB' })).toBe(true);
+      expect(run(output.template)({ s: '-' })).toBe('-\b\0A😀-');
+      expect(run(output.tagged)({ s: '-', tag })).toBe('\\x41|\\u{42}/A|B/-');
+    }
   });
 
   it('should support array spread, object shorthand, and computed object keys', () => {
